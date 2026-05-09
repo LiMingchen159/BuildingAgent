@@ -1,9 +1,0 @@
-buildingagent files 19 non_gitkeep 5
- sample: buildingagent/tools/building/bim_ifc_tools.py, buildingagent/tools/building/brick_rdf_sparql_tools.py, buildingagent/tools/building/cross_source_linking_tools.py, buildingagent/tools/building/timeseries_tools.py, buildingagent/tools/building/visualization_tools.py
-apps files 2 non_gitkeep 0
-scripts files 1 non_gitkeep 0
-docs files 18 non_gitkeep 17
- sample: docs/AUTH_ACCESS_CONTROL_SPEC.md, docs/CLI_SPEC.md, docs/DEVELOPMENT_PLAN.md, docs/EMAIL_GATEWAY_SPEC.md, docs/ENTRYPOINTS_SPEC.md, docs/HERMES_REPLICATION_STRATEGY.md, docs/LICENSE_ATTRIBUTION_PLAN.md, docs/MEMORY_SPEC.md, docs/MODEL_CONFIGURATION_SPEC.md, docs/PRODUCT_ARCHITECTURE.md, docs/PRODUCT_REQUIREMENTS.md, docs/PROJECT_MODEL_SPEC.md, docs/RUNTIME_SPEC.md, docs/SKILL_SYSTEM_SPEC.md, docs/TOOL_SYSTEM_SPEC.md, docs/WEB_UI_PLAN.md, docs/WHATSAPP_GATEWAY_SPEC.md
-skills files 7 non_gitkeep 5
- sample: skills/building/bim_object_exploration.md, skills/building/brick_sparql_query.md, skills/building/cross_source_equipment_analysis.md, skills/building/hhw_reset_analysis.md, skills/building/timeseries_trend_analysis.md
-tests files 1 non_gitkeep 0

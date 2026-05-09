@@ -1,7 +1,0 @@
-issue-sync config verification passed
-.gitignore:30:!.gsd/PREFERENCES.md	.gsd/PREFERENCES.md
-.gitignore:31:!.gsd/PROJECT.md	.gsd/PROJECT.md
-.gitignore:33:!.gsd/DECISIONS.md	.gsd/DECISIONS.md
-.gitignore:35:!.gsd/milestones/**	.gsd/milestones/M002/slices/S01/S01-UAT.md
-.gitignore:17:.gsd/gsd.db*	.gsd/gsd.db
-.gitignore:18:.gsd/STATE.md	.gsd/STATE.md

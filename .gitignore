@@ -14,18 +14,7 @@ target/
 vendor/
 
 # GSD / Harness runtime
-.gsd/gsd.db*
-.gsd/STATE.md
-.gsd/runtime/
-.gsd/worktrees/
-.gsd/activity/
-.gsd/metrics.json
-.gsd/completed-units.json
-.gsd/milestones/**/continue.md
-.gsd/milestones/**/*-CONTINUE.md
-.hermes/
-
-# Keep durable GSD project artifacts trackable
+.gsd/*
 !.gsd/
 !.gsd/PREFERENCES.md
 !.gsd/PROJECT.md
@@ -33,6 +22,27 @@ vendor/
 !.gsd/DECISIONS.md
 !.gsd/milestones/
 !.gsd/milestones/**
+.gsd/gsd.db*
+.gsd/STATE.md
+.gsd/runtime/
+.gsd/worktrees/
+.gsd/activity/
+.gsd/audit/
+.gsd/exec/
+.gsd/journal/
+.gsd/graphs/
+.gsd/metrics.json
+.gsd/completed-units.json
+.gsd/notifications.jsonl
+.gsd/event-log.jsonl
+.gsd/doctor-history.jsonl
+.gsd/last-snapshot.md
+.gsd/state-manifest.json
+.gsd/CODEBASE.md
+.gsd/*-DRAFT.md
+.gsd/milestones/**/continue.md
+.gsd/milestones/**/*-CONTINUE.md
+.hermes/
 
 # IDE
 .vscode/
