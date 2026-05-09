@@ -1,54 +1,59 @@
 ---
-estimated_steps: 16
-estimated_files: 3
+estimated_steps: 24
+estimated_files: 7
 skills_used: []
 ---
 
-# T03: Document and smoke-test the S02 contract for downstream clients
+# T03: Document and verify the S02 backend contract
 
-Document the additive S02 API contract and keep a final smoke-style contract test plan visible for downstream client executors. This task owns the missing `tests/test_runtime_registry_services.py` scaffold/test artifact that caused the pre-execution blocker; if T01 already updated it, T03 should preserve it and ensure it remains aligned with the documented smoke contract.
+Document the S02 API contract and run the final backend regression checks so CLI and Web executors can consume the new skeleton endpoints without reverse-engineering code. Executor skills_used frontmatter should include `api-design`, `write-docs`, and `verify-before-complete`.
 
-Executor skills: `api-design`, `write-docs`, `tdd`, `verify-before-complete`.
+## Steps
+1. Extend `docs/API_CONTRACT.md` with S02 endpoint sections for model/provider metadata, memory metadata, tool registry metadata, skill registry metadata, and `POST /runtime/chat`.
+2. Include request examples, response shape summaries, `status: stubbed`/`stub_reason` semantics, non-secret guarantees, and representative structured 401/403/404/422 errors.
+3. Cross-check examples against `tests/test_runtime_registry_api.py`; update docs or tests only to resolve true contract mismatches.
+4. Run the full backend contract suite covering S01 and S02.
+5. Leave explicit notes that real model execution, tool execution, skill loading, memory retrieval, provider secrets, and audit retention remain out of M002/S02.
 
-Steps:
-1. Update `docs/API_CONTRACT.md` with endpoint paths, request/response examples, auth/project scoping, stub/no-execution guarantees, status codes, and additive-only versioning.
-2. Add or extend smoke tests so `user_alice` logs in, selects an accessible project, calls all metadata endpoints, posts runtime chat, and sees the same context fields consistently across responses.
-3. Keep `tests/test_runtime_registry_services.py` meaningful within current M002 scope: service skeleton tests should verify deterministic project-scoped stub metadata and no building-domain execution.
-4. Assert responses and service outputs do not contain bearer tokens, provider API keys, secret references, stack traces, or file paths.
-5. Run the full M002 backend contract command.
+## Must-Haves
+- [ ] `docs/API_CONTRACT.md` is the downstream-facing source of truth for S02 CLI/Web consumers.
+- [ ] Documentation is additive and does not break or remove S01 login/project/context contracts.
+- [ ] Full pytest command proves S01 regressions and S02 contracts together.
+- [ ] Docs state the proof level truthfully: authenticated stub contract only, not live runtime integration.
 
-Must-haves:
-- Documentation is concrete enough for S03 CLI and S04 Web executors to implement clients without guessing paths or response keys.
-- The smoke path demonstrates authenticated metadata plus context-bearing stub chat routed through runtime/dispatcher boundaries.
-- `tests/test_runtime_registry_services.py` exists as a non-empty, meaningful pytest file and is listed as this task's expected output to satisfy pre-execution dependency analysis.
-- Final verification includes S01 and S02 tests so new API wiring does not regress the authenticated foundation.
+## Failure Modes
+| Dependency | On error | On timeout | On malformed response |
+|------------|----------|-----------|----------------------|
+| S02 API tests | Update implementation or docs until command passes; do not document untested shapes. | N/A for local pytest. | Examples must match tested keys and status/error semantics. |
+| S01 regression tests | Treat failures as blockers because S02 must not weaken auth/context foundation. | N/A for local pytest. | Preserve existing structured error and context shapes. |
 
-Failure Modes (Q5): Documentation/implementation drift is caught by smoke assertions on documented response keys and context fields.
+## Negative Tests
+- **Malformed inputs**: Documented 422 behavior for invalid chat bodies must match API tests.
+- **Error paths**: Documented 401/403/404 behavior must match S01/S02 API tests and include request IDs.
+- **Boundary conditions**: No docs should imply real execution, persisted memory, provider secrets, or cross-project visibility.
 
-Load Profile (Q6): Fixed sequence of local in-process TestClient calls against immutable seed data plus direct service tests.
-
-Negative Tests (Q7): Retain T02 negative API tests for blank prompt and auth/project failures; full command includes S01 structured error tests and service redaction checks.
+## Verification
+- `.venv/bin/python -m pytest tests/test_api_foundation.py tests/test_project_context.py tests/test_api_auth_context.py tests/test_runtime_registry_services.py tests/test_runtime_registry_api.py`
+- `grep -q "POST /runtime/chat" docs/API_CONTRACT.md && grep -q "GET /models" docs/API_CONTRACT.md && grep -q "GET /tools" docs/API_CONTRACT.md && grep -q "GET /skills" docs/API_CONTRACT.md && grep -q "GET /memory" docs/API_CONTRACT.md`
 
 ## Inputs
 
 - ``docs/API_CONTRACT.md``
-- ``apps/api/main.py``
-- ``tests/test_api_runtime_registry.py``
+- ``tests/test_runtime_registry_api.py``
 - ``tests/test_api_foundation.py``
 - ``tests/test_project_context.py``
 - ``tests/test_api_auth_context.py``
 - ``tests/test_runtime_registry_services.py``
+- ``apps/api/main.py``
 
 ## Expected Output
 
 - ``docs/API_CONTRACT.md``
-- ``tests/test_api_runtime_registry.py``
-- ``tests/test_runtime_registry_services.py``
 
 ## Verification
 
-.venv/bin/python -m pytest tests/test_api_foundation.py tests/test_project_context.py tests/test_api_auth_context.py tests/test_runtime_registry_services.py tests/test_api_runtime_registry.py
+`.venv/bin/python -m pytest tests/test_api_foundation.py tests/test_project_context.py tests/test_api_auth_context.py tests/test_runtime_registry_services.py tests/test_runtime_registry_api.py`
 
 ## Observability Impact
 
-Documents and verifies the contract-level diagnostics that downstream API clients should rely on: request IDs, context echo, stub status, and redaction guarantees.
+Creates the documented diagnostic contract and final regression command for future agents consuming or debugging S02.
