@@ -16,7 +16,7 @@
 - [x] **S01: S01** `risk:High` `depends:[]`
   > After this: A developer can start or test the FastAPI app, authenticate with the seeded local/dev token flow, call `/auth/me`, `/projects`, and a project context endpoint, and see unauthenticated requests fail with structured 401 errors.
 
-- [ ] **S02: Runtime, registry, memory, and model skeleton APIs** `risk:High` `depends:[S01]`
+- [x] **S02: Runtime, registry, memory, and model skeleton APIs** `risk:High` `depends:[S00]`
   > After this: An authenticated caller can list model/provider, memory, tool, and skill registry metadata and send a `/runtime/chat` request that returns a structured stub response containing the resolved context and dispatcher/runtime metadata.
 
 - [ ] **S03: Authenticated CLI primary loop** `risk:Medium` `depends:[S01,S02]`
@@ -27,6 +27,9 @@
 
 - [ ] **S05: Integrated launchability and diagnostics** `risk:Medium` `depends:[S03,S04]`
   > After this: A developer can run the documented local verification sequence for API, CLI, and Web; inspect health/debug/audit placeholder surfaces; and complete the milestone with a clean git status, commit, and push workflow.
+
+- [ ] **S00: Implementation-readiness reconciliation** `risk:Low` `depends:[S01]`
+  > After this: Repository structure, plan artifacts, and upcoming file references are reconciled so M002 feature work can continue without stale or missing path references.
 
 ## Boundary Map
 

@@ -2,8 +2,16 @@
   "schemaVersion": 1,
   "milestoneId": "M002",
   "sliceId": "S02",
-  "timestamp": 1778337218252,
-  "status": "pass",
-  "durationMs": 91,
-  "checks": []
+  "timestamp": 1778337568455,
+  "status": "fail",
+  "durationMs": 82,
+  "checks": [
+    {
+      "category": "file",
+      "target": "`tests/test_runtime_registry_api.py`",
+      "passed": false,
+      "message": "Task T03 references '`tests/test_runtime_registry_api.py`' which doesn't exist and isn't created by prior or same-task outputs",
+      "blocking": true
+    }
+  ]
 }

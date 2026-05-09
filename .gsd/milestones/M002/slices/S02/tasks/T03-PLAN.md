@@ -49,6 +49,7 @@ Document the S02 API contract and run the final backend regression checks so CLI
 ## Expected Output
 
 - ``docs/API_CONTRACT.md``
+- ``tests/test_runtime_registry_api.py``
 
 ## Verification
 

@@ -1,42 +1,56 @@
 # S02: Runtime, registry, memory, and model skeleton APIs
 
-**Goal:** Expose authenticated, project-context-bearing skeleton APIs for runtime chat, project memory, tool registry, skill registry, and model/provider metadata while keeping all execution explicitly inert and reusable outside FastAPI.
+**Goal:** Expose authenticated, explicitly stubbed runtime/chat, model/provider, memory, tool, and skill skeleton API contracts that reuse the S01 request-context boundary and remain transport-agnostic for later CLI/Web consumers.
 **Demo:** An authenticated caller can list model/provider, memory, tool, and skill registry metadata and send a `/runtime/chat` request that returns a structured stub response containing the resolved context and dispatcher/runtime metadata.
 
 ## Must-Haves
 
-- Authenticated callers can list project-scoped model/provider metadata, memory metadata, tool registry metadata, and skill registry metadata through FastAPI endpoints that all resolve the S01 `RequestContext`.
-- Authenticated callers can submit `POST /runtime/chat` for an accessible project and receive a deterministic structured stub response containing prompt echo/summary, resolved context IDs, runtime status, dispatcher metadata, and selected stub provider/model metadata.
-- Missing credentials, malformed credentials, invalid tokens, inaccessible projects, unknown projects, invalid list limits, and malformed chat payloads return canonical structured errors with request IDs.
-- Runtime, memory, model/provider, tool, and skill behavior remains explicitly stubbed: no real model calls, no building-domain tool execution, no skill prompt loading/execution, no provider secrets, and no project memory retrieval/ranking/vector storage.
-- Reusable domain services live under `buildingagent/*` and API contract documentation is updated additively in `docs/API_CONTRACT.md` for downstream S03/S04 consumers.
-- Threat Surface (Q3): Abuse risks are project_id tampering, unauthenticated registry discovery, oversized/empty prompts, attempts to infer inaccessible project metadata, and attempts to trigger real provider/tool/skill execution. Data exposure is limited to non-secret seeded IDs, roles, scopes, and stub metadata; responses must not expose tokens, secrets, stack traces, file paths, memory contents, or building data. Input trust boundaries are untrusted `project_id`, list `limit`, and chat payload fields, all gated by S01 auth/context and validation.
-- Requirement Impact (Q4): Directly advances R015, R016, R023, and R026. R024/R025/R017 remain compatibility constraints only: preserve dispatcher, isolation, and audit seams without claiming full M003 enforcement or audit retention. Re-verify S01 auth/project context tests, new service tests, new API tests, request-id/error-shape behavior, and API docs. Decisions honored: D001, D002, D003, D004, D006, D008, D009, and D010.
-- Slice Verification: `.venv/bin/python -m pytest tests/test_runtime_registry_services.py tests/test_runtime_registry_api.py tests/test_api_foundation.py tests/test_project_context.py tests/test_api_auth_context.py`; a TestClient smoke should log in `user_alice`, call `/models`, `/memory`, `/tools`, `/skills`, and `/runtime/chat` for `project_hkust_demo`, and assert request IDs, stub status, and context project IDs; documentation check: `grep -q "POST /runtime/chat" docs/API_CONTRACT.md && grep -q "GET /models" docs/API_CONTRACT.md && grep -q "GET /tools" docs/API_CONTRACT.md && grep -q "GET /skills" docs/API_CONTRACT.md && grep -q "GET /memory" docs/API_CONTRACT.md`.
+- ## Must-Haves
+- Authenticated callers can list project-scoped model/provider metadata through a documented API endpoint without secrets or real provider calls.
+- Authenticated callers can inspect project-scoped memory metadata through a documented API endpoint that echoes the resolved S01 `RequestContext` and returns no cross-project data.
+- Authenticated callers can list inert tool and skill registry metadata through documented API endpoints without importing heavy building-domain dependencies or executing skills/tools.
+- Authenticated callers can submit `POST /runtime/chat` with a prompt and project id and receive a deterministic structured stub response containing the resolved context, model selection, runtime status, and dispatcher metadata.
+- All new API surfaces preserve S01 request-id propagation and structured error semantics for missing credentials, malformed auth, invalid tokens, unknown projects, and cross-project denial.
+- ## Threat Surface
+- **Abuse**: Callers may tamper with `project_id`, send oversized/empty chat prompts, enumerate registry metadata, or try to infer unavailable projects through runtime/memory endpoints. Handlers must resolve `RequestContext` through S01 services and validate prompt shape before returning stubs.
+- **Data exposure**: Responses may include user/workspace/project ids, role, permission scopes, registry names, and stub metadata. They must not include bearer tokens, provider secrets, stack traces, file paths, `.gsd` paths, or private building data.
+- **Input trust**: The chat prompt is untrusted user input reaching the API/runtime boundary. M002 should echo bounded diagnostic metadata, not execute prompt content, call models, dispatch tools, read files, or persist memory.
+- ## Requirement Impact
+- **Requirements touched**: R015, R016, R023, R026; supports future R020/R021 consumers and preserves future R024/R025 boundaries without completing them.
+- **Re-verify**: Existing S01 auth/project tests plus new service/API contract tests for runtime, registry, model, memory, request-id, and negative auth/project paths.
+- **Decisions revisited**: D001, D002, D003, D004, D006, D007, D008, D009, D010, D011 are honored; none are reversed.
+- ## Verification
+- `.venv/bin/python -m pytest tests/test_runtime_registry_services.py tests/test_api_runtime_registry.py tests/test_api_foundation.py tests/test_project_context.py tests/test_api_auth_context.py`
+- `grep -n "POST /runtime/chat" docs/API_CONTRACT.md && grep -n "GET /models" docs/API_CONTRACT.md && grep -n "GET /tools" docs/API_CONTRACT.md && grep -n "GET /skills" docs/API_CONTRACT.md`
+- ## Observability / Diagnostics
+- Runtime signals: `X-Request-ID` on success/failure and structured stub fields such as `runtime.status`, `runtime.execution_mode`, `dispatcher.status`, `model.provider_id`, and context ids.
+- Inspection surfaces: `docs/API_CONTRACT.md`, pytest contract failures, and TestClient responses from `/runtime/chat`, `/models`, `/projects/{project_id}/memory`, `/tools`, and `/skills`.
+- Failure visibility: stable structured error codes with `error.requestId` for auth/project/validation failures; no stack traces or file paths in payloads.
+- Redaction constraints: never return bearer tokens, provider API keys, environment values, local file paths, `.gsd` data, or private building-domain data.
 
 ## Proof Level
 
-- This slice proves: Contract-level backend/API proof: authenticated HTTP and reusable service contracts with deterministic in-memory stubs and pytest/TestClient assertions. This does not prove live model execution, real tool execution, persistent memory retrieval, provider secret handling, CLI/Web integration, or M003 permission enforcement.
+- This slice proves: Contract-level API and domain proof. The slice proves deterministic service contracts and authenticated FastAPI wiring using pytest/TestClient; it does not prove live model execution, real tool dispatch, persistent memory retrieval, streaming, audit retention, or CLI/Web integration.
 
 ## Integration Closure
 
-Upstream S01 surfaces consumed: `apps/api/main.py` auth dependencies, `buildingagent.projects.models.RequestContext`, `buildingagent.projects.context.ProjectContextService`, `buildingagent.core.errors.ApiError`, seeded local/dev fixtures, and the existing `docs/API_CONTRACT.md` error/request-id contract. New wiring introduced: reusable runtime/registry/model/memory services are instantiated behind authenticated FastAPI endpoints, including `POST /runtime/chat` and project-scoped metadata endpoints. Remaining milestone work: S03 CLI and S04 Web still need to consume these endpoints end-to-end; S05 still needs integrated launchability diagnostics and git workflow.
+Upstream S01 surfaces consumed: `apps/api/main.py` request-id/auth/project dependencies, `buildingagent.projects.context.ProjectContextService`, `buildingagent.projects.models.RequestContext`, `buildingagent.core.errors`, and `docs/API_CONTRACT.md`. New wiring introduced: transport-agnostic runtime/registry/memory/model services are composed into authenticated FastAPI endpoints, including `POST /runtime/chat`, `GET /models`, `GET /projects/{project_id}/memory`, `GET /tools`, and `GET /skills`. Remaining milestone integration: S03 CLI and S04 Web still need to call these endpoints, and M003 still needs real permission enforcement, audit persistence, memory retrieval, and actual tool/model execution.
 
 ## Verification
 
-- Runtime signals: stable `X-Request-ID`, canonical structured error bodies, and response fields such as `status`, `stub_reason`, `runtime.mode`, `dispatcher.status`, `provider.status`, and `model.status`. Inspection surfaces: pytest contract tests, TestClient smoke, `docs/API_CONTRACT.md`, and the authenticated metadata endpoints themselves. Redaction constraints: never include bearer token values, provider credentials, stack traces, filesystem paths, real memory contents, or Hermes source snippets in responses.
+- Every new endpoint should inherit S01 `X-Request-ID` propagation and structured error shape. The runtime chat stub response must include non-secret context/runtime/dispatcher/model metadata so a future agent can diagnose which authenticated context and stubbed boundary handled a request. Failure-path tests must prove unauthenticated and unauthorized project requests return stable codes without leaking tokens, stack traces, file paths, or heavy building-domain imports.
 
 ## Tasks
 
-- [ ] **T01: Implement reusable inert runtime and registry services** `est:1.5h`
-  Create reusable, transport-agnostic skeleton services for runtime chat, model/provider catalog, project memory, tool registry, and skill registry so API routes are thin composition only. Executor skills_used frontmatter should include `api-design` and `tdd`.
-  - Files: ``buildingagent/runtime/service.py``, ``buildingagent/tools/registry.py``, ``buildingagent/skills/registry.py``, ``buildingagent/models/catalog.py``, ``buildingagent/models/providers.py``, ``buildingagent/memory/service.py``, ``buildingagent/memory/store.py``, ``tests/test_runtime_registry_services.py``
+- [ ] **T01: Implement transport-agnostic runtime and registry skeleton services** `est:1h 30m`
+  Create or complete the transport-agnostic service layer for S02 so API, CLI, and Web callers can share one deterministic skeleton contract instead of duplicating route logic. The increment must stay explicitly inert: no model calls, no skill loading/execution, no building-domain tool execution, no memory retrieval/ranking, and no persistence.
+  - Files: ``buildingagent/runtime/service.py``, ``buildingagent/tools/registry.py``, ``buildingagent/skills/registry.py``, ``buildingagent/models/catalog.py``, ``buildingagent/models/providers.py``, ``buildingagent/memory/service.py``, ``tests/test_runtime_registry_services.py``
   - Verify: `.venv/bin/python -m pytest tests/test_runtime_registry_services.py`
 
-- [ ] **T02: Expose authenticated FastAPI skeleton endpoints and contract tests** `est:2h`
-  Wire the reusable skeleton services into authenticated FastAPI endpoints and API contract tests. Executor skills_used frontmatter should include `api-design`, `tdd`, and `verify-before-complete`.
-  - Files: ``apps/api/main.py``, ``tests/test_runtime_registry_api.py``, ``buildingagent/runtime/service.py``, ``buildingagent/tools/registry.py``, ``buildingagent/skills/registry.py``, ``buildingagent/models/providers.py``, ``buildingagent/memory/service.py``
-  - Verify: `.venv/bin/python -m pytest tests/test_api_foundation.py tests/test_project_context.py tests/test_api_auth_context.py tests/test_runtime_registry_services.py tests/test_runtime_registry_api.py`
+- [ ] **T02: Expose authenticated FastAPI endpoints and API contract docs** `est:2h`
+  Wire the S02 service contracts into authenticated FastAPI endpoints and document the additive API contract for CLI/Web consumers. This increment must keep HTTP handlers thin: auth/project-context resolution stays in the S01 dependencies, and domain behavior stays in the reusable services from T01.
+  - Files: ``apps/api/main.py``, ``tests/test_api_runtime_registry.py``, ``docs/API_CONTRACT.md``
+  - Verify: `.venv/bin/python -m pytest tests/test_api_runtime_registry.py tests/test_api_foundation.py tests/test_project_context.py tests/test_api_auth_context.py tests/test_runtime_registry_services.py && grep -n "POST /runtime/chat" docs/API_CONTRACT.md && grep -n "GET /models" docs/API_CONTRACT.md && grep -n "GET /tools" docs/API_CONTRACT.md && grep -n "GET /skills" docs/API_CONTRACT.md`
 
 - [ ] **T03: Document and verify the S02 backend contract** `est:45m`
   Document the S02 API contract and run the final backend regression checks so CLI and Web executors can consume the new skeleton endpoints without reverse-engineering code. Executor skills_used frontmatter should include `api-design`, `write-docs`, and `verify-before-complete`.
@@ -51,11 +65,11 @@ Upstream S01 surfaces consumed: `apps/api/main.py` auth dependencies, `buildinga
 - `buildingagent/models/catalog.py`
 - `buildingagent/models/providers.py`
 - `buildingagent/memory/service.py`
-- `buildingagent/memory/store.py`
 - `tests/test_runtime_registry_services.py`
 - `apps/api/main.py`
-- `tests/test_runtime_registry_api.py`
+- `tests/test_api_runtime_registry.py`
 - `docs/API_CONTRACT.md`
+- `tests/test_runtime_registry_api.py`
 - `tests/test_api_foundation.py`
 - `tests/test_project_context.py`
 - `tests/test_api_auth_context.py`
