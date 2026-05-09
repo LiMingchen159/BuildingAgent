@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "milestoneId": "M002",
+  "sliceId": "S02",
+  "timestamp": 1778329199536,
+  "status": "fail",
+  "durationMs": 58,
+  "checks": [
+    {
+      "category": "file",
+      "target": "`skills/building/README.md`",
+      "passed": false,
+      "message": "Task T01 references '`skills/building/README.md`' which doesn't exist and isn't created by prior or same-task outputs",
+      "blocking": true
+    }
+  ]
+}
