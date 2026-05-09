@@ -1,0 +1,18 @@
+{
+  "id": "a3eda27b-25cb-474a-b1c6-6e171ca3cf75",
+  "runtime": "python",
+  "purpose": "S01 observability request id and health smoke via TestClient",
+  "script_chars": 1598,
+  "started_at": "2026-05-09T11:26:21.808Z",
+  "finished_at": "2026-05-09T11:26:22.016Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 208,
+  "stdout_bytes": 0,
+  "stderr_bytes": 121,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/a3eda27b-25cb-474a-b1c6-6e171ca3cf75.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/a3eda27b-25cb-474a-b1c6-6e171ca3cf75.stderr"
+}

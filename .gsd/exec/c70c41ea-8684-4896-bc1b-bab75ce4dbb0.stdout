@@ -1,0 +1,33 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /mnt/d/Git_project/BuildingAgent
+configfile: pyproject.toml
+plugins: anyio-4.13.0
+collected 13 items
+
+tests/test_project_context.py .F.......                                  [ 69%]
+tests/test_api_foundation.py ....                                        [100%]
+
+=================================== FAILURES ===================================
+______ test_invalid_or_empty_token_is_rejected_with_stable_domain_error[] ______
+
+token = ''
+
+    @pytest.mark.parametrize("token", ["", "unknown-token"])
+    def test_invalid_or_empty_token_is_rejected_with_stable_domain_error(token: str) -> None:
+        provider = LocalDevAuthProvider(LOCAL_DEV_SEED_STORE)
+    
+        with pytest.raises(ProjectAccessDeniedError) as exc_info:
+            provider.authenticate_bearer_token(token)
+    
+        assert exc_info.value.code == "auth_invalid_token"
+        assert exc_info.value.details == {}
+>       assert token not in str(exc_info.value)
+E       AssertionError: assert '' not in ''
+E         
+E         '' is contained here:
+
+tests/test_project_context.py:33: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_project_context.py::test_invalid_or_empty_token_is_rejected_with_stable_domain_error[]
+========================= 1 failed, 12 passed in 5.10s =========================

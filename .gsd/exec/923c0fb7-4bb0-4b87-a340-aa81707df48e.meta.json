@@ -1,0 +1,18 @@
+{
+  "id": "923c0fb7-4bb0-4b87-a340-aa81707df48e",
+  "runtime": "bash",
+  "purpose": "slice verification for M002 S01 T03 API auth context",
+  "script_chars": 126,
+  "started_at": "2026-05-09T11:22:13.173Z",
+  "finished_at": "2026-05-09T11:22:21.457Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 8284,
+  "stdout_bytes": 575,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/923c0fb7-4bb0-4b87-a340-aa81707df48e.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/923c0fb7-4bb0-4b87-a340-aa81707df48e.stderr"
+}

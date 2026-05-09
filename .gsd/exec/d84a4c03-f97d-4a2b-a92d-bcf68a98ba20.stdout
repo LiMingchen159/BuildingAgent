@@ -1,0 +1,125 @@
+--- git status before add ---
+## main...origin/main
+ M .gitignore
+ M README.md
+?? apps/
+?? buildingagent/
+?? docs/
+?? scripts/
+?? skills/
+?? tests/
+?? third_party_licenses/
+
+--- git add . ---
+
+--- git status after add ---
+## main...origin/main
+M  .gitignore
+M  README.md
+A  apps/api/.gitkeep
+A  apps/web/.gitkeep
+A  buildingagent/.gitkeep
+A  buildingagent/auth/.gitkeep
+A  buildingagent/cli/.gitkeep
+A  buildingagent/config/.gitkeep
+A  buildingagent/core/.gitkeep
+A  buildingagent/gateways/.gitkeep
+A  buildingagent/gateways/email/.gitkeep
+A  buildingagent/gateways/whatsapp/.gitkeep
+A  buildingagent/memory/.gitkeep
+A  buildingagent/projects/.gitkeep
+A  buildingagent/skills/.gitkeep
+A  buildingagent/tools/.gitkeep
+A  buildingagent/tools/building/.gitkeep
+A  buildingagent/tools/building/bim_ifc_tools.py
+A  buildingagent/tools/building/brick_rdf_sparql_tools.py
+A  buildingagent/tools/building/cross_source_linking_tools.py
+A  buildingagent/tools/building/timeseries_tools.py
+A  buildingagent/tools/building/visualization_tools.py
+A  buildingagent/tools/general/.gitkeep
+A  docs/.gitkeep
+A  docs/AUTH_ACCESS_CONTROL_SPEC.md
+A  docs/CLI_SPEC.md
+A  docs/DEVELOPMENT_PLAN.md
+A  docs/EMAIL_GATEWAY_SPEC.md
+A  docs/ENTRYPOINTS_SPEC.md
+A  docs/HERMES_REPLICATION_STRATEGY.md
+A  docs/LICENSE_ATTRIBUTION_PLAN.md
+A  docs/MEMORY_SPEC.md
+A  docs/MODEL_CONFIGURATION_SPEC.md
+A  docs/PRODUCT_ARCHITECTURE.md
+A  docs/PRODUCT_REQUIREMENTS.md
+A  docs/PROJECT_MODEL_SPEC.md
+A  docs/RUNTIME_SPEC.md
+A  docs/SKILL_SYSTEM_SPEC.md
+A  docs/TOOL_SYSTEM_SPEC.md
+A  docs/WEB_UI_PLAN.md
+A  docs/WHATSAPP_GATEWAY_SPEC.md
+A  scripts/.gitkeep
+A  skills/building/.gitkeep
+A  skills/building/bim_object_exploration.md
+A  skills/building/brick_sparql_query.md
+A  skills/building/cross_source_equipment_analysis.md
+A  skills/building/hhw_reset_analysis.md
+A  skills/building/timeseries_trend_analysis.md
+A  skills/general/.gitkeep
+A  tests/.gitkeep
+A  third_party_licenses/.gitkeep
+
+--- git commit ---
+[main 1451799] Add Hermes-first BuildingAgent architecture plan
+ 51 files changed, 845 insertions(+)
+ create mode 100644 apps/api/.gitkeep
+ create mode 100644 apps/web/.gitkeep
+ create mode 100644 buildingagent/.gitkeep
+ create mode 100644 buildingagent/auth/.gitkeep
+ create mode 100644 buildingagent/cli/.gitkeep
+ create mode 100644 buildingagent/config/.gitkeep
+ create mode 100644 buildingagent/core/.gitkeep
+ create mode 100644 buildingagent/gateways/.gitkeep
+ create mode 100644 buildingagent/gateways/email/.gitkeep
+ create mode 100644 buildingagent/gateways/whatsapp/.gitkeep
+ create mode 100644 buildingagent/memory/.gitkeep
+ create mode 100644 buildingagent/projects/.gitkeep
+ create mode 100644 buildingagent/skills/.gitkeep
+ create mode 100644 buildingagent/tools/.gitkeep
+ create mode 100644 buildingagent/tools/building/.gitkeep
+ create mode 100644 buildingagent/tools/building/bim_ifc_tools.py
+ create mode 100644 buildingagent/tools/building/brick_rdf_sparql_tools.py
+ create mode 100644 buildingagent/tools/building/cross_source_linking_tools.py
+ create mode 100644 buildingagent/tools/building/timeseries_tools.py
+ create mode 100644 buildingagent/tools/building/visualization_tools.py
+ create mode 100644 buildingagent/tools/general/.gitkeep
+ create mode 100644 docs/.gitkeep
+ create mode 100644 docs/AUTH_ACCESS_CONTROL_SPEC.md
+ create mode 100644 docs/CLI_SPEC.md
+ create mode 100644 docs/DEVELOPMENT_PLAN.md
+ create mode 100644 docs/EMAIL_GATEWAY_SPEC.md
+ create mode 100644 docs/ENTRYPOINTS_SPEC.md
+ create mode 100644 docs/HERMES_REPLICATION_STRATEGY.md
+ create mode 100644 docs/LICENSE_ATTRIBUTION_PLAN.md
+ create mode 100644 docs/MEMORY_SPEC.md
+ create mode 100644 docs/MODEL_CONFIGURATION_SPEC.md
+ create mode 100644 docs/PRODUCT_ARCHITECTURE.md
+ create mode 100644 docs/PRODUCT_REQUIREMENTS.md
+ create mode 100644 docs/PROJECT_MODEL_SPEC.md
+ create mode 100644 docs/RUNTIME_SPEC.md
+ create mode 100644 docs/SKILL_SYSTEM_SPEC.md
+ create mode 100644 docs/TOOL_SYSTEM_SPEC.md
+ create mode 100644 docs/WEB_UI_PLAN.md
+ create mode 100644 docs/WHATSAPP_GATEWAY_SPEC.md
+ create mode 100644 scripts/.gitkeep
+ create mode 100644 skills/building/.gitkeep
+ create mode 100644 skills/building/bim_object_exploration.md
+ create mode 100644 skills/building/brick_sparql_query.md
+ create mode 100644 skills/building/cross_source_equipment_analysis.md
+ create mode 100644 skills/building/hhw_reset_analysis.md
+ create mode 100644 skills/building/timeseries_trend_analysis.md
+ create mode 100644 skills/general/.gitkeep
+ create mode 100644 tests/.gitkeep
+ create mode 100644 third_party_licenses/.gitkeep
+
+--- git push ---
+
+--- git status after push ---
+## main...origin/main

@@ -1,0 +1,18 @@
+{
+  "id": "841ba5d5-38c3-4e15-b08e-d611d320f8ca",
+  "runtime": "bash",
+  "purpose": "Inspect git diff summary before staging M001 scaffold",
+  "script_chars": 128,
+  "started_at": "2026-05-09T10:12:41.847Z",
+  "finished_at": "2026-05-09T10:12:42.296Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 449,
+  "stdout_bytes": 3948,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/841ba5d5-38c3-4e15-b08e-d611d320f8ca.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/841ba5d5-38c3-4e15-b08e-d611d320f8ca.stderr"
+}

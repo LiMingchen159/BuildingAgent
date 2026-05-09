@@ -1,0 +1,441 @@
+=== /mnt/d/Git_project/references/hermes-agent/package.json ===
+{
+  "name": "hermes-agent",
+  "version": "1.0.0",
+  "description": "An AI agent with advanced tool-calling capabilities, featuring a flexible toolsets system for organizing and managing tools.",
+  "private": true,
+  "scripts": {
+    "postinstall": "echo '✅ Browser tools ready. Run: python run_agent.py --help'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NousResearch/Hermes-Agent.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/NousResearch/Hermes-Agent/issues"
+  },
+  "homepage": "https://github.com/NousResearch/Hermes-Agent#readme",
+  "dependencies": {
+    "@askjo/camofox-browser": "^1.5.2",
+    "agent-browser": "^0.26.0"
+  },
+  "overrides": {
+    "lodash": "4.18.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+=== /mnt/d/Git_project/references/hermes-agent/pyproject.toml ===
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-agent"
+version = "0.13.0"
+description = "The self-improving AI agent — creates skills from experience, improves them during use, and runs anywhere"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Nous Research" }]
+license = { text = "MIT" }
+dependencies = [
+  # Core — pinned to known-good ranges to limit supply chain attack surface
+  "openai>=2.21.0,<3",
+  "anthropic>=0.39.0,<1",
+  "python-dotenv>=1.2.1,<2",
+  "fire>=0.7.1,<1",
+  "httpx[socks]>=0.28.1,<1",
+  "rich>=14.3.3,<15",
+  "tenacity>=9.1.4,<10",
+  "pyyaml>=6.0.2,<7",
+  "requests>=2.33.0,<3",  # CVE-2026-25645
+  "jinja2>=3.1.5,<4",
+  "pydantic>=2.12.5,<3",
+  # Interactive CLI (prompt_toolkit is used directly by cli.py)
+  "prompt_toolkit>=3.0.52,<4",
+  # Tools
+  "exa-py>=2.9.0,<3",
+  "firecrawl-py>=4.16.0,<5",
+  "parallel-web>=0.4.2,<1",
+  "fal-client>=0.13.1,<1",
+  # Cron scheduler (built-in feature — scheduled cron/interval jobs use croniter).
+  "croniter>=6.0.0,<7",
+  # Text-to-speech (Edge TTS is free, no API key needed)
+  "edge-tts>=7.2.7,<8",
+  # Skills Hub (GitHub App JWT auth — optional, only needed for bot identity)
+  "PyJWT[crypto]>=2.12.0,<3",  # CVE-2026-32597
+  # Windows has no IANA tzdata shipped with the OS, so Python's ``zoneinfo``
+  # (PEP 615) raises ``ZoneInfoNotFoundError`` for every non-UTC timezone
+  # out of the box.  ``tzdata`` ships the Olson database as a data package
+  # Python resolves automatically.  No-op on Linux/macOS (which have
+  # /usr/share/zoneinfo).  Credits: PR #13182 (@sprmn24).
+  "tzdata>=2023.3; sys_platform == 'win32'",
+  # Cross-platform process / PID management.  `psutil` is the canonical
+  # answer for "is this PID alive" and process-tree walking across Linux,
+  # macOS and Windows.  It replaces POSIX-only idioms like `os.kill(pid, 0)`
+  # (which is a silent killer on Windows — see CONTRIBUTING.md) and
+  # `os.killpg` (which doesn't exist on Windows).
+  "psutil>=5.9.0,<8",
+]
+
+[project.optional-dependencies]
+modal = ["modal>=1.0.0,<2"]
+daytona = ["daytona>=0.148.0,<1"]
+vercel = ["vercel>=0.5.7,<0.6.0"]
+dev = ["debugpy>=1.8.0,<2", "pytest>=9.0.2,<10", "pytest-asyncio>=1.3.0,<2", "pytest-xdist>=3.0,<4", "mcp>=1.2.0,<2", "ty>=0.0.1a29,<0.0.22", "ruff"]
+messaging = ["python-telegram-bot[webhooks]>=22.6,<23", "discord.py[voice]>=2.7.1,<3", "aiohttp>=3.13.3,<4", "slack-bolt>=1.18.0,<2", "slack-sdk>=3.27.0,<4", "qrcode>=7.0,<8"]
+cron = []  # croniter is now a core dependency; this extra kept for back-compat
+slack = ["slack-bolt>=1.18.0,<2", "slack-sdk>=3.27.0,<4"]
+matrix = ["mautrix[encryption]>=0.20,<1", "Markdown>=3.6,<4", "aiosqlite>=0.20", "asyncpg>=0.29", "aiohttp-socks>=0.10,<1"]
+cli = ["simple-term-menu>=1.0,<2"]
+tts-premium = ["elevenlabs>=1.0,<2"]
+voice = [
+  # Local STT pulls in wheel-only transitive deps (ctranslate2, onnxruntime),
+  # so keep it out of the base install for source-build packagers like Homebrew.
+  "faster-whisper>=1.0.0,<2",
+  "sounddevice>=0.4.6,<1",
+  "numpy>=1.24.0,<3",
+]
+pty = [
+  "ptyprocess>=0.7.0,<1; sys_platform != 'win32'",
+  "pywinpty>=2.0.0,<3; sys_platform == 'win32'",
+]
+honcho = ["honcho-ai>=2.0.1,<3"]
+mcp = ["mcp>=1.2.0,<2"]
+homeassistant = ["aiohttp>=3.9.0,<4"]
+sms = ["aiohttp>=3.9.0,<4"]
+# Computer use — macOS background desktop control via cua-driver (MCP stdio).
+# The cua-driver binary itself is installed via `hermes tools` post-setup
+# (curl install script); this extra just pins the MCP client used to talk
+# to it, which is already provided by the `mcp` extra.
+computer-use = ["mcp>=1.2.0,<2"]
+acp = ["agent-client-protocol>=0.9.0,<1.0"]
+mistral = ["mistralai>=2.3.0,<3"]
+bedrock = ["boto3>=1.35.0,<2"]
+termux = [
+  # Baseline Android / Termux path for reliable fresh installs.
+  "python-telegram-bot[webhooks]>=22.6,<23",
+  "hermes-agent[cron]",
+  "hermes-agent[cli]",
+  "hermes-agent[pty]",
+  "hermes-agent[mcp]",
+  "hermes-agent[honcho]",
+  "hermes-agent[acp]",
+]
+termux-all = [
+  # Best-effort "install all" profile for Termux: include broad extras that
+  # are known to resolve on Android, while intentionally excluding extras that
+  # currently hard-fail from missing/broken Android wheels/toolchains.
+  #
+  # Excluded for now:
+  # - matrix (mautrix[encryption] -> python-olm build failures on Termux)
+  # - voice  (faster-whisper chain requires ctranslate2/av builds not packaged)
+  "hermes-agent[termux]",
+  "hermes-agent[messaging]",
+  "hermes-agent[slack]",
+  "hermes-agent[tts-premium]",
+  "hermes-agent[dingtalk]",
+  "hermes-agent[feishu]",
+  "hermes-agent[google]",
+  "hermes-agent[mistral]",
+  "hermes-agent[bedrock]",
+  "hermes-agent[homeassistant]",
+  "hermes-agent[sms]",
+  "hermes-agent[web]",
+]
+dingtalk = ["dingtalk-stream>=0.20,<1", "alibabacloud-dingtalk>=2.0.0", "qrcode>=7.0,<8"]
+feishu = ["lark-oapi>=1.5.3,<2", "qrcode>=7.0,<8"]
+google = [
+=== /mnt/d/Git_project/references/hermes-agent/README.md ===
+<p align="center">
+  <img src="assets/banner.png" alt="Hermes Agent" width="100%">
+</p>
+
+# Hermes Agent ☤
+
+<p align="center">
+  <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://nousresearch.com"><img src="https://img.shields.io/badge/Built%20by-Nous%20Research-blueviolet?style=for-the-badge" alt="Built by Nous Research"></a>
+  <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/Lang-中文-red?style=for-the-badge" alt="中文"></a>
+</p>
+
+**The self-improving AI agent built by [Nous Research](https://nousresearch.com).** It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+
+Use any model you want — [Nous Portal](https://portal.nousresearch.com), [OpenRouter](https://openrouter.ai) (200+ models), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, or your own endpoint. Switch with `hermes model` — no code changes, no lock-in.
+
+<table>
+<tr><td><b>A real terminal interface</b></td><td>Full TUI with multiline editing, slash-command autocomplete, conversation history, interrupt-and-redirect, and streaming tool output.</td></tr>
+<tr><td><b>Lives where you do</b></td><td>Telegram, Discord, Slack, WhatsApp, Signal, and CLI — all from a single gateway process. Voice memo transcription, cross-platform conversation continuity.</td></tr>
+<tr><td><b>A closed learning loop</b></td><td>Agent-curated memory with periodic nudges. Autonomous skill creation after complex tasks. Skills self-improve during use. FTS5 session search with LLM summarization for cross-session recall. <a href="https://github.com/plastic-labs/honcho">Honcho</a> dialectic user modeling. Compatible with the <a href="https://agentskills.io">agentskills.io</a> open standard.</td></tr>
+<tr><td><b>Scheduled automations</b></td><td>Built-in cron scheduler with delivery to any platform. Daily reports, nightly backups, weekly audits — all in natural language, running unattended.</td></tr>
+<tr><td><b>Delegates and parallelizes</b></td><td>Spawn isolated subagents for parallel workstreams. Write Python scripts that call tools via RPC, collapsing multi-step pipelines into zero-context-cost turns.</td></tr>
+<tr><td><b>Runs anywhere, not just your laptop</b></td><td>Seven terminal backends — local, Docker, SSH, Singularity, Modal, Daytona, and Vercel Sandbox. Daytona and Modal offer serverless persistence — your agent's environment hibernates when idle and wakes on demand, costing nearly nothing between sessions. Run it on a $5 VPS or a GPU cluster.</td></tr>
+<tr><td><b>Research-ready</b></td><td>Batch trajectory generation, Atropos RL environments, trajectory compression for training the next generation of tool-calling models.</td></tr>
+</table>
+
+---
+
+## Quick Install
+
+### Linux, macOS, WSL2, Termux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+```
+
+### Windows (native, PowerShell) — Early Beta
+
+> **Heads up:** Native Windows support is **early beta**. It installs and runs, but hasn't been road-tested as broadly as our Linux/macOS/WSL2 paths. Please [file issues](https://github.com/NousResearch/hermes-agent/issues) when you hit rough edges. For the most battle-tested Windows setup today, run the Linux/macOS one-liner above inside **WSL2**.
+
+Run this in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex
+```
+
+The installer handles everything: uv, Python 3.11, Node.js, ripgrep, ffmpeg, **and a portable Git Bash** (MinGit, unpacked to `%LOCALAPPDATA%\hermes\git` — no admin required, completely isolated from any system Git install).  Hermes uses this bundled Git Bash to run shell commands.
+
+If you already have Git installed, the installer detects it and uses that instead.  Otherwise a ~45MB MinGit download is all you need — it won't touch or interfere with any system Git.
+
+> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+>
+> **Windows:** Native Windows is supported as an **early beta** — the PowerShell one-liner above installs everything, but expect rough edges and please file issues when you hit them. If you'd rather use WSL2 (our most battle-tested Windows path), the Linux command works there too. Native Windows install lives under `%LOCALAPPDATA%\hermes`; WSL2 installs under `~/.hermes` as on Linux.  The only Hermes feature that currently needs WSL2 specifically is the browser-based dashboard chat pane (it uses a POSIX PTY — classic CLI and gateway both run natively).
+
+After installation:
+
+```bash
+source ~/.bashrc    # reload shell (or: source ~/.zshrc)
+hermes              # start chatting!
+```
+
+---
+
+## Getting Started
+
+```bash
+hermes              # Interactive CLI — start a conversation
+hermes model        # Choose your LLM provider and model
+hermes tools        # Configure which tools are enabled
+hermes config set   # Set individual config values
+hermes gateway      # Start the messaging gateway (Telegram, Discord, etc.)
+hermes setup        # Run the full setup wizard (configures everything at once)
+hermes claw migrate # Migrate from OpenClaw (if coming from OpenClaw)
+hermes update       # Update to the latest version
+hermes doctor       # Diagnose any issues
+```
+
+📖 **[Full documentation →](https://hermes-agent.nousresearch.com/docs/)**
+
+## CLI vs Messaging Quick Reference
+
+Hermes has two entry points: start the terminal UI with `hermes`, or run the gateway and talk to it from Telegram, Discord, Slack, WhatsApp, Signal, or Email. Once you're in a conversation, many slash commands are shared across both interfaces.
+
+| Action | CLI | Messaging platforms |
+|---------|-----|---------------------|
+| Start chatting | `hermes` | Run `hermes gateway setup` + `hermes gateway start`, then send the bot a message |
+| Start fresh conversation | `/new` or `/reset` | `/new` or `/reset` |
+| Change model | `/model [provider:model]` | `/model [provider:model]` |
+| Set a personality | `/personality [name]` | `/personality [name]` |
+| Retry or undo the last turn | `/retry`, `/undo` | `/retry`, `/undo` |
+| Compress context / check usage | `/compress`, `/usage`, `/insights [--days N]` | `/compress`, `/usage`, `/insights [days]` |
+| Browse skills | `/skills` or `/<skill-name>` | `/<skill-name>` |
+| Interrupt current work | `Ctrl+C` or send a new message | `/stop` or send a new message |
+| Platform-specific status | `/platforms` | `/status`, `/sethome` |
+
+For the full command lists, see the [CLI guide](https://hermes-agent.nousresearch.com/docs/user-guide/cli) and the [Messaging Gateway guide](https://hermes-agent.nousresearch.com/docs/user-guide/messaging).
+
+---
+
+## Documentation
+
+All documentation lives at **[hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs/)**:
+
+| Section | What's Covered |
+|---------|---------------|
+| [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart) | Install → setup → first conversation in 2 minutes |
+| [CLI Usage](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | Commands, keybindings, personalities, sessions |
+| [Configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) | Config file, providers, models, all options |
+| [Messaging Gateway](https://hermes-agent.nousresearch.com/docs/user-guide/messaging) | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
+| [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security) | Command approval, DM pairing, container isolation |
+| [Tools & Toolsets](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools) | 40+ tools, toolset system, terminal backends |
+| [Skills System](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) | Procedural memory, Skills Hub, creating skills |
+| [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) | Persistent memory, user profiles, best practices |
+| [MCP Integration](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) | Connect any MCP server for extended capabilities |
+| [Cron Scheduling](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) | Scheduled tasks with platform delivery |
+| [Context Files](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files) | Project context that shapes every conversation |
+| [Architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture) | Project structure, agent loop, key classes |
+| [Contributing](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) | Development setup, PR process, code style |
+=== /mnt/d/Git_project/references/hermes-agent/web/README.md ===
+# Hermes Agent — Web UI
+
+Browser-based dashboard for managing Hermes Agent configuration, API keys, and monitoring active sessions.
+
+## Stack
+
+- **Vite** + **React 19** + **TypeScript**
+- **Tailwind CSS v4** with custom dark theme
+- **shadcn/ui**-style components (hand-rolled, no CLI dependency)
+
+## Development
+
+```bash
+# Start the backend API server
+cd ../
+python -m hermes_cli.main web --no-open
+
+# In another terminal, start the Vite dev server (with HMR + API proxy)
+cd web/
+npm run dev
+```
+
+The Vite dev server proxies `/api` requests to `http://127.0.0.1:9119` (the FastAPI backend).
+
+## Build
+
+```bash
+npm run build
+```
+
+This outputs to `../hermes_cli/web_dist/`, which the FastAPI server serves as a static SPA. The built assets are included in the Python package via `pyproject.toml` package-data.
+
+## Structure
+
+```
+src/
+├── components/ui/   # Reusable UI primitives (Card, Badge, Button, Input, etc.)
+├── lib/
+│   ├── api.ts       # API client — typed fetch wrappers for all backend endpoints
+│   └── utils.ts     # cn() helper for Tailwind class merging
+├── pages/
+│   ├── StatusPage   # Agent status, active/recent sessions
+│   ├── ConfigPage   # Dynamic config editor (reads schema from backend)
+│   └── EnvPage      # API key management with save/clear
+├── App.tsx          # Main layout and navigation
+├── main.tsx         # React entry point
+└── index.css        # Tailwind imports and theme variables
+```
+=== /mnt/d/Git_project/references/hermes-agent/ui-tui/README.md ===
+# Hermes TUI
+
+React + Ink terminal UI for Hermes. TypeScript owns the screen. Python owns sessions, tools, model calls, and most command logic.
+
+```bash
+hermes --tui
+```
+
+## What runs
+
+The client entrypoint is `src/entry.tsx`. It exits early if `stdin` is not a TTY, starts `GatewayClient`, then renders `App`.
+
+`GatewayClient` spawns:
+
+```text
+python -m tui_gateway.entry
+```
+
+Interpreter resolution order is: `HERMES_PYTHON` → `PYTHON` → `$VIRTUAL_ENV/bin/python` → `./.venv/bin/python` → `./venv/bin/python` → `python3` (or `python` on Windows).
+
+The transport is newline-delimited JSON-RPC over stdio:
+
+```text
+ui-tui/src                  tui_gateway/
+-----------                 -------------
+entry.tsx                   entry.py
+  -> GatewayClient            -> request loop
+  -> App                      -> server.py RPC handlers
+
+stdin/stdout: JSON-RPC requests, responses, events
+stderr: captured into an in-memory log ring
+```
+
+Malformed stdout lines are treated as protocol noise and surfaced as `gateway.protocol_error`. Stderr lines become `gateway.stderr`. Neither writes directly into the terminal.
+
+## Running it
+
+From the repo root, the normal path is:
+
+```bash
+hermes --tui
+```
+
+The CLI expects `ui-tui/node_modules` to exist. If the TUI deps are missing:
+
+```bash
+cd ui-tui
+npm install
+```
+
+Local package commands:
+
+```bash
+npm run dev
+npm start
+npm run build
+npm run lint
+npm run fmt
+npm run fix
+```
+
+Tests use vitest:
+
+```bash
+npm test         # single run
+npm run test:watch
+```
+
+## App model
+
+`src/app.tsx` is the center of the UI. Heavy logic is split into `src/app/`:
+
+- `createGatewayEventHandler.ts` — maps gateway events to state updates
+- `createSlashHandler.ts` — local slash command dispatch
+- `useComposerState.ts` — draft, multiline buffer, queue editing
+- `useInputHandlers.ts` — keypress routing
+- `useTurnState.ts` — agent turn lifecycle
+- `overlayStore.ts` / `uiStore.ts` — nanostores for overlay and UI state
+- `gatewayContext.tsx` — React context for the gateway client
+- `constants.ts`, `helpers.ts`, `interfaces.ts`
+
+The top-level `app.tsx` composes these into the Ink tree with `Static` transcript output, a live streaming assistant row, prompt overlays, queue preview, status rule, input line, and completion list.
+
+State managed at the top level includes:
+
+- transcript and streaming state
+- queued messages and input history
+- session lifecycle
+- tool progress and reasoning text
+- prompt flows for approval, clarify, sudo, and secret input
+- slash command routing
+- tab completion and path completion
+- theme state from gateway skin data
+
+The UI renders as a normal Ink tree with `Static` transcript output, a live streaming assistant row, prompt overlays, queue preview, status rule, input line, and completion list.
+
+The intro panel is driven by `session.info` and rendered through `branding.tsx`.
+
+## Hotkeys and interactions
+
+Current input behavior is split across `app.tsx`, `components/textInput.tsx`, and the prompt/picker components.
+
+### Main chat input
+
+| Key                             | Behavior                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Enter`                         | Submit the current draft                                                                                                                                |
+| empty `Enter` twice             | If queued messages exist and the agent is busy, interrupt the current run. If queued messages exist and the agent is idle, send the next queued message |
+| `Shift+Enter` / `Alt+Enter`     | Insert a newline in the current draft                                                                                                                   |
+| `\` + `Enter`                   | Append the line to the multiline buffer (fallback for terminals without modifier support)                                                               |
+| `Ctrl+C`                        | Interrupt active run, or clear the current draft, or exit if nothing is pending                                                                         |
+| `Ctrl+D`                        | Exit                                                                                                                                                    |
+| `Cmd/Ctrl+G` / `Alt+G`          | Open `$EDITOR` with the current draft (use `Alt+G` in VSCode/Cursor — they bind the primary keystroke to Find Next)                                     |
+| `Ctrl+L`                        | New session (same as `/clear`)                                                                                                                          |
+| `Ctrl+V` / `Alt+V`              | Paste text first, then fall back to image/path attachment when applicable                                                                               |
+| `Tab`                           | Apply the active completion                                                                                                                             |
+| `Up/Down`                       | Cycle completions if the completion list is open; otherwise edit queued messages first, then walk input history                                         |
+| `Left/Right`                    | Move the cursor                                                                                                                                         |
+| modified `Left/Right`           | Move by word when the terminal sends `Ctrl` or `Meta` with the arrow key                                                                                |
+| `Home` / `Ctrl+A`               | Start of line                                                                                                                                           |

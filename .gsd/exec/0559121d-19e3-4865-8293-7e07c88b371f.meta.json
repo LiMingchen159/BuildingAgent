@@ -1,0 +1,18 @@
+{
+  "id": "0559121d-19e3-4865-8293-7e07c88b371f",
+  "runtime": "bash",
+  "purpose": "Inspect S01 project response shape for UAT script adjustment",
+  "script_chars": 326,
+  "started_at": "2026-05-09T11:32:21.321Z",
+  "finished_at": "2026-05-09T11:32:24.836Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 3515,
+  "stdout_bytes": 852,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/0559121d-19e3-4865-8293-7e07c88b371f.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/0559121d-19e3-4865-8293-7e07c88b371f.stderr"
+}

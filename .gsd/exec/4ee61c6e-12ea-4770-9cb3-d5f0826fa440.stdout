@@ -1,0 +1,37 @@
+Tracked app/buildingagent paths:
+apps/api/.gitkeep
+apps/web/.gitkeep
+buildingagent/.gitkeep
+buildingagent/auth/.gitkeep
+buildingagent/cli/.gitkeep
+buildingagent/config/.gitkeep
+buildingagent/core/.gitkeep
+buildingagent/gateways/.gitkeep
+buildingagent/gateways/email/.gitkeep
+buildingagent/gateways/whatsapp/.gitkeep
+buildingagent/memory/.gitkeep
+buildingagent/projects/.gitkeep
+buildingagent/skills/.gitkeep
+buildingagent/tools/.gitkeep
+buildingagent/tools/building/.gitkeep
+buildingagent/tools/building/bim_ifc_tools.py
+buildingagent/tools/building/brick_rdf_sparql_tools.py
+buildingagent/tools/building/cross_source_linking_tools.py
+buildingagent/tools/building/timeseries_tools.py
+buildingagent/tools/building/visualization_tools.py
+buildingagent/tools/general/.gitkeep
+scripts/.gitkeep
+tests/.gitkeep
+
+Gitignore relevant:
+4:.venv/
+5:venv/
+6:.env
+9:node_modules/
+12:.gsd/
+24:.gsd
+25:.gsd-id
+32:.env.*
+33:!.env.example
+35:dist/
+40:coverage/

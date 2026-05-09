@@ -7,36 +7,54 @@ venv/
 
 # Node
 node_modules/
-
-# GSD / Harness runtime
-.gsd/
-.hermes/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# ── GSD baseline (auto-generated) ──
-.gsd
-.gsd-id
-.mcp.json
-.bg-shell/
-*.swp
-*.swo
-*~
-*.code-workspace
-.env.*
-!.env.example
 .next/
 dist/
 build/
 target/
 vendor/
+
+# GSD / Harness runtime
+.gsd/gsd.db*
+.gsd/STATE.md
+.gsd/runtime/
+.gsd/worktrees/
+.gsd/activity/
+.gsd/metrics.json
+.gsd/completed-units.json
+.gsd/milestones/**/continue.md
+.gsd/milestones/**/*-CONTINUE.md
+.hermes/
+
+# Keep durable GSD project artifacts trackable
+!.gsd/
+!.gsd/PREFERENCES.md
+!.gsd/PROJECT.md
+!.gsd/REQUIREMENTS.md
+!.gsd/DECISIONS.md
+!.gsd/milestones/
+!.gsd/milestones/**
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Local env / generated output
+.env.*
+!.env.example
 *.log
 coverage/
 .cache/
 tmp/
+
+# GSD baseline local identifiers
+.gsd-id
+.mcp.json
+.bg-shell/

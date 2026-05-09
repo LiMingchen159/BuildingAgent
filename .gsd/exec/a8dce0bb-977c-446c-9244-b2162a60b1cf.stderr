@@ -1,0 +1,4 @@
+  File "<stdin>", line 8
+    txt=p.read_text(errors='ignore')
+    ^
+IndentationError: expected an indented block after 'for' statement on line 7

@@ -1,0 +1,18 @@
+{
+  "id": "11b37109-ae5a-4037-adde-bc301aaa2649",
+  "runtime": "bash",
+  "purpose": "Verify preference/doc/gitignore issue-sync configuration after docs wording fix",
+  "script_chars": 1385,
+  "started_at": "2026-05-09T12:02:18.991Z",
+  "finished_at": "2026-05-09T12:02:19.141Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 150,
+  "stdout_bytes": 349,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/11b37109-ae5a-4037-adde-bc301aaa2649.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/11b37109-ae5a-4037-adde-bc301aaa2649.stderr"
+}

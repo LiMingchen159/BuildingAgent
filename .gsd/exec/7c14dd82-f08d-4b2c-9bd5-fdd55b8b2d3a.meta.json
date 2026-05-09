@@ -1,0 +1,18 @@
+{
+  "id": "7c14dd82-f08d-4b2c-9bd5-fdd55b8b2d3a",
+  "runtime": "bash",
+  "purpose": "red run project context tests after fixing test syntax",
+  "script_chars": 95,
+  "started_at": "2026-05-09T11:11:00.391Z",
+  "finished_at": "2026-05-09T11:11:11.102Z",
+  "exit_code": 2,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 10711,
+  "stdout_bytes": 1329,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/7c14dd82-f08d-4b2c-9bd5-fdd55b8b2d3a.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/7c14dd82-f08d-4b2c-9bd5-fdd55b8b2d3a.stderr"
+}

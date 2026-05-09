@@ -1,0 +1,18 @@
+{
+  "id": "70f038db-e8e4-4b58-92bb-f8ac2e29a4ad",
+  "runtime": "bash",
+  "purpose": "Verify preference/doc/gitignore issue-sync configuration",
+  "script_chars": 1385,
+  "started_at": "2026-05-09T12:01:30.411Z",
+  "finished_at": "2026-05-09T12:01:30.600Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 189,
+  "stdout_bytes": 57,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/70f038db-e8e4-4b58-92bb-f8ac2e29a4ad.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/70f038db-e8e4-4b58-92bb-f8ac2e29a4ad.stderr"
+}

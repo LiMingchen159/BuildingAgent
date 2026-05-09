@@ -1,0 +1,187 @@
+--- .gsd/milestones/M001/M001-ROADMAP.md ---
+# M001: Hermes-first BuildingAgent architecture plan
+## Success Criteria
+## Slices
+## Boundary Map
+## Boundary Map
+### S01 → S02
+### S02 → S03
+### S03 → S04
+### S04 → S05
+### S05 → downstream milestones
+--- .gsd/milestones/M001/M001-SUMMARY.md ---
+# M001: Hermes-first BuildingAgent architecture plan
+## What Happened
+## Success Criteria Results
+## Definition of Done Results
+## Requirement Outcomes
+## Deviations
+## Follow-ups
+--- .gsd/milestones/M001/M001-VALIDATION.md ---
+# Milestone Validation: M001
+## Success Criteria Checklist
+## Slice Delivery Audit
+## Cross-Slice Integration
+## Requirement Coverage
+## Verification Class Compliance
+## Verdict Rationale
+--- buildingagent/tools/building/bim_ifc_tools.py ---
+"""Future BIM/IFC tool placeholders for BuildingAgent.
+
+TODO:
+- Define placeholder metadata only after the tool registry skeleton exists.
+- Keep this module free of functional building-domain logic in M001.
+- Do not import heavy domain dependencies here.
+- Do not register real tools until a later implementation milestone.
+"""
+--- buildingagent/tools/building/brick_rdf_sparql_tools.py ---
+"""Future Brick/RDF/SPARQL tool placeholders for BuildingAgent.
+
+TODO:
+- Define placeholder metadata only after the tool registry skeleton exists.
+- Keep this module free of functional building-domain logic in M001.
+- Do not import heavy domain dependencies here.
+- Do not register real tools until a later implementation milestone.
+"""
+--- buildingagent/tools/building/cross_source_linking_tools.py ---
+"""Future cross-source linking tool placeholders for BuildingAgent.
+
+TODO:
+- Define placeholder metadata only after the tool registry skeleton exists.
+- Keep this module free of functional building-domain logic in M001.
+- Do not import heavy domain dependencies here.
+- Do not register real tools until a later implementation milestone.
+"""
+--- buildingagent/tools/building/timeseries_tools.py ---
+"""Future time-series tool placeholders for BuildingAgent.
+
+TODO:
+- Define placeholder metadata only after the tool registry skeleton exists.
+- Keep this module free of functional building-domain logic in M001.
+- Do not import heavy domain dependencies here.
+- Do not register real tools until a later implementation milestone.
+"""
+--- buildingagent/tools/building/visualization_tools.py ---
+"""Future visualization tool placeholders for BuildingAgent.
+
+TODO:
+- Define placeholder metadata only after the tool registry skeleton exists.
+- Keep this module free of functional building-domain logic in M001.
+- Do not import heavy domain dependencies here.
+- Do not register real tools until a later implementation milestone.
+"""
+--- docs/AUTH_ACCESS_CONTROL_SPEC.md ---
+# Authentication and Access Control Specification
+## Entities
+## RBAC MVP
+## Future ABAC
+## Code Permissions vs Data Permissions
+## Enforcement
+## Audit Logging
+--- docs/CLI_SPEC.md ---
+# CLI Specification
+## Authentication
+## Required Commands
+## Runtime Context
+--- docs/DEVELOPMENT_PLAN.md ---
+# Development Plan
+## M001 — Hermes-first Platform Planning Scaffold
+## M002 — Authenticated Foundation Skeleton
+## M003 — Permission-aware Runtime Integration
+## M004 — Gateway Adapter Specifications and Stubs
+## M005 — Building-domain Expansion Planning
+--- docs/EMAIL_GATEWAY_SPEC.md ---
+# Email Gateway Specification
+## Scope
+## Identity
+## Context Resolution
+## Routing
+## Security Constraints
+--- docs/ENTRYPOINTS_SPEC.md ---
+# Entrypoints Specification
+## Shared Rule
+## Web UI
+## CLI
+## Email Gateway
+## WhatsApp Gateway
+--- docs/HERMES_REPLICATION_STRATEGY.md ---
+# Hermes Replication Strategy
+## Reference
+## Replicate
+## Adapt
+## Defer
+## Replace or Extend with Building-Domain Logic
+## Copying Policy
+--- docs/LICENSE_ATTRIBUTION_PLAN.md ---
+# License Attribution Plan
+## Hermes Reference
+## Policy
+## Attribution Record
+--- docs/MEMORY_SPEC.md ---
+# Memory Specification
+## Memory Types
+## Search
+## Isolation
+## M001 Scope
+--- docs/MODEL_CONFIGURATION_SPEC.md ---
+# Model Configuration Specification
+## Provider Configuration
+## Web UI
+## CLI
+## Secrets
+--- docs/PRODUCT_ARCHITECTURE.md ---
+# Product Architecture
+## Overview
+## Architecture Diagram
+## Boundaries
+## M001 Architecture Output
+--- docs/PRODUCT_REQUIREMENTS.md ---
+# Product Requirements
+## Definition
+## Target Users
+## Core Use Cases
+## MVP Scope
+## Out of Scope for M001
+## Success Criteria
+--- docs/PROJECT_MODEL_SPEC.md ---
+# Project Model Specification
+## Model
+## Project Membership
+## Project-Scoped Resources
+## Isolation Requirement
+--- docs/RUNTIME_SPEC.md ---
+# Runtime Specification
+## Purpose
+## Core Components
+## Request Lifecycle
+## Future Support
+--- docs/SKILL_SYSTEM_SPEC.md ---
+# Skill System Specification
+## Skill Format
+## Components
+## Configuration
+## Building Skill Placeholders
+--- docs/TOOL_SYSTEM_SPEC.md ---
+# Tool System Specification
+## General Tool Contract
+## Risk Levels
+## Dispatcher Rule
+## General Tool Families
+## Building Tool Placeholders
+--- docs/WEB_UI_PLAN.md ---
+# Web UI Plan
+## Requirement
+## Candidate Stacks
+### assistant-ui
+### CopilotKit
+### AG-UI
+### Custom Next.js UI
+## MVP Recommendation
+## Required Pages
+--- docs/WHATSAPP_GATEWAY_SPEC.md ---
+# WhatsApp Gateway Specification
+## Scope
+## Identity
+## Context Resolution
+## Routing
+## Security Constraints

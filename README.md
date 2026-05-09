@@ -28,6 +28,7 @@ Start with:
 - `docs/PRODUCT_ARCHITECTURE.md`
 - `docs/HERMES_REPLICATION_STRATEGY.md`
 - `docs/DEVELOPMENT_PLAN.md`
+- `docs/GSD2_WORKFLOW.md`
 - `docs/ISSUE_BACKLOG.md`
 
 Supporting specs:

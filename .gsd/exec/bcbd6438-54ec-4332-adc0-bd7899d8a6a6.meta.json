@@ -1,0 +1,18 @@
+{
+  "id": "bcbd6438-54ec-4332-adc0-bd7899d8a6a6",
+  "runtime": "bash",
+  "purpose": "S01 observability request id and health smoke via documented contract",
+  "script_chars": 1636,
+  "started_at": "2026-05-09T11:27:03.091Z",
+  "finished_at": "2026-05-09T11:27:06.631Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 3540,
+  "stdout_bytes": 494,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/bcbd6438-54ec-4332-adc0-bd7899d8a6a6.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/bcbd6438-54ec-4332-adc0-bd7899d8a6a6.stderr"
+}

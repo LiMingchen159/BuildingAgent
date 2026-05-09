@@ -1,0 +1,11 @@
+PASS | 1 public health unauthenticated | status=200 body={'status': 'ok'} request_id=uat-health-001
+PASS | 2 missing credentials structured401 | status=401 code=auth_missing_credentials requestId=uat-auth-401 leak_safe=True
+PASS | 3 dev-login deterministic bearer token | status=200 token_type=bearer user=user_alice is_local_dev=True request_id=uat-login-001
+PASS | 4 authenticated auth/me metadata | status=200 user_id=user_alice email=alice@example.local display=Alice Developer is_local_dev=True request_id=uat-me-001
+PASS | 5 authenticated project list bounded/evolvable | status=200/200 first_project_id=project_hkust_demo items=2 limit1_items=1 pagination={'limit': 1, 'next_cursor': '1', 'has_more': True}
+PASS | 6 project context resolves user/workspace/project/role/scopes | status=200 context={'user_id': 'user_alice', 'workspace_id': 'workspace_demo', 'project_id': 'project_hkust_demo', 'role': 'owner', 'permission_scopes': ['project:read', 'project:write', 'chat:use', 'memory:read']} request_id=uat-context-001
+PASS | 7 malformed and invalid bearer headers fail safely | basic=401:auth_malformed_authorization unknown=401:auth_invalid_token leak_safe=True
+PASS | 8 unknown and inaccessible projects honest failures | inaccessible=project_uc_berkeley_demo unknown=404:project_not_found denied=403:project_access_denied
+PASS | 9 no-projects user returns empty list not error | status=200 body={'items': [], 'pagination': {'limit': 50, 'next_cursor': None, 'has_more': False}}
+PASS | pytest regression suite | exit=0; tail=['tests/test_api_auth_context.py .............                             [100%]', '', '============================== 26 passed in 3.58s ==============================']
+ALL_CHECKS_PASSED count=10

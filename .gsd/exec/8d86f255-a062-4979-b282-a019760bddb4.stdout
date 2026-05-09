@@ -1,0 +1,35 @@
+Tracked top-level files and dirs:
+- .gitignore
+- README.md
+- apps
+- buildingagent
+- docs
+- scripts
+- skills
+- tests
+- third_party_licenses
+
+API-related tracked files:
+apps/api/.gitkeep
+docs/.gitkeep
+docs/AUTH_ACCESS_CONTROL_SPEC.md
+docs/CLI_SPEC.md
+docs/DEVELOPMENT_PLAN.md
+docs/EMAIL_GATEWAY_SPEC.md
+docs/ENTRYPOINTS_SPEC.md
+docs/HERMES_REPLICATION_STRATEGY.md
+docs/LICENSE_ATTRIBUTION_PLAN.md
+docs/MEMORY_SPEC.md
+docs/MODEL_CONFIGURATION_SPEC.md
+docs/PRODUCT_ARCHITECTURE.md
+docs/PRODUCT_REQUIREMENTS.md
+docs/PROJECT_MODEL_SPEC.md
+docs/RUNTIME_SPEC.md
+docs/SKILL_SYSTEM_SPEC.md
+docs/TOOL_SYSTEM_SPEC.md
+docs/WEB_UI_PLAN.md
+docs/WHATSAPP_GATEWAY_SPEC.md
+tests/.gitkeep
+
+FastAPI/auth/context mentions:
+.gitignore:31:*.code-workspace

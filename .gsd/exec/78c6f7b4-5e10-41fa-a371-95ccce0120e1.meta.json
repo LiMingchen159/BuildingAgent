@@ -1,0 +1,18 @@
+{
+  "id": "78c6f7b4-5e10-41fa-a371-95ccce0120e1",
+  "runtime": "bash",
+  "purpose": "Summarize Hermes reference architecture signals for M001 docs",
+  "script_chars": 1140,
+  "started_at": "2026-05-09T10:09:05.481Z",
+  "finished_at": "2026-05-09T10:09:15.491Z",
+  "exit_code": null,
+  "signal": "SIGKILL",
+  "timed_out": true,
+  "duration_ms": 10010,
+  "stdout_bytes": 8180,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/78c6f7b4-5e10-41fa-a371-95ccce0120e1.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/78c6f7b4-5e10-41fa-a371-95ccce0120e1.stderr"
+}

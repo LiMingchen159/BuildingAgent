@@ -1,0 +1,20 @@
+Docs count: 17
+Required docs missing:
+Building placeholders:
+buildingagent/tools/building/.gitkeep
+buildingagent/tools/building/bim_ifc_tools.py
+buildingagent/tools/building/brick_rdf_sparql_tools.py
+buildingagent/tools/building/cross_source_linking_tools.py
+buildingagent/tools/building/timeseries_tools.py
+buildingagent/tools/building/visualization_tools.py
+Skill placeholders:
+skills/building/.gitkeep
+skills/building/bim_object_exploration.md
+skills/building/brick_sparql_query.md
+skills/building/cross_source_equipment_analysis.md
+skills/building/hhw_reset_analysis.md
+skills/building/timeseries_trend_analysis.md
+Forbidden heavy imports in building placeholders:
+none
+Potential implementation defs/classes in building placeholders:
+none

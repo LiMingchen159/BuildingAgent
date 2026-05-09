@@ -1,0 +1,317 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.4.2, pluggy-1.6.0
+rootdir: /mnt/d/Git_project/BuildingAgent
+configfile: pyproject.toml
+plugins: anyio-4.13.0
+collected 13 items
+
+tests/test_api_auth_context.py FFFFFFFFFFFFF                             [100%]
+
+=================================== FAILURES ===================================
+____________ test_dev_login_returns_seeded_token_and_user_metadata _____________
+
+    def test_dev_login_returns_seeded_token_and_user_metadata() -> None:
+        client = TestClient(create_app())
+    
+        response = client.post("/auth/dev-login", json={"user_id": "user_alice"})
+    
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:27: AssertionError
+___________________ test_auth_me_returns_current_seeded_user ___________________
+
+    def test_auth_me_returns_current_seeded_user() -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/auth/me", headers=auth_header())
+    
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:46: AssertionError
+__________ test_projects_are_bounded_and_include_pagination_metadata ___________
+
+    def test_projects_are_bounded_and_include_pagination_metadata() -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/projects?limit=1", headers=auth_header())
+    
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:62: AssertionError
+__________ test_project_context_returns_selected_project_context_only __________
+
+    def test_project_context_returns_selected_project_context_only() -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/projects/project_mtrc_elements/context", headers=auth_header())
+    
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:86: AssertionError
+_ test_auth_failures_return_structured_401[headers0-auth_missing_credentials] __
+
+headers = {}, code = 'auth_missing_credentials'
+
+    @pytest.mark.parametrize(
+        ("headers", "code"),
+        [
+            ({}, "auth_missing_credentials"),
+            ({"Authorization": "Basic dev-token-alice"}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer "}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer unknown-token"}, "auth_invalid_token"),
+        ],
+    )
+    def test_auth_failures_return_structured_401(headers: dict[str, str], code: str) -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/auth/me", headers=headers)
+    
+>       assert_structured_error(response, code=code, status_code=401)
+
+tests/test_api_auth_context.py:112: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'auth_missing_credentials'
+status_code = 401
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 401
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:14: AssertionError
+_ test_auth_failures_return_structured_401[headers1-auth_malformed_authorization] _
+
+headers = {'Authorization': 'Basic dev-token-alice'}
+code = 'auth_malformed_authorization'
+
+    @pytest.mark.parametrize(
+        ("headers", "code"),
+        [
+            ({}, "auth_missing_credentials"),
+            ({"Authorization": "Basic dev-token-alice"}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer "}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer unknown-token"}, "auth_invalid_token"),
+        ],
+    )
+    def test_auth_failures_return_structured_401(headers: dict[str, str], code: str) -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/auth/me", headers=headers)
+    
+>       assert_structured_error(response, code=code, status_code=401)
+
+tests/test_api_auth_context.py:112: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'auth_malformed_authorization'
+status_code = 401
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 401
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:14: AssertionError
+_ test_auth_failures_return_structured_401[headers2-auth_malformed_authorization] _
+
+headers = {'Authorization': 'Bearer '}, code = 'auth_malformed_authorization'
+
+    @pytest.mark.parametrize(
+        ("headers", "code"),
+        [
+            ({}, "auth_missing_credentials"),
+            ({"Authorization": "Basic dev-token-alice"}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer "}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer unknown-token"}, "auth_invalid_token"),
+        ],
+    )
+    def test_auth_failures_return_structured_401(headers: dict[str, str], code: str) -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/auth/me", headers=headers)
+    
+>       assert_structured_error(response, code=code, status_code=401)
+
+tests/test_api_auth_context.py:112: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'auth_malformed_authorization'
+status_code = 401
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 401
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:14: AssertionError
+____ test_auth_failures_return_structured_401[headers3-auth_invalid_token] _____
+
+headers = {'Authorization': 'Bearer unknown-token'}, code = 'auth_invalid_token'
+
+    @pytest.mark.parametrize(
+        ("headers", "code"),
+        [
+            ({}, "auth_missing_credentials"),
+            ({"Authorization": "Basic dev-token-alice"}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer "}, "auth_malformed_authorization"),
+            ({"Authorization": "Bearer unknown-token"}, "auth_invalid_token"),
+        ],
+    )
+    def test_auth_failures_return_structured_401(headers: dict[str, str], code: str) -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/auth/me", headers=headers)
+    
+>       assert_structured_error(response, code=code, status_code=401)
+
+tests/test_api_auth_context.py:112: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'auth_invalid_token'
+status_code = 401
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 401
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:14: AssertionError
+_______________ test_cross_project_denial_returns_structured_403 _______________
+
+    def test_cross_project_denial_returns_structured_403() -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/projects/project_uc_berkeley_demo/context", headers=auth_header())
+    
+>       assert_structured_error(response, code="project_access_denied", status_code=403)
+
+tests/test_api_auth_context.py:121: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'project_access_denied'
+status_code = 403
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 403
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:14: AssertionError
+_________________ test_unknown_project_returns_structured_404 __________________
+
+    def test_unknown_project_returns_structured_404() -> None:
+        client = TestClient(create_app())
+    
+        response = client.get("/projects/project_missing/context", headers=auth_header())
+    
+>       assert_structured_error(response, code="project_not_found", status_code=404)
+
+tests/test_api_auth_context.py:130: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'project_not_found'
+status_code = 404
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+        assert response.status_code == status_code
+        body = response.json()
+>       assert body["error"]["code"] == code
+               ^^^^^^^^^^^^^
+E       KeyError: 'error'
+
+tests/test_api_auth_context.py:16: KeyError
+____________ test_projects_reject_invalid_limits_with_honest_4xx[0] ____________
+
+limit = 0
+
+    @pytest.mark.parametrize("limit", [0, 101])
+    def test_projects_reject_invalid_limits_with_honest_4xx(limit: int) -> None:
+        client = TestClient(create_app())
+    
+        response = client.get(f"/projects?limit={limit}", headers=auth_header())
+    
+>       assert_structured_error(response, code="invalid_project_limit", status_code=422)
+
+tests/test_api_auth_context.py:139: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'invalid_project_limit'
+status_code = 422
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 422
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:14: AssertionError
+___________ test_projects_reject_invalid_limits_with_honest_4xx[101] ___________
+
+limit = 101
+
+    @pytest.mark.parametrize("limit", [0, 101])
+    def test_projects_reject_invalid_limits_with_honest_4xx(limit: int) -> None:
+        client = TestClient(create_app())
+    
+        response = client.get(f"/projects?limit={limit}", headers=auth_header())
+    
+>       assert_structured_error(response, code="invalid_project_limit", status_code=422)
+
+tests/test_api_auth_context.py:139: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'invalid_project_limit'
+status_code = 422
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 422
+E        +  where 404 = <Response [404 Not Found]>.status_code
+
+tests/test_api_auth_context.py:14: AssertionError
+______________ test_dev_login_unknown_user_returns_structured_404 ______________
+
+    def test_dev_login_unknown_user_returns_structured_404() -> None:
+        client = TestClient(create_app())
+    
+        response = client.post("/auth/dev-login", json={"user_id": "user_missing"})
+    
+>       assert_structured_error(response, code="dev_login_user_not_found", status_code=404)
+
+tests/test_api_auth_context.py:147: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <Response [404 Not Found]>, code = 'dev_login_user_not_found'
+status_code = 404
+
+    def assert_structured_error(response, code: str, status_code: int) -> None:
+        assert response.status_code == status_code
+        body = response.json()
+>       assert body["error"]["code"] == code
+               ^^^^^^^^^^^^^
+E       KeyError: 'error'
+
+tests/test_api_auth_context.py:16: KeyError
+=========================== short test summary info ============================
+FAILED tests/test_api_auth_context.py::test_dev_login_returns_seeded_token_and_user_metadata
+FAILED tests/test_api_auth_context.py::test_auth_me_returns_current_seeded_user
+FAILED tests/test_api_auth_context.py::test_projects_are_bounded_and_include_pagination_metadata
+FAILED tests/test_api_auth_context.py::test_project_context_returns_selected_project_context_only
+FAILED tests/test_api_auth_context.py::test_auth_failures_return_structured_401[headers0-auth_missing_credentials]
+FAILED tests/test_api_auth_context.py::test_auth_failures_return_structured_401[headers1-auth_malformed_authorization]
+FAILED tests/test_api_auth_context.py::test_auth_failures_return_structured_401[headers2-auth_malformed_authorization]
+FAILED tests/test_api_auth_context.py::test_auth_failures_return_structured_401[headers3-auth_invalid_token]
+FAILED tests/test_api_auth_context.py::test_cross_project_denial_returns_structured_403
+FAILED tests/test_api_auth_context.py::test_unknown_project_returns_structured_404
+FAILED tests/test_api_auth_context.py::test_projects_reject_invalid_limits_with_honest_4xx[0]
+FAILED tests/test_api_auth_context.py::test_projects_reject_invalid_limits_with_honest_4xx[101]
+FAILED tests/test_api_auth_context.py::test_dev_login_unknown_user_returns_structured_404
+============================== 13 failed in 5.51s ==============================

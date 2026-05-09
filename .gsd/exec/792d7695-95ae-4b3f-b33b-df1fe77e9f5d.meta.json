@@ -1,0 +1,18 @@
+{
+  "id": "792d7695-95ae-4b3f-b33b-df1fe77e9f5d",
+  "runtime": "bash",
+  "purpose": "run api foundation tests with uv test extra",
+  "script_chars": 65,
+  "started_at": "2026-05-09T11:04:52.539Z",
+  "finished_at": "2026-05-09T11:05:19.956Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 27417,
+  "stdout_bytes": 414,
+  "stderr_bytes": 408,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/792d7695-95ae-4b3f-b33b-df1fe77e9f5d.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/792d7695-95ae-4b3f-b33b-df1fe77e9f5d.stderr"
+}

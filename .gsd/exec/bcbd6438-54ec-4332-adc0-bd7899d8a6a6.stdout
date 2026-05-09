@@ -1,0 +1,5 @@
+health 200 uat-health-001 {'status': 'ok'}
+unauth 401 uat-auth-401 {'error': {'code': 'auth_missing_credentials', 'message': 'Authorization credentials are required.', 'details': {'scheme': 'Bearer'}, 'requestId': 'uat-auth-401'}}
+login 200 uat-login-001 ['access_token', 'token_type', 'user']
+projects 200 uat-projects-001 2 {'limit': 50, 'next_cursor': None, 'has_more': False}
+context 200 uat-context-001 project_hkust_demo owner ['project:read', 'project:write', 'chat:use', 'memory:read']

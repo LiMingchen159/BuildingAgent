@@ -1,0 +1,18 @@
+{
+  "id": "f6f0e776-95d0-4b35-b32d-0f212617a7c3",
+  "runtime": "bash",
+  "purpose": "M002 research: check package manifests in Hermes and BuildingAgent",
+  "script_chars": 888,
+  "started_at": "2026-05-09T10:18:01.673Z",
+  "finished_at": "2026-05-09T10:18:02.321Z",
+  "exit_code": 127,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 648,
+  "stdout_bytes": 688,
+  "stderr_bytes": 40,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/f6f0e776-95d0-4b35-b32d-0f212617a7c3.stdout",
+  "stderr_path": "/mnt/d/Git_project/BuildingAgent/.gsd/exec/f6f0e776-95d0-4b35-b32d-0f212617a7c3.stderr"
+}
