@@ -30,6 +30,8 @@ custom_instructions:
   - "Every commit must reference an issue or backlog item."
   - "Use refs #N for partial progress and closes #N only when completed and validated."
   - "Do not make feature or bug-fix commits without issue/backlog traceability unless it is an emergency WIP checkpoint."
+  - "When planning tasks, any file that will be newly created by a task must be declared as an expected output of that same task; do not reference non-existing files only as inputs."
+  - "For trivial scaffold/index/placeholder files clearly within the current milestone scope, self-heal by creating the placeholder and updating the plan instead of pausing; never self-heal secrets, production configs, customer data, dependency artifacts, or real building-domain implementation files."
 
 pre_dispatch_hooks:
   - name: issue-traceability-before-task

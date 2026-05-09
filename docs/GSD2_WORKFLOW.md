@@ -22,6 +22,12 @@ Every commit must reference a GitHub Issue or fallback backlog item. Commits mus
 
 Do not make feature or bug-fix commits without issue or backlog traceability unless it is an emergency WIP checkpoint.
 
+## Planning File Dependency Hygiene
+
+When planning tasks, any file that will be newly created by a task must be declared as an expected output of that same task. Do not reference non-existing files only as inputs; this breaks pre-execution dependency analysis and stalls auto-mode.
+
+For trivial scaffold, index, or placeholder files that are clearly within the current milestone scope, self-heal by creating the placeholder and updating the plan instead of pausing. Do not self-heal by creating secrets, production configuration, customer data, dependency artifacts, or real building-domain implementation files.
+
 ## Fallback Backlog
 
 `docs/ISSUE_BACKLOG.md` is only a fallback when GitHub issue creation fails or is unavailable. Prefer GitHub Issues whenever the GitHub CLI is available and authenticated.
