@@ -2,22 +2,15 @@
   "schemaVersion": 1,
   "milestoneId": "M002",
   "sliceId": "S02",
-  "timestamp": 1778330551992,
+  "timestamp": 1778333643313,
   "status": "fail",
-  "durationMs": 94,
+  "durationMs": 77,
   "checks": [
     {
       "category": "file",
-      "target": "`buildingagent/models/providers.py`",
+      "target": "tests/test_runtime_registry_services.py",
       "passed": false,
-      "message": "Task T03 references '`buildingagent/models/providers.py`' which doesn't exist and isn't created by prior or same-task outputs",
-      "blocking": true
-    },
-    {
-      "category": "file",
-      "target": "`buildingagent/memory/service.py`",
-      "passed": false,
-      "message": "Task T03 references '`buildingagent/memory/service.py`' which doesn't exist and isn't created by prior or same-task outputs",
+      "message": "Task T03 references 'tests/test_runtime_registry_services.py' which doesn't exist and isn't created by prior or same-task outputs",
       "blocking": true
     }
   ]

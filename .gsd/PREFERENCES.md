@@ -33,6 +33,11 @@ custom_instructions:
   - "When planning tasks, any file that will be newly created by a task must be declared as an expected output of that same task; do not reference non-existing files only as inputs."
   - "For trivial scaffold/index/placeholder files clearly within the current milestone scope, self-heal by creating the placeholder and updating the plan instead of pausing; never self-heal secrets, production configs, customer data, dependency artifacts, or real building-domain implementation files."
 
+verification_commands:
+  - .venv/bin/python -m pytest
+verification_auto_fix: true
+verification_max_retries: 2
+
 pre_dispatch_hooks:
   - name: issue-traceability-before-task
     before: [execute-task]
