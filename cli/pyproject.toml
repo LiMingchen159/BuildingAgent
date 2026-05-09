@@ -1,0 +1,16 @@
+[build-system]
+requires = []
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buildingagent-cli"
+version = "0.1.0"
+description = "Local BuildingAgent authenticated project chat CLI"
+requires-python = ">=3.10"
+
+[project.scripts]
+buildingagent = "buildingagent_cli.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+packages = ["buildingagent_cli"]
