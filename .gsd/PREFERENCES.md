@@ -22,10 +22,6 @@ git:
 github:
   enabled: true
   repo: "LiMingchen159/BuildingAgent"
-  labels:
-    - gsd
-    - buildingagent
-    - auto-generated
 
 custom_instructions:
   - "Every meaningful enhancement, bug fix, refactor, test addition, documentation change, or implementation slice must be tracked by a GitHub Issue when possible."

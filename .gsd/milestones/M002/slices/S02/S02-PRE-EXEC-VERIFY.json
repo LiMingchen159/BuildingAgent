@@ -2,15 +2,22 @@
   "schemaVersion": 1,
   "milestoneId": "M002",
   "sliceId": "S02",
-  "timestamp": 1778329199536,
+  "timestamp": 1778330551992,
   "status": "fail",
-  "durationMs": 58,
+  "durationMs": 94,
   "checks": [
     {
       "category": "file",
-      "target": "`skills/building/README.md`",
+      "target": "`buildingagent/models/providers.py`",
       "passed": false,
-      "message": "Task T01 references '`skills/building/README.md`' which doesn't exist and isn't created by prior or same-task outputs",
+      "message": "Task T03 references '`buildingagent/models/providers.py`' which doesn't exist and isn't created by prior or same-task outputs",
+      "blocking": true
+    },
+    {
+      "category": "file",
+      "target": "`buildingagent/memory/service.py`",
+      "passed": false,
+      "message": "Task T03 references '`buildingagent/memory/service.py`' which doesn't exist and isn't created by prior or same-task outputs",
       "blocking": true
     }
   ]
