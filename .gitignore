@@ -1,4 +1,3 @@
-
 # ── GSD baseline (auto-generated) ──
 .gsd
 .gsd-id
@@ -12,20 +11,48 @@ Thumbs.db
 .idea/
 .vscode/
 *.code-workspace
+
+# Local environment and secrets
 .env
 .env.*
 !.env.example
-node_modules/
-.next/
-dist/
-build/
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
 .venv/
 venv/
-target/
-vendor/
+env/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+build/
+web/node_modules/
+web/.next/
+web/out/
+
+# BuildingAgent local runtime state
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+buildingagent-session.json
+session.json
+session.json.tmp
+
+# Logs and scratch output
 *.log
-coverage/
+logs/
 .cache/
 tmp/
+temp/
