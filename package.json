@@ -9,9 +9,11 @@
   ],
   "scripts": {
     "dev": "npm --workspace @building-agent/api run dev",
-    "build": "npm --workspace @building-agent/api run build",
-    "test": "node scripts/run-api-tests.cjs",
-    "typecheck": "npm --workspace @building-agent/api run typecheck"
+    "dev:api": "npm --workspace @building-agent/api run dev",
+    "dev:web": "npm --workspace @building-agent/web run dev",
+    "build": "npm --workspaces --if-present run build",
+    "test": "node scripts/run-tests.cjs",
+    "typecheck": "npm --workspaces --if-present run typecheck"
   },
   "engines": {
     "node": ">=20.0.0"
