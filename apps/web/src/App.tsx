@@ -92,7 +92,8 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
       <p className="eyebrow">Local seeded access</p>
       <h1 id="login-title">Sign in to BuildingAgent</h1>
       <p className="muted">Use the development credentials from the README. Anonymous access is intentionally disabled.</p>
-      <form className="stack" onSubmit={handleSubmit}>
+      {busy ? <p className="inline-status" role="status">Signing in with the local API session boundary…</p> : null}
+      <form className="stack" onSubmit={handleSubmit} aria-busy={busy}>
         <label>
           Email
           <input autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} />
@@ -102,7 +103,7 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
           <input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} />
         </label>
         {validation ? <p className="field-error" role="alert">{validation}</p> : null}
-        <button type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+        <button type="submit" disabled={busy} aria-busy={busy}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
     </main>
   );
@@ -114,20 +115,37 @@ function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[
       <p className="eyebrow">Project boundary</p>
       <h1 id="projects-title">Choose an authorized project</h1>
       <p className="muted">Only projects returned by the API for this seeded session are selectable.</p>
-      <div className="project-grid">
+      {busy ? <p className="inline-status" role="status">Selecting project and loading placeholder workspace surfaces…</p> : null}
+      {projects.length === 0 ? <EmptyState title="No authorized projects">This session did not return any selectable project records.</EmptyState> : null}
+      <div className="project-grid" aria-busy={busy}>
         {projects.map((project) => (
-          <article className="project-card" key={project.id}>
+          <Card className="project-card" key={project.id}>
             <div>
               <h2>{project.name}</h2>
               <p>{project.id}</p>
               <p className="permissions">{project.permissions.join(" · ") || "No chat permissions"}</p>
             </div>
-            <button type="button" onClick={() => void onSelect(project)} disabled={busy}>
-              Select project
+            <button type="button" onClick={() => void onSelect(project)} disabled={busy} aria-busy={busy}>
+              {busy ? "Selecting…" : "Select project"}
             </button>
-          </article>
+          </Card>
         ))}
       </div>
+    </main>
+  );
+}
+
+function BootstrapLoading() {
+  return (
+    <main className="workspace-card bootstrap-card" aria-labelledby="bootstrap-title">
+      <div>
+        <p className="eyebrow">BuildingAgent startup</p>
+        <h1 id="bootstrap-title">Restoring your saved session</h1>
+        <p className="muted">Checking the local API session and authorized project list before showing any workspace data.</p>
+      </div>
+      <LoadingSkeleton label="Checking your saved BuildingAgent session…" lines={5} />
+      <p className="inline-status" role="status" aria-label="Saved-session bootstrap phase">Safe phase: saved-session bootstrap is in progress. No live building systems, repositories, or control routes are being contacted.</p>
+      <MockOnlyBadge kind="stub" label="Startup shell only" />
     </main>
   );
 }
@@ -220,7 +238,7 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
       <form className="composer" onSubmit={handleSubmit}>
         <label htmlFor="chat-message">Message</label>
         <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project…" : "This project is read-only for your account."} />
-        <button type="submit" disabled={!canWrite || busy || !draft.trim()}>{busy ? "Sending…" : "Send message"}</button>
+        <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending…" : "Send message"}</button>
       </form>
       {!canWrite ? <p className="field-error" role="status">This project does not grant chat write permission.</p> : null}
     </section>
@@ -516,7 +534,7 @@ export default function App() {
   return (
     <AppShell authenticated={authenticated} onSignOut={() => clearAuth()}>
       {banner ? <Banner {...banner} /> : null}
-      {bootstrapping ? <main className="workspace-card"><LoadingSkeleton label="Checking your saved session…" /><p>Checking your saved session…</p></main> : null}
+      {bootstrapping ? <BootstrapLoading /> : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
       {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}

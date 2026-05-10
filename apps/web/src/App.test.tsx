@@ -12,35 +12,35 @@ const runtimeProvider = {
   kind: "llm",
   status: "placeholder",
   description: "Synthetic local runtime provider slot."
-};
+} as const;
 const registryTool = {
   id: "tool_space_summary",
   name: "Space Summary Tool Placeholder",
   category: "building",
   status: "placeholder",
   description: "Synthetic tool definition."
-};
+} as const;
 const registrySkill = {
   id: "skill_building_triage",
   name: "Building Triage Skill Placeholder",
   domain: "building",
   status: "placeholder",
   description: "Synthetic skill card."
-};
+} as const;
 const gateway = {
   id: "gateway_bms_placeholder",
   name: "BMS Gateway Placeholder",
   protocol: "http",
   status: "not_configured",
   description: "Synthetic building-management gateway."
-};
+} as const;
 const capability = {
   id: "capability_energy_baseline",
   name: "Energy Baseline Placeholder",
   domain: "energy",
   status: "mock",
   description: "Synthetic energy baseline capability."
-};
+} as const;
 
 function registryBody(overrides: Record<string, unknown> = {}) {
   return {
@@ -84,6 +84,14 @@ function installFetch(handler: (url: string, init?: RequestInit) => Response | P
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => handler(String(input), init));
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function deferredResponse() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[] } = {}) {
@@ -142,6 +150,31 @@ afterEach(() => {
 });
 
 describe("BuildingAgent Web flow", () => {
+  it("shows a branded bounded skeleton while restoring a saved session", async () => {
+    window.localStorage.setItem("building-agent.session.v1", JSON.stringify({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, projectId: null }));
+    const session = deferredResponse();
+    installFetch((url) => {
+      if (url === "/api/session") {
+        return session.promise;
+      }
+      if (url === "/api/projects") {
+        return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: /restoring your saved session/i })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /checking your saved buildingagent session/i })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toHaveTextContent(/safe phase: saved-session bootstrap/i);
+    expect(screen.getByText(/startup shell only/i)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada/i);
+
+    session.resolve(jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }));
+    expect(await screen.findByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+  });
+
   it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
     const fetchMock = installBaseFetch();
 
@@ -162,6 +195,8 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.getByText("Building Triage Skill Placeholder")).toBeInTheDocument();
     expect(screen.getByText(/request: req_registry/i)).toBeInTheDocument();
     expect(screen.getAllByText(/placeholder-only/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/inspection surfaces are placeholder-only/i)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/live building operation|repository action|control route/i);
 
     await user.click(screen.getByRole("button", { name: /gateways/i }));
     expect(screen.getAllByText("BMS Gateway Placeholder").length).toBeGreaterThan(0);
@@ -213,6 +248,7 @@ describe("BuildingAgent Web flow", () => {
 
     expect(await screen.findByRole("heading", { name: /sign in to buildingagent/i })).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("auth_invalid");
+    expect(screen.getByRole("alert")).toHaveTextContent("req_bad_session");
     expect(window.localStorage.getItem("building-agent.session.v1")).toBeNull();
     expect(screen.queryByRole("heading", { name: /workspace/i })).not.toBeInTheDocument();
   });
