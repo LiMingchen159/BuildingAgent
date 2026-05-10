@@ -56,3 +56,8 @@ logs/
 .cache/
 tmp/
 temp/
+
+# ── GSD baseline (auto-generated) ──
+*.pyc
+target/
+vendor/
