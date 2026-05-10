@@ -16,7 +16,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
 
 function assertNoSecrets(value: unknown) {
   const serialized = JSON.stringify(value).toLowerCase();
-  for (const forbidden of ["sk-test-secret", "bearer", "authorization", "api_key", "apikey", "password"]) {
+  for (const forbidden of ["provider-test-key", "bearer", "authorization", "api_key", "apikey", "password"]) {
     expect(serialized).not.toContain(forbidden);
   }
 }
@@ -44,10 +44,43 @@ describe("chat provider resolution and adapters", () => {
     });
   });
 
+  it("prefers BUILDING_AGENT_LLM_* configuration while keeping mock explicit", async () => {
+    const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = [];
+    const provider = resolveChatProvider(
+      {
+        BUILDING_AGENT_LLM_PROVIDER: "openai-compatible",
+        BUILDING_AGENT_LLM_API_KEY: "provider-test-key",
+        BUILDING_AGENT_LLM_BASE_URL: "https://provider.example/v1",
+        BUILDING_AGENT_LLM_MODEL: "model-from-env",
+        OPENAI_MODEL: "legacy-model"
+      },
+      {
+        fetch: async (input, init) => {
+          calls.push(init === undefined ? { input } : { input, init });
+          return jsonResponse({ choices: [{ message: { content: " Env provider answer " } }] });
+        }
+      }
+    );
+
+    const result = await provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_test",
+      messages: [{ role: "user", content: "Hello" }]
+    });
+
+    expect(String(calls[0]?.input)).toBe("https://provider.example/v1/chat/completions");
+    expect(JSON.parse(String(calls[0]?.init?.body)).model).toBe("model-from-env");
+    expect(result.provider).toEqual({ id: "openai-compatible", mode: "real", model: "model-from-env", status: "configured" });
+
+    const mock = resolveChatProvider({ BUILDING_AGENT_LLM_PROVIDER: "mock", BUILDING_AGENT_LLM_API_KEY: "provider-test-key" });
+    expect(mock.metadata).toMatchObject({ id: "deterministic-mock", mode: "mock", fallbackReason: "local_default" });
+  });
+
   it("prefers a configured OpenAI-compatible provider and sends only chat messages to fetch", async () => {
     const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = [];
     const provider = createOpenAICompatibleProvider({
-      apiKey: "sk-test-secret",
+      apiKey: "provider-test-key",
       baseUrl: "https://provider.example/v1/",
       model: "model-a",
       fetch: async (input, init) => {
@@ -78,7 +111,7 @@ describe("chat provider resolution and adapters", () => {
 
   it("normalizes HTTP and malformed response failures without exposing provider secrets", async () => {
     const httpProvider = createOpenAICompatibleProvider({
-      apiKey: "sk-test-secret",
+      apiKey: "provider-test-key",
       fetch: async () => jsonResponse({ error: { message: "nope" } }, { status: 429 })
     });
 
@@ -105,7 +138,7 @@ describe("chat provider resolution and adapters", () => {
     }
 
     const malformedProvider = createOpenAICompatibleProvider({
-      apiKey: "sk-test-secret",
+      apiKey: "provider-test-key",
       fetch: async () => jsonResponse({ choices: [{ message: { content: "   " } }] })
     });
     await expect(

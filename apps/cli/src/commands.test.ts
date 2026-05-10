@@ -162,7 +162,7 @@ describe("authenticated cli commands", () => {
           mode: "mock",
           model: "deterministic-local-mock",
           fallbackUsed: true,
-          apiKey: "sk-should-not-print"
+          apiKey: "provider-secret-should-not-print"
         },
         fallbackUsed: true,
         requestId: "req_bad"
@@ -173,7 +173,7 @@ describe("authenticated cli commands", () => {
       exitCode: 1
     });
     expect(parseError(malformedIo).error).toMatchObject({ code: "api_malformed" });
-    expect(malformedIo.stderrText()).not.toMatch(/sk-should-not-print|seed-token-ada|Bearer\s+[A-Za-z0-9._-]+|local-dev-password/u);
+    expect(malformedIo.stderrText()).not.toMatch(/provider-secret-should-not-print|seed-token-ada|Bearer\s+[A-Za-z0-9._-]+|local-dev-password/u);
 
     const providerErrorIo = createIo();
     const providerErrorResponse = new Response(

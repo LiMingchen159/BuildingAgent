@@ -110,7 +110,7 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
       return jsonResponse({
         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
         assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "Mock assistant response for project_alpha: What should we build first?" },
-        provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "sk-should-not-render" },
+        provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
         fallbackUsed: true,
         requestId: "req_post"
       }, 201);
@@ -186,7 +186,7 @@ describe("BuildingAgent Web flow", () => {
     expect(diagnostics).toHaveTextContent("Fallback: yes");
     expect(diagnostics).toHaveTextContent("Reason: local_default");
     expect(diagnostics).toHaveTextContent("Request: req_post");
-    expect(diagnostics).not.toHaveTextContent(/sk-should-not-render|apiKey/i);
+    expect(diagnostics).not.toHaveTextContent(/provider-secret-should-not-render|apiKey/i);
     const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "POST");
     expect(chatPostCall).toBeTruthy();
     expect(chatPostCall?.[1]).toMatchObject({
@@ -499,7 +499,7 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/chat" && init?.method === "POST") {
         return jsonResponse({
           message: { id: "msg_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "metadata please" },
-          provider: { id: "deterministic-mock", mode: "mock", model: 123, fallbackUsed: true, apiKey: "sk-should-not-render" },
+          provider: { id: "deterministic-mock", mode: "mock", model: 123, fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
           fallbackUsed: true,
           requestId: "req_bad_provider"
         }, 201);
@@ -521,7 +521,7 @@ describe("BuildingAgent Web flow", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("api_malformed");
-    expect(alert).not.toHaveTextContent(/sk-should-not-render|apiKey/i);
+    expect(alert).not.toHaveTextContent(/provider-secret-should-not-render|apiKey/i);
     expect(screen.queryByText("metadata please")).not.toBeInTheDocument();
   });
 
