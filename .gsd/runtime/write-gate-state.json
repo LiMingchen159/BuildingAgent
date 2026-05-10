@@ -1,0 +1,9 @@
+{
+  "verifiedDepthMilestones": [],
+  "verifiedApprovalGates": [
+    "depth_verification_project_confirm",
+    "depth_verification_requirements_confirm"
+  ],
+  "activeQueuePhase": false,
+  "pendingGateId": null
+}
