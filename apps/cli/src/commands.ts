@@ -7,6 +7,7 @@ import {
   redactConfig,
   saveConfig
 } from "./config.js";
+import { parseProjectManagementResponse, parseRegistryResponse } from "./registry.js";
 
 const DEFAULT_API_URL = "http://127.0.0.1:3000";
 
@@ -125,14 +126,14 @@ async function execute(command: string, args: string[], options: CommandOptions)
 
   if (command === "registry") {
     const config = await requireApiAuth(command, options);
-    const response = await clientFromConfig(config, options).registry();
+    const response = parseRegistryResponse(await clientFromConfig(config, options).registry());
     await saveConfig({ ...config, lastCommand: command }, options);
     return response;
   }
 
   if (command === "management") {
     const config = await requireSelectedProject(command, options);
-    const response = await clientFromConfig(config, options).management(config.selectedProjectId);
+    const response = parseProjectManagementResponse(await clientFromConfig(config, options).management(config.selectedProjectId));
     await saveConfig({ ...config, lastCommand: command }, options);
     return response;
   }
@@ -249,7 +250,27 @@ function serializeError(error: unknown): { error: { code: string; message: strin
   if (error instanceof ApiClientError || error instanceof CliCommandError) {
     return error.toJSON();
   }
+  if (error instanceof Error && "toJSON" in error && typeof error.toJSON === "function") {
+    const serialized = error.toJSON() as unknown;
+    if (isSerializedError(serialized)) {
+      return serialized;
+    }
+  }
   return { error: { code: "cli_error", message: error instanceof Error ? error.message : "Unknown CLI error" } };
+}
+
+function isSerializedError(value: unknown): value is { error: { code: string; message: string } } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "error" in value &&
+    value.error !== null &&
+    typeof value.error === "object" &&
+    "code" in value.error &&
+    typeof value.error.code === "string" &&
+    "message" in value.error &&
+    typeof value.error.message === "string"
+  );
 }
 
 function printJson(stream: Pick<NodeJS.WriteStream, "write">, value: unknown): void {
