@@ -1,0 +1,4 @@
+command=test -f .gsd/milestones/M001/M001-VALIDATION.md && rg -n "validated|skeleton-only|deferred|out of scope|R001|R005|R006|R007|R013|R014" .gsd/milestones/M001/M001-VALIDATION.md
+exit_code=0
+duration_ms=54
+matches=9

@@ -1,0 +1,36 @@
+base_branch=buildingagent
+merge_base=2019d50c79b7dd60b03355d7d0954aa6702f2fe1
+branch_non_gsd_count=0
+branch_non_gsd_sample:
+
+milestone_commit_non_gsd_present=yes
+milestone_commit_sample:
+50c310ceba8ddcc954fe503a94f3b8d3efed4d80 feat: Wired provider-backed chat through the API with deterministic fal…
+Figure/BGPT.png
+apps/api/src/chat.test.ts
+apps/api/src/providers.test.ts
+apps/api/src/providers.ts
+apps/api/src/seed.ts
+apps/api/src/server.ts
+apps/web/src/App.test.tsx
+apps/web/src/api.ts
+7139db95c1197d170f9ff8b8901e7daa7d240f08 test: Added authenticated placeholder registry and project management A…
+apps/api/src/registry.test.ts
+apps/api/src/seed.ts
+apps/api/src/server.ts
+package-lock.json
+6e3350ede7135b722d3a8f30655c9683854534b5 feat: Implemented the tested Fastify auth, project permission, and proj…
+apps/api/package.json
+apps/api/src/auth.test.ts
+apps/api/src/auth.ts
+apps/api/src/chat.test.ts
+apps/api/src/index.ts
+apps/api/src/seed.ts
+apps/api/src/server.ts
+apps/api/tsconfig.json
+apps/web/package.json
+package-lock.json
+package.json
+scripts/run-api-tests.cjs
+tsconfig.base.json
+missing_artifacts:

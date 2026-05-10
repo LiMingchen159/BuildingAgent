@@ -1,0 +1,18 @@
+{
+  "id": "bfa4e964-953a-4b71-bcab-6493064fbbf0",
+  "runtime": "bash",
+  "purpose": "Verify M001 implementation evidence and artifact presence without noisy output",
+  "script_chars": 2073,
+  "started_at": "2026-05-10T16:42:43.359Z",
+  "finished_at": "2026-05-10T16:42:46.924Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 3565,
+  "stdout_bytes": 1117,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/bfa4e964-953a-4b71-bcab-6493064fbbf0.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/bfa4e964-953a-4b71-bcab-6493064fbbf0.stderr"
+}

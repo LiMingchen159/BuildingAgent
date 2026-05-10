@@ -29,7 +29,7 @@ Consumes the existing M001 slice summaries, current requirements/decision record
   - Files: ``.gsd/REQUIREMENTS.md``, ``.gsd/PROJECT.md``, ``.gsd/DECISIONS.md``
   - Verify: `rg -n "R001|R005|R006|R007" .gsd/REQUIREMENTS.md && rg -n "skeleton|placeholder|deferred|out of scope" .gsd/REQUIREMENTS.md .gsd/PROJECT.md` returns matches; `test -f .gsd/REQUIREMENTS.md && test -f .gsd/PROJECT.md` succeeds.
 
-- [ ] **T02: Publish milestone validation and coverage matrix** `est:1h`
+- [x] **T02: Publish milestone validation and coverage matrix** `est:1h`
   Publish the M001 validation artifact with a coverage matrix that separates validated requirements, skeleton-only surfaces, and intentionally deferred boundaries.
   - Files: ``.gsd/milestones/M001/VALIDATION.md``, ``.gsd/milestones/M001/M001-ROADMAP.md``
   - Verify: `test -f .gsd/milestones/M001/VALIDATION.md && rg -n "validated|skeleton-only|deferred|out of scope|R001|R005|R006|R007|R013|R014" .gsd/milestones/M001/VALIDATION.md` succeeds.

@@ -1,0 +1,76 @@
+[M001 operational] smoke check
+
+> building-agent@0.1.0 smoke
+> node scripts/smoke-local.cjs
+
+[smoke] temp CLI home /tmp/building-agent-cli-smoke-7qGDMX
+[smoke] build workspaces
+[smoke] run npm run build
+[smoke] npm run build exit code=0 signal=null
+[smoke] api not reachable yet: {"ok":false,"label":"api","error":"fetch failed"}
+[smoke] starting api
+[smoke:api:stdout] > building-agent@0.1.0 dev:api
+[smoke:api:stdout] > npm --workspace @building-agent/api run dev
+[smoke:api:stdout] > @building-agent/api@0.1.0 dev
+[smoke:api:stdout] > tsx watch src/index.ts
+[smoke] api probe ok status=200 requestId=req_000001
+[smoke] web not reachable yet: {"ok":false,"label":"web","error":"fetch failed"}
+[smoke] starting web
+[smoke:web:stdout] > @building-agent/web@0.1.0 dev
+[smoke:web:stdout] > vite --host 127.0.0.1 --port 5174
+[smoke:web:stdout]   VITE v5.4.21  ready in 822 ms
+[smoke:web:stdout]   ➜  Local:   http://127.0.0.1:5174/
+[smoke] web probe ok status=200 requestId=req_000039
+[smoke] cli login and project flow
+[smoke] run cli login
+[smoke] cli login exit code=0 signal=null
+[smoke] cli login ok requestId=req_000002
+[smoke] run cli session
+[smoke] cli session exit code=0 signal=null
+[smoke] cli session ok requestId=req_000003
+[smoke] run cli projects
+[smoke] cli projects exit code=0 signal=null
+[smoke] cli projects ok requestId=req_000004
+[smoke] run cli use
+[smoke] cli use exit code=0 signal=null
+[smoke] cli use ok requestId=req_000005
+[smoke] run cli registry
+[smoke] cli registry exit code=0 signal=null
+[smoke] cli registry ok requestId=req_000006
+[smoke] run cli management
+[smoke] cli management exit code=0 signal=null
+[smoke] cli management ok requestId=req_000007
+[smoke] run cli chat
+[smoke] cli chat exit code=0 signal=null
+[smoke] cli chat ok requestId=req_000008
+[smoke] run cli chat:list
+[smoke] cli chat:list exit code=0 signal=null
+[smoke] cli chat:list ok requestId=req_000009
+[smoke] smoke passed
+[smoke] cleanup start
+[smoke] stopping api pid=265612
+[smoke] stopping web pid=265660
+[smoke] api child exit code=null signal=SIGTERM
+[smoke] web child exit code=null signal=SIGTERM
+[smoke] removed temp CLI home /tmp/building-agent-cli-smoke-7qGDMX
+[smoke] cleanup complete
+[M001 operational] README command coverage
+22:npm run dev:api
+23:npm run dev:web
+61:### CLI and smoke path
+66:npm run build
+68:  node apps/cli/dist/apps/cli/src/index.js login \
+73:  node apps/cli/dist/apps/cli/src/index.js use project_alpha
+75:  node apps/cli/dist/apps/cli/src/index.js registry
+77:  node apps/cli/dist/apps/cli/src/index.js management
+79:  node apps/cli/dist/apps/cli/src/index.js chat "What should we build first?"
+81:  node apps/cli/dist/apps/cli/src/index.js chat:list
+89:npm run smoke
+94:## Verification commands
+101:npm run typecheck
+102:npm run build
+103:npm run smoke
+109:npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts && npm run typecheck && npm run build && npm run smoke
+121:npm run smoke
+[M001 operational] validation artifact exists
+[M001 operational] all checks passed
