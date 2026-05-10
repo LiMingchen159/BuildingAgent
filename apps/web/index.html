@@ -6,7 +6,26 @@
     <title>BuildingAgent</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="html-fallback-shell" data-static-fallback aria-label="BuildingAgent startup shell">
+        <div class="html-fallback-orb" aria-hidden="true">BA</div>
+        <div class="html-fallback-card">
+          <p class="html-fallback-eyebrow">BuildingAgent mock workspace</p>
+          <h1>BuildingAgent is preparing your local project shell.</h1>
+          <p class="html-fallback-copy">
+            Loading the authenticated React workspace, saved-session checks, and placeholder inspection surfaces.
+          </p>
+          <div class="html-fallback-skeleton" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <p class="html-fallback-status" role="status" aria-live="polite">
+            Safe startup mode: mock and stub surfaces only. No live building systems, repositories, BMS gateways, or external operations are running from this first paint.
+          </p>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

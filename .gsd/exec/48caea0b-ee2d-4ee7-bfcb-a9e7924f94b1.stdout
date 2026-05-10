@@ -1,0 +1,445 @@
+
+## package.json (613 bytes)
+1: {
+2:   "name": "building-agent",
+3:   "version": "0.1.0",
+4:   "private": true,
+5:   "type": "module",
+6:   "workspaces": [
+7:     "apps/api",
+8:     "apps/cli",
+9:     "apps/web"
+10:   ],
+11:   "scripts": {
+12:     "dev": "npm --workspace @building-agent/api run dev",
+13:     "dev:api": "npm --workspace @building-agent/api run dev",
+14:     "dev:web": "npm --workspace @building-agent/web run dev",
+15:     "build": "npm --workspaces --if-present run build",
+16:     "test": "node scripts/run-tests.cjs",
+17:     "typecheck": "npm --workspaces --if-present run typecheck",
+18:     "smoke": "node scripts/smoke-local.cjs"
+19:   },
+20:   "engines": {
+21:     "node": ">=20.0.0"
+22:   }
+23: }
+-- total lines 23
+
+## apps/web/package.json (714 bytes)
+1: {
+2:   "name": "@building-agent/web",
+3:   "version": "0.1.0",
+4:   "private": true,
+5:   "type": "module",
+6:   "scripts": {
+7:     "dev": "vite --host 127.0.0.1",
+8:     "build": "tsc -p tsconfig.json && vite build",
+9:     "test": "vitest run",
+10:     "typecheck": "tsc -p tsconfig.json --noEmit"
+11:   },
+12:   "dependencies": {
+13:     "@vitejs/plugin-react": "^4.3.1",
+14:     "vite": "^5.3.3",
+15:     "react": "^18.3.1",
+16:     "react-dom": "^18.3.1"
+17:   },
+18:   "devDependencies": {
+19:     "@testing-library/jest-dom": "^6.4.6",
+20:     "@testing-library/react": "^16.0.0",
+21:     "@testing-library/user-event": "^14.5.2",
+22:     "@types/react": "^18.3.3",
+23:     "@types/react-dom": "^18.3.0",
+24:     "jsdom": "^24.1.0",
+25:     "typescript": "^5.5.3",
+26:     "vitest": "^2.0.4"
+27:   }
+28: }
+-- total lines 28
+
+## apps/web/src/App.tsx (23388 bytes)
+9:   login,
+12:   type ChatProviderDiagnostics,
+13:   type BuildingCapabilitySummary,
+14:   type ChatMessage,
+15:   type GatewaySummary,
+16:   type ProjectManagementResponse,
+17:   type ProjectSummary,
+18:   type RegistryResponse,
+19:   type RuntimeProviderSummary,
+20:   type SessionSummary,
+21:   type SkillSummary,
+22:   type ToolSummary,
+23:   type UserSummary
+26: const STORAGE_KEY = "building-agent.session.v1";
+27: type WorkspaceTab = "chat" | "registry" | "gateways" | "building";
+29: interface StoredSession {
+32:   projectId: string | null;
+35: interface BannerState {
+38:   message: string;
+43: function readStoredSession(): StoredSession {
+45:     const raw = window.localStorage.getItem(STORAGE_KEY);
+47:       return { token: "", user: null, projectId: null };
+49:     const parsed = JSON.parse(raw) as Partial<StoredSession>;
+53:       projectId: typeof parsed.projectId === "string" ? parsed.projectId : null
+57:     return { token: "", user: null, projectId: null };
+61: function storeSession(value: StoredSession): void {
+69: function errorBanner(error: unknown, title: string): BannerState {
+71:     return { tone: "error", title, message: error.message, code: error.code, requestId: error.requestId };
+73:   return { tone: "error", title, message: "Something went wrong. Please retry." };
+76: function isAuthFailure(error: unknown): boolean {
+80: function Banner({ banner }: { banner: BannerState | null }) {
+84:   return (
+85:     <section className={`banner banner-${banner.tone}`} role={banner.tone === "error" ? "alert" : "status"} aria-live="polite">
+87:       <p>{banner.message}</p>
+89:         <p className="diagnostic-line">
+98: function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: string) => Promise<void>; busy: boolean }) {
+99:   const [email, setEmail] = useState("ada@example.test");
+100:   const [password, setPassword] = useState("local-dev-password");
+101:   const [validation, setValidation] = useState("");
+103:   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+113:   return (
+114:     <main className="auth-card" aria-labelledby="login-title">
+115:       <p className="eyebrow">Local seeded access</p>
+116:       <h1 id="login-title">Sign in to BuildingAgent</h1>
+117:       <p className="muted">Use the development credentials from the README. Anonymous access is intentionally disabled.</p>
+118:       <form className="stack" onSubmit={handleSubmit}>
+127:         {validation ? <p className="field-error" role="alert">{validation}</p> : null}
+134: function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; busy: boolean }) {
+135:   return (
+136:     <main className="workspace-card" aria-labelledby="projects-title">
+137:       <p className="eyebrow">Project boundary</p>
+138:       <h1 id="projects-title">Choose an authorized project</h1>
+139:       <p className="muted">Only projects returned by the API for this seeded session are selectable.</p>
+140:       <div className="project-grid">
+141:         {projects.map((project) => (
+142:           <article className="project-card" key={project.id}>
+144:               <h2>{project.name}</h2>
+145:               <p>{project.id}</p>
+146:               <p className="permissions">{project.permissions.join(" · ") || "No chat permissions"}</p>
+148:             <button type="button" onClick={() => void onSelect(project)} disabled={busy}>
+149:               Select project
+158: function PlaceholderBadge({ label = "Placeholder-only" }: { label?: string }) {
+159:   return <span className="placeholder-badge">{label}</span>;
+162: function MetaBar({ limit, requestId }: { limit?: number | undefined; requestId?: string | undefined }) {
+163:   return (
+164:     <p className="management-meta">
+172: function EmptyState({ children }: { children: string }) {
+173:   return <p className="empty-state management-empty">{children}</p>;
+176: function ItemList<T extends { id: string; name: string; status: string; description: string }>({
+188:   return (
+189:     <div className="management-grid">
+191:         <article className="management-item" key={item.id}>
+192:           <div className="item-heading">
+194:             <span className={`status-pill status-${item.status.replace("_", "-")}`}>{item.status.replace("_", " ")}</span>
+196:           <p className="item-meta">{item.id} · {getMeta(item)}</p>
+204: function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: string | undefined) {
+208:   return (
+209:     <p className="provider-notice" aria-label="Provider diagnostics">
+220: function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; bus
+-- total lines 564
+
+## apps/web/src/api.ts (16261 bytes)
+1: export interface ApiErrorDetail {
+2:   code: string;
+3:   message: string;
+4:   requestId?: string | undefined;
+5: }
+6: 
+7: export class ApiClientError extends Error {
+8:   readonly code: string;
+9:   readonly requestId: string | undefined;
+10:   readonly status: number | undefined;
+11: 
+12:   constructor(detail: ApiErrorDetail, status?: number) {
+13:     super(detail.message);
+14:     this.name = "ApiClientError";
+15:     this.code = detail.code;
+16:     this.requestId = detail.requestId;
+17:     this.status = status;
+18:   }
+19: }
+20: 
+21: export interface UserSummary {
+22:   id: string;
+23:   name: string;
+24: }
+25: 
+26: export interface SessionSummary {
+27:   userId: string;
+28:   projectId: string | null;
+29:   permissions: string[];
+30: }
+31: 
+32: export interface ProjectSummary {
+33:   id: string;
+34:   name: string;
+35:   permissions: string[];
+36: }
+37: 
+38: export interface ChatMessage {
+39:   id: string;
+40:   projectId: string;
+41:   userId: string;
+42:   role: "user" | "assistant";
+43:   content: string;
+44: }
+45: 
+46: export interface ChatProviderDiagnostics {
+47:   id: string;
+48:   mode: "mock" | "real";
+49:   model: string;
+50:   fallbackUsed: boolean;
+51:   fallbackReason?: string | undefined;
+52: }
+53: 
+54: export interface SendChatResponse {
+55:   message: ChatMessage;
+56:   assistantMessage: ChatMessage;
+57:   provider: ChatProviderDiagnostics;
+58:   fallbackUsed: boolean;
+59:   requestId: string;
+60: }
+61: 
+62: export interface LoginResponse {
+63:   token: string;
+64:   user: UserSummary;
+65:   requestId: string;
+66: }
+67: 
+68: export type PlaceholderStatus = "placeholder" | "mock" | "not_configured";
+69: 
+70: interface PlaceholderBase {
+71:   id: string;
+72:   name: string;
+73:   status: PlaceholderStatus;
+74:   description: string;
+75: }
+76: 
+77: export interface RuntimeProviderSummary extends PlaceholderBase {
+78:   kind: "llm" | "embedding" | "workflow";
+79: }
+80: 
+81: export interface ToolSummary extends PlaceholderBase {
+82:   category: "analysis" | "retrieval" | "building";
+83: }
+84: 
+85: export interface SkillSummary extends PlaceholderBase {
+86:   domain: "building" | "project" | "runtime";
+87: }
+88: 
+89: export interface GatewaySummary extends PlaceholderBase {
+90:   protocol: "http" | "mcp" | "local";
+91: }
+92: 
+93: export interface BuildingCapabilitySummary extends PlaceholderBase {
+94:   domain: "energy" | "safety" | "maintenance" | "planning";
+95: }
+96: 
+97: export interface RegistryResponse {
+98:   runtimeProviders: RuntimeProviderSummary[];
+99:   tools: ToolSummary[];
+100:   skills: SkillSummary[];
+101:   gateways: GatewaySummary[];
+102:   buildingCapabilities: BuildingCapabilitySummary[];
+103:   limit: number;
+104:   placeholderOnly: true;
+105:   requestId: string;
+106: }
+107: 
+108: export interface ProjectManagementResponse {
+109:   projectId: string;
+110:   gateways: GatewaySummary[];
+111:   capabilities: BuildingCapabilitySummary[];
+112:   tools: ToolSummary[];
+113:   limit: number;
+114:   placeholderOnly: true;
+115:   requestId: string;
+116: }
+117: 
+118: const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+119: const REQUEST_TIMEOUT_MS = 8000;
+120: const PLACEHOLDER_STATUSES = new Set(["placeholder", "mock", "not_configured"]);
+121: const RUNTIME_KINDS = new Set(["llm", "embedding", "workflow"]);
+122: const TOOL_CATEGORIES = new Set(["analysis", "retrieval", "building"]);
+123: const SKILL_DOMAINS = new Set(["building", "project", "runtime"]);
+124: const GATEWAY_PROTOCOLS = new Set(["http", "mcp", "local"]);
+125: const CAPABILITY_DOMAINS = new Set(["energy", "safety", "maintenance", "planning"]);
+126: 
+127: function apiUrl(path: string): string {
+128:   return `${API_BASE_URL}${path}`;
+129: }
+130: 
+131: function isRecord(value: unknown): value is Record<string, unknown> {
+132:   return typeof value === "object" && value !== null && !Array.isArray(value);
+133: }
+134: 
+135: function isStringIn<T extends string>(value: unknown, allowed: Set<string>): value is T {
+136:   return typeof value === "string" && allowed.has(value);
+137: }
+138: 
+139: function parseApiError(value: unknown): ApiErrorDetail | null {
+140:   if (!isRecord(value) || !isRecord(value.error)) {
+141:     return null;
+142:   }
+143:   const { code, message, requestId } = value.error;
+144:   if (typeof code !== "string" || typeof message !== "string") {
+145:     return null;
+146:   }
+147:   return { code, message, requestId: typeof requestId === "string" ? requestId : undefined };
+148: }
+149: 
+150: function malformed(message = "The API returned an unreadable response."): ApiClientError {
+151:   return new ApiClientError({ code: "api_malformed", message });
+152: }
+153: 
+154: function unavailable(): ApiClientError {
+155:   return new ApiClientError({ code: "api_unavailable", message: "Local API is unavailable. Check that the API dev server is running, then retry." });
+156: }
+157: 
+158: async function readJson(response: Response): Promise<unknown> {
+159:   try {
+160:     return await response.json();
+161:   } catch {
+162:     throw malformed();
+163:   }
+164: }
+165: 
+166: async function requestJson(path: string, options: RequestInit = {}): Promise<unknown> {
+167:   const controller = new AbortController();
+168:   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+169: 
+170:   try {
+171:     const headers = new Headers(options.headers);
+172:     if (options.body !== undefined && !headers.has("content-type")) {
+173:       headers.set("content-type", "application/json");
+174:     }
+175: 
+176:     const response = await fetch(apiUrl(path), {
+177:       ...options,
+178:       headers,
+179:       signal: controller.signal
+180:     });
+181:     const payload = await readJson(response);
+182:     if (!response.ok) {
+183:       const detail = parseApiError(payload) ?? { code: "api_malformed", message: "The API returned an error in an unexpected format." };
+184:       throw new ApiClientError(detail, response.status);
+185:     }
+186:     return payload;
+187:   } catch (error) {
+188:     if (error instanceof ApiClientError) {
+189:       throw error;
+190:     }
+191:     throw unavailable();
+192:   } finally {
+193:     window.clearTimeout(timeoutId);
+194:   }
+195: }
+196: 
+197: function authHeaders(token: string): HeadersInit {
+198:   const headers = new Headers();
+199:   headers.set("authorization", `Bearer ${token}`);
+200:   return headers;
+201: }
+202: 
+203: function hasPlaceholderBase(value: Record<string, unknown>): value is Record<string, unknown> & PlaceholderBase {
+204:   return typeof value.id === "string" && typeof value.name === "string" && typeof value.description === "string" && isStringIn<PlaceholderStatus>(value.status, PLACEHOLDER_STATUSES
+205: }
+206: 
+207: function parseRuntimeProvider(value: unknown): RuntimeProviderSummary | null {
+208:   if (!isRecord(value) || !hasPlaceholderBase(value) || !isStringIn<RuntimeProviderSummary["kind"]>(value.kind, RUNTIME_KINDS)) {
+209:     return null;
+210:   }
+211:   return { id: value.id, name: value.name, status: value.status, description: value.description, kind: value.kind };
+212: }
+213: 
+214: function parseTool(value: unknown): ToolSummary | null {
+215:   if (!isRecord(value) || !hasPlaceholderBase(value) || !isStringIn<ToolSummary["category"]>(value.category, TOOL_CATEGORIES)) {
+216:     return null;
+217:   }
+218:   return { id: value.id, name: value.name, status: value.status, description: value.description, category: value.category };
+219: }
+220: 
+-- total lines 415
+
+## apps/web/src/styles.css (6972 bytes)
+206: .project-grid {
+213: .project-card {
+-- total lines 445
+
+## apps/web/src/App.test.tsx (28366 bytes)
+6: const alphaProject = { id: "project_alpha", name: "Alpha Build", permissions: ["chat:read", "chat:write"] };
+7: const betaProject = { id: "project_beta", name: "Beta Build", permissions: ["chat:read"] };
+9: const runtimeProvider = {
+13:   status: "placeholder",
+16: const registryTool = {
+20:   status: "placeholder",
+23: const registrySkill = {
+27:   status: "placeholder",
+30: const gateway = {
+31:   id: "gateway_bms_placeholder",
+35:   description: "Synthetic building-management gateway."
+37: const capability = {
+45: function registryBody(overrides: Record<string, unknown> = {}) {
+48:     tools: [registryTool],
+49:     skills: [registrySkill],
+53:     placeholderOnly: true,
+54:     requestId: "req_registry",
+59: function managementBody(overrides: Record<string, unknown> = {}) {
+61:     projectId: "project_alpha",
+64:     tools: [registryTool],
+66:     placeholderOnly: true,
+67:     requestId: "req_management",
+72: function jsonResponse(body: unknown, status = 200): Response {
+79: function apiError(code: string, message: string, status: number, requestId = "req_error"): Response {
+80:   return jsonResponse({ error: { code, message, requestId } }, status);
+83: function installFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+84:   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => handler(String(input), init));
+89: function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[] } = {}) {
+90:   const project = options.project ?? alphaProject;
+92:     if (url === "/api/login") {
+93:       return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+96:       return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+98:     if (url === "/api/projects") {
+99:       return jsonResponse({ projects: [project], limit: 50, requestId: "req_projects" });
+101:     if (url === `/api/projects/${project.id}/select`) {
+104:       return jsonResponse({ session: { userId: "user_ada", projectId: project.id, permissions: project.permissions }, requestId: "req_select" });
+106:     if (url === `/api/projects/${project.id}/chat` && init?.method !== "POST") {
+107:       return jsonResponse({ messages: options.chatMessages ?? [], limit: 50, requestId: "req_chat" });
+109:     if (url === `/api/projects/${project.id}/chat` && init?.method === "POST") {
+111:         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
+112:         assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "Mock assistant response for project_alpha: What should we buil
+118:     if (url === "/api/registry") {
+119:       return options.registry ?? jsonResponse(registryBody());
+121:     if (url === `/api/projects/${project.id}/management`) {
+122:       return options.management ?? jsonResponse(managementBody({ projectId: project.id }));
+128: async function loginAndSelectProject(user = userEvent.setup()) {
+130:   await screen.findByRole("heading", { name: /choose an authorized project/i });
+131:   await user.click(screen.getByRole("button", { name: /select project/i }));
+144: describe("BuildingAgent Web flow", () => {
+145:   it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
+146:     const fetchMock = installBaseFetch();
+148:     const user = userEvent.setup();
+152:     await screen.findByRole("heading", { name: /choose an authorized project/i });
+155:     await user.click(screen.getByRole("button", { name: /select project/i }));
+157:     expect(screen.getAllByText(/project id:/i)[0]).toHaveTextContent("project_alpha");
+159:     await user.click(screen.getByRole("button", { name: /platform registry/i }));
+163:     expect(screen.getByText(/request: req_registry/i)).toBeInTheDocument();
+164:     expect(screen.getAllByText(/placeholder-only/i).length).toBeGreaterThan(0);
+174:     await user.click(screen.getByRole("button", { name: /^chat$/i }));
+175:     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "What should we build first?");
+176:     await user.click(screen.getByRole("button", { name: /send message/i }));
+179:     expect(await screen.findByText("Mock assistant response for project_alpha: What should we build first?")).toBeInTheDocument();
+180:     const assistantMessage = screen.getByRole("article", { name: /assistant message/i });
+182:     const diagnostics = screen.getByLabelText(/provider diagnostics/i);
+190:     const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "POST");
+191:     expect(chatPostCall).toBeTruthy();
+192:     expect(chatPostCall?.[1]).toMatchObject({
+194:       body: JSON.stringify({ message: "What should we build first?" })
+196:     expect(chatPostCall?.[1]?.headers).toBeInstanceOf(Headers);
+197:     expect((chatPostCall?.[1]?.headers as Headers).get("authorization")).toBe("Bearer seed-token-ada");
+200:   it("guards the workspace when unauthenticated and clears invalid stored tokens", async () => {
+201:     window.localStorage.setItem("building-agent.session.v1", JSON.stringify({ token: "expired", user: { id: "user_ada", name: "Ada Lovelace" }, projectId: null }));
+206:       if (url === "/api/projects") {
+207:         return jsonResponse({ projects: [], requestId: "req_projects" });
+220:   it("displays forbidden API errors with request ids without mutating the selected project", async () => {
+-- total lines 569

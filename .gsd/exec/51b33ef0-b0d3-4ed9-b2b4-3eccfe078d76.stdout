@@ -1,0 +1,83 @@
+apps/api/src/auth.test.ts
+apps/api/src/auth.ts
+apps/api/src/chat.test.ts
+apps/api/src/index.ts
+apps/api/src/providers.test.ts
+apps/api/src/providers.ts
+apps/api/src/registry.test.ts
+apps/api/src/seed.ts
+apps/api/src/server.ts
+
+Seed excerpts:
+apps/api/src/providers.ts:10:  mode: "mock" | "real";
+apps/api/src/providers.ts:73:const MOCK_MODEL = "deterministic-local-mock";
+apps/api/src/providers.ts:108:    id: "deterministic-mock",
+apps/api/src/providers.ts:109:    mode: "mock",
+apps/api/src/providers.ts:227:  if (provider && provider !== "mock" && provider !== "openai-compatible") {
+apps/api/src/providers.ts:234:  if (provider === "mock" || !apiKey) {
+apps/api/src/seed.ts:2:export type PlaceholderStatus = "placeholder" | "mock" | "not_configured";
+apps/api/src/seed.ts:45:  gateways: PlaceholderGateway[];
+apps/api/src/seed.ts:47:  tools: PlaceholderTool[];
+apps/api/src/seed.ts:82:  users: SeedUser[];
+apps/api/src/seed.ts:84:  projects: SeedProject[];
+apps/api/src/seed.ts:85:  memberships: SeedMembership[];
+apps/api/src/seed.ts:86:  messagesByProject: Record<string, ChatMessage[]>;
+apps/api/src/seed.ts:88:  tools: PlaceholderTool[];
+apps/api/src/seed.ts:89:  skills: PlaceholderSkill[];
+apps/api/src/seed.ts:90:  gateways: PlaceholderGateway[];
+apps/api/src/seed.ts:91:  buildingCapabilities: PlaceholderCapability[];
+apps/api/src/seed.ts:92:  managementByProject: Record<string, ProjectManagementFixtures>;
+apps/api/src/seed.ts:99:  const projects: SeedProject[] = [
+apps/api/src/seed.ts:100:    { id: "project_alpha", name: "Alpha Build" },
+apps/api/src/seed.ts:101:    { id: "project_beta", name: "Beta Build" },
+apps/api/src/seed.ts:102:    { id: "project_gamma", name: "Gamma Build" }
+apps/api/src/seed.ts:110:      status: "placeholder",
+apps/api/src/seed.ts:124:      status: "mock",
+apps/api/src/seed.ts:129:  const tools: PlaceholderTool[] = [
+apps/api/src/seed.ts:134:      status: "placeholder",
+apps/api/src/seed.ts:148:      status: "mock",
+apps/api/src/seed.ts:149:      description: "Mock analysis tool entry backed only by placeholder fixtures."
+apps/api/src/seed.ts:153:  const skills: PlaceholderSkill[] = [
+apps/api/src/seed.ts:158:      status: "placeholder",
+apps/api/src/seed.ts:162:      id: "skill_project_readiness",
+apps/api/src/seed.ts:165:      status: "mock",
+apps/api/src/seed.ts:177:  const gateways: PlaceholderGateway[] = [
+apps/api/src/seed.ts:179:      id: "gateway_bms_placeholder",
+apps/api/src/seed.ts:186:      id: "gateway_mcp_placeholder",
+apps/api/src/seed.ts:189:      status: "placeholder",
+apps/api/src/seed.ts:196:      status: "mock",
+apps/api/src/seed.ts:201:  const buildingCapabilities: PlaceholderCapability[] = [
+apps/api/src/seed.ts:206:      status: "mock",
+apps/api/src/seed.ts:213:      status: "placeholder",
+apps/api/src/seed.ts:224:      id: "capability_project_phasing",
+apps/api/src/seed.ts:227:      status: "placeholder",
+apps/api/src/seed.ts:232:  const managementByProject: Record<string, ProjectManagementFixtures> = Object.fromEntries(
+apps/api/src/seed.ts:233:    projects.map((project, index) => [
+apps/api/src/seed.ts:236:        gateways: gateways.slice(index % gateways.length, (index % gateways.length) + 1),
+apps/api/src/seed.ts:237:        capabilities: buildingCapabilities.slice(index, index + 2),
+apps/api/src/seed.ts:238:        tools: tools.slice(0, 2)
+apps/api/src/seed.ts:244:    users: [
+apps/api/src/seed.ts:252:    projects,
+apps/api/src/seed.ts:253:    memberships: [
+apps/api/src/seed.ts:254:      { userId: "user_ada", projectId: "project_alpha", permissions: ["chat:read", "chat:write"] },
+apps/api/src/seed.ts:255:      { userId: "user_ada", projectId: "project_beta", permissions: ["chat:read"] },
+apps/api/src/seed.ts:256:      { userId: "user_grace", projectId: "project_gamma", permissions: ["chat:read", "chat:write"] }
+apps/api/src/seed.ts:258:    messagesByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ChatMessage[]])),
+apps/api/src/seed.ts:260:    tools,
+apps/api/src/seed.ts:261:    skills,
+apps/api/src/seed.ts:262:    gateways,
+apps/api/src/seed.ts:263:    buildingCapabilities,
+apps/api/src/seed.ts:264:    managementByProject,
+apps/api/src/seed.ts:273:    users: store.users.map((user) => ({ ...user })),
+apps/api/src/seed.ts:275:    projects: store.projects.map((project) => ({ ...project })),
+apps/api/src/seed.ts:276:    memberships: store.memberships.map((membership) => ({ ...membership, permissions: [...membership.permissions] })),
+apps/api/src/seed.ts:277:    messagesByProject: Object.fromEntries(
+apps/api/src/seed.ts:278:      Object.entries(store.messagesByProject).map(([projectId, messages]) => [
+apps/api/src/seed.ts:284:    tools: store.tools.map((tool) => ({ ...tool })),
+apps/api/src/seed.ts:285:    skills: store.skills.map((skill) => ({ ...skill })),
+apps/api/src/seed.ts:286:    gateways: store.gateways.map((gateway) => ({ ...gateway })),
+apps/api/src/seed.ts:287:    buildingCapabilities: store.buildingCapabilities.map((capability) => ({ ...capability })),
+apps/api/src/seed.ts:288:    managementByProject: Object.fromEntries(
+apps/api/src/seed.ts:289:      Object.entries(store.managementByProject).map(([projectId, management]) => [
+apps/api/src/seed.ts:292:          gateways: management.gateways.map((gateway) => ({ ...gateway })),
+apps/api/src/seed.ts:294:          tools: management.tools.map((tool) => ({ ...tool }))

@@ -1,0 +1,7 @@
+
+> @building-agent/web@0.1.0 test
+> vitest run --run apps/web/src/appShell.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+

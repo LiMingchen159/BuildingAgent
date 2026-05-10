@@ -1,0 +1,18 @@
+{
+  "id": "68e7b292-5845-40f4-ae19-65b41aeaf2e0",
+  "runtime": "bash",
+  "purpose": "Run exact planned app shell verification command",
+  "script_chars": 80,
+  "started_at": "2026-05-10T18:42:29.203Z",
+  "finished_at": "2026-05-10T18:42:33.534Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 4331,
+  "stdout_bytes": 142,
+  "stderr_bytes": 650,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/68e7b292-5845-40f4-ae19-65b41aeaf2e0.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/68e7b292-5845-40f4-ae19-65b41aeaf2e0.stderr"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "8857a59c-b0c4-4612-9645-fc0556901df0",
+  "runtime": "bash",
+  "purpose": "Map web app and package structure for M002 research",
+  "script_chars": 246,
+  "started_at": "2026-05-10T18:05:38.339Z",
+  "finished_at": "2026-05-10T18:05:41.746Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 3407,
+  "stdout_bytes": 11250,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/8857a59c-b0c4-4612-9645-fc0556901df0.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/8857a59c-b0c4-4612-9645-fc0556901df0.stderr"
+}

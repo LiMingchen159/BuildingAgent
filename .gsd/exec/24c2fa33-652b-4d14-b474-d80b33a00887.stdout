@@ -1,0 +1,12 @@
+apps/web/package.json
+ deps @vitejs/plugin-react, react, react-dom, vite
+ dev @testing-library/jest-dom, @testing-library/react, @testing-library/user-event, @types/react, @types/react-dom, jsdom, typescript, vitest
+ scripts {'dev': 'vite --host 127.0.0.1', 'build': 'tsc -p tsconfig.json && vite build', 'test': 'vitest run', 'typecheck': 'tsc -p tsconfig.json --noEmit'}
+apps/api/package.json
+ deps @fastify/cors, fastify
+ dev @types/node, tsx, typescript, vitest
+ scripts {'dev': 'tsx watch src/index.ts', 'build': 'tsc -p tsconfig.json', 'test': 'vitest run', 'typecheck': 'tsc -p tsconfig.json --noEmit'}
+apps/cli/package.json
+ deps none
+ dev @types/node, typescript, vitest
+ scripts {'build': 'tsc -p tsconfig.json', 'test': 'vitest run', 'typecheck': 'tsc -p tsconfig.json --noEmit'}

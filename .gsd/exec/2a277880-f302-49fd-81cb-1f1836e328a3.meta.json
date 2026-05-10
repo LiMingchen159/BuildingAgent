@@ -1,0 +1,18 @@
+{
+  "id": "2a277880-f302-49fd-81cb-1f1836e328a3",
+  "runtime": "python",
+  "purpose": "Summarize API mock data contracts for M002 research",
+  "script_chars": 435,
+  "started_at": "2026-05-10T18:12:07.896Z",
+  "finished_at": "2026-05-10T18:12:08.108Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 212,
+  "stdout_bytes": 7019,
+  "stderr_bytes": 420,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/2a277880-f302-49fd-81cb-1f1836e328a3.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/2a277880-f302-49fd-81cb-1f1836e328a3.stderr"
+}

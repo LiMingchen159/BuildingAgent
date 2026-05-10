@@ -1,0 +1,15 @@
+
+> @building-agent/web@0.1.0 test
+> vitest run --run src/appShell.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ✓ src/appShell.test.tsx (2 tests) 395ms
+   ✓ BuildingAgent no-blank HTML shell > mountBuildingAgent removes the static fallback before normal React rendering 367ms
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  02:50:57
+   Duration  51.42s (transform 353ms, setup 6.21s, collect 2.52s, tests 395ms, environment 38.67s, prepare 2.36s)
+

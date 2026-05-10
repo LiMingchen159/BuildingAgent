@@ -4,27 +4,115 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Active
 
-### R015 — The platform can represent project-scoped external data source configuration surfaces for future BIM, Brick/RDF/SPARQL, time-series, and mapping sources.
+### R015 — The platform exposes project-scoped workspace surfaces for Knowledge Base, Repository, conversations, settings context, scheduled tasks, Skills, Tools, and future building-domain data-source configuration without storing real building data in the repository.
 - Class: integration
 - Status: active
-- Description: The platform can represent project-scoped external data source configuration surfaces for future BIM, Brick/RDF/SPARQL, time-series, and mapping sources.
+- Description: The platform exposes project-scoped workspace surfaces for Knowledge Base, Repository, conversations, settings context, scheduled tasks, Skills, Tools, and future building-domain data-source configuration without storing real building data in the repository.
 - Why it matters: Future building workflows require safe project-scoped data-source boundaries before real integrations arrive.
 - Source: user
-- Primary owning slice: M002/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Do not store real building data in the repository. This is owned by M002 after the M001 foundation exists.
+- Primary owning slice: M002/S06
+- Supporting slices: M002/S04, M002/S07
+- Validation: mapped to M002 UI-first mock/stub plan
+- Notes: Re-scoped for M002 from a narrow data-source-stub milestone into the UI-first project workspace boundary. BIM, Brick/RDF/SPARQL, time-series, and mapping integrations remain represented only through safe mock/stub UI surfaces and placeholder metadata.
 
-### R016 — The platform introduces first real building-operations workflow prototypes after the foundation and data-source boundaries are proven.
-- Class: differentiator
+### R028 — The platform provides a polished React/Vite login, project selection, and workspace shell that feels like a coherent product rather than a skeleton.
+- Class: primary-user-loop
 - Status: active
-- Description: The platform introduces first real building-operations workflow prototypes after the foundation and data-source boundaries are proven.
-- Why it matters: BuildingAgent ultimately needs to become a building-operations assistant, not only a general agent shell.
+- Description: The platform provides a polished React/Vite login, project selection, and workspace shell that feels like a coherent product rather than a skeleton.
+- Why it matters: The product needs a usable front door and workspace shape before any mock building-domain surfaces matter.
 - Source: user
-- Primary owning slice: M003/none yet
+- Primary owning slice: M002/S01-S04
+- Supporting slices: M002/S05, M002/S06, M002/S07
+- Validation: validated only when the local UI shows the polished shell and the login → project selection → workspace path is exercised end-to-end.
+- Notes: UI-first milestone requirement. Account-level settings may live outside the project boundary, but the main product shell must present login → project selection → workspace as a clear, branded flow.
+
+### R029 — Assistant messages render Markdown correctly, including headings, lists, links, code blocks, blockquotes, rules, and tables.
+- Class: quality-attribute
+- Status: active
+- Description: Assistant messages render Markdown correctly, including headings, lists, links, code blocks, blockquotes, rules, and tables.
+- Why it matters: Chat is the main conversational surface; raw Markdown would make the assistant feel broken.
+- Source: user
+- Primary owning slice: M002/S05
+- Supporting slices: M002/S04
+- Validation: validated when browser and test evidence show assistant chat messages render Markdown to HTML across the supported elements.
+- Notes: This requirement includes safe rendering behavior and responsive table handling. Raw Markdown should not leak into the chat transcript for assistant messages.
+
+### R030 — Assistant messages can show mock image outputs inline and in a click-to-enlarge preview modal or card.
+- Class: quality-attribute
+- Status: active
+- Description: Assistant messages can show mock image outputs inline and in a click-to-enlarge preview modal or card.
+- Why it matters: The chat needs to support the mock visual outputs that the building-domain workflows will eventually produce.
+- Source: user
+- Primary owning slice: M002/S05
+- Supporting slices: M002/S04
+- Validation: validated when inline image previews and a working enlargement flow are exercised in the browser.
+- Notes: Images are stub/mock behavior only. The UI may present thumbnails, preview cards, and accessible enlargement controls, but not real image generation or repository mutation.
+
+### R031 — The Knowledge Base surface is project-scoped, mock-only, and clearly communicates that assistant context remains limited to the current project.
+- Class: primary-user-loop
+- Status: active
+- Description: The Knowledge Base surface is project-scoped, mock-only, and clearly communicates that assistant context remains limited to the current project.
+- Why it matters: Users need to see where project knowledge will live before real data-source integrations exist.
+- Source: user
+- Primary owning slice: M002/S06
+- Supporting slices: M002/S04
+- Validation: validated when the KB surface is visible, project-scoped, and explicitly mock-only in the browser flow.
+- Notes: No real RAG, indexing, vector store writes, or cross-project data access in M002. The UI may show document categories, counts, and upload placeholders only.
+
+### R032 — The Repository surface is project-scoped, mock-only, and makes future write/delete actions visibly approval-gated.
+- Class: primary-user-loop
+- Status: active
+- Description: The Repository surface is project-scoped, mock-only, and makes future write/delete actions visibly approval-gated.
+- Why it matters: The repository boundary must be explicit before the product introduces any building-domain artifacts or generated outputs.
+- Source: user
+- Primary owning slice: M002/S06
+- Supporting slices: M002/S04
+- Validation: validated when the repository surface is visible, project-scoped, and the approval-gated future action language is present.
+- Notes: No real file writes, deletes, or repository mutations in M002. The surface may preview generated outputs, source labels, timestamps, and approval affordances.
+
+### R033 — The right-side contextual panel presents Scheduled & Rule-based Tasks first, Skills second, and Tools third.
+- Class: core-capability
+- Status: active
+- Description: The right-side contextual panel presents Scheduled & Rule-based Tasks first, Skills second, and Tools third.
+- Why it matters: The panel order is part of the product’s information architecture and should not drift.
+- Source: user
+- Primary owning slice: M002/S07
+- Supporting slices: M002/S04
+- Validation: validated when the browser and tests prove the section order and labels are stable.
+- Notes: This order is fixed for M002 and must be preserved in the UI and tests. Any task or tool examples remain mock/stub-only.
+
+### R034 — The app renders a visible shell, loading state, or skeleton quickly on first load and does not leave the user staring at a blank screen.
+- Class: launchability
+- Status: active
+- Description: The app renders a visible shell, loading state, or skeleton quickly on first load and does not leave the user staring at a blank screen.
+- Why it matters: First load is part of the user experience and currently looks empty for too long.
+- Source: user
+- Primary owning slice: M002/S01
+- Supporting slices: M002/S02, M002/S04
+- Validation: validated when browser evidence shows the app shell or loading state appears immediately on startup and the blank-screen case is removed or materially reduced.
+- Notes: If cold-start delay is unavoidable, the UI must still surface immediate feedback. This is a perceived-load requirement, not a backend-performance claim.
+
+### R035 — All M002 agent, skill, tool, task, repository, scheduling, BIM, Brick/RDF/SPARQL, time-series, mapping, and building-control behavior remains mock/stub-only.
+- Class: anti-feature
+- Status: active
+- Description: All M002 agent, skill, tool, task, repository, scheduling, BIM, Brick/RDF/SPARQL, time-series, mapping, and building-control behavior remains mock/stub-only.
+- Why it matters: M002 must stay safe and UI-first while the real integrations are deferred.
+- Source: user
+- Primary owning slice: M002/S01-S07
 - Supporting slices: none
-- Validation: mapped
-- Notes: Likely directions include equipment exploration, semantic query scaffolding, trend inspection, and HHW reset analysis. This is not part of M001.
+- Validation: validated when the implementation and browser/tests show only mock/stub behaviors and no live external actions are reachable.
+- Notes: No real RAG, MCP calls, backend scheduling, repository mutation, BMS control, chiller shutdown, external operations, or cost-producing API calls in this milestone.
+
+### R036 — Project data access, conversations, Knowledge Base, Repository, tasks, Skills, Tools, and building-domain surfaces remain project-scoped, while LLM connection settings may be account-level.
+- Class: constraint
+- Status: active
+- Description: Project data access, conversations, Knowledge Base, Repository, tasks, Skills, Tools, and building-domain surfaces remain project-scoped, while LLM connection settings may be account-level.
+- Why it matters: The product needs a clear boundary between personal model configuration and project-specific operational data.
+- Source: user
+- Primary owning slice: M002/S04
+- Supporting slices: M002/S05, M002/S06, M002/S07
+- Validation: validated when the UI and API preserve account-level settings separation and project-scoped content boundaries.
+- Notes: This requirement keeps user-configured model credentials/settings separate from project content and prevents cross-project leakage.
 
 ## Validated
 
@@ -184,6 +272,17 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Deferred
 
+### R016 — The platform introduces first real building-operations workflow prototypes only after the foundation, project-scoped workspace, and mock-only data-source boundaries are proven.
+- Class: differentiator
+- Status: deferred
+- Description: The platform introduces first real building-operations workflow prototypes only after the foundation, project-scoped workspace, and mock-only data-source boundaries are proven.
+- Why it matters: BuildingAgent ultimately needs to become a building-operations assistant, not only a general agent shell.
+- Source: user
+- Primary owning slice: M003/none yet
+- Supporting slices: none
+- Validation: unmapped
+- Notes: Deferred out of M002. M002 may show mock building-operations examples in chat, tasks, skills, or tools, but must not execute real workflows, controls, analytics, BMS operations, or cost-producing calls.
+
 ### R017 — Enterprise identity and account lifecycle capabilities such as SSO, invitations, and password reset are useful later but not required for v1.
 - Class: admin/support
 - Status: deferred
@@ -307,6 +406,17 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: n/a
 - Notes: Allowed Hermes-derived areas include agent runtime patterns, planning/execution loop patterns, tool and skill registry patterns, memory patterns, model/provider patterns, runtime/session structure, CLI/UI patterns, permission/approval/audit/safety patterns, and smoke-test patterns. Preserve license notices and attribution for Hermes-derived code.
 
+### R037 — Real RAG, MCP tool calls, backend scheduling, repository file writes/deletes, BMS control, chiller shutdown, external operations, and unapproved cost-producing API calls are out of scope for M002.
+- Class: anti-feature
+- Status: out-of-scope
+- Description: Real RAG, MCP tool calls, backend scheduling, repository file writes/deletes, BMS control, chiller shutdown, external operations, and unapproved cost-producing API calls are out of scope for M002.
+- Why it matters: This prevents the UI milestone from accidentally creating unsafe operational behavior or hidden external costs.
+- Source: user
+- Primary owning slice: none
+- Supporting slices: none
+- Validation: n/a
+- Notes: This is the explicit negative boundary for the UI-first mock/stub milestone. Mock images, mock task cards, mock tools, and mock building-domain examples may be shown only when labeled as non-operational.
+
 ## Traceability
 
 | ID | Class | Status | Primary owner | Supporting | Proof |
@@ -325,8 +435,8 @@ This file is the explicit capability and coverage contract for the project.
 | R012 | differentiator | validated | M001/S02 | M001/S03 | Validated by S02 registry/management API and Web tests covering synthetic runtime provider, tool, skill, gateway, and building-domain capability fixtures; S03 smoke exercised registry and management inspection through the authenticated CLI. |
 | R013 | launchability | validated | M001/S03 | M001/S01, M001/S04 | Validated by S03 npm run smoke plus CLI tests/typecheck, and advanced by S04 full verification: API provider/chat tests, Web chat tests, CLI command tests, npm run typecheck, npm run build, and live npm run smoke all passed. Smoke exercised authenticated CLI login/project/registry/management/chat against live API/Web and asserted deterministic provider fallback metadata in the no-secret run. |
 | R014 | operability | validated | M001/S04 | M001/S01, M001/S03 | Validated by S01 README local-run documentation, S03 smoke documentation, and S04 README provider configuration/fallback instructions included in the full build/smoke-verified slice; redaction scan included README to guard against committed provider keys or secret-looking examples. |
-| R015 | integration | active | M002/none yet | none | mapped |
-| R016 | differentiator | active | M003/none yet | none | mapped |
+| R015 | integration | active | M002/S06 | M002/S04, M002/S07 | mapped to M002 UI-first mock/stub plan |
+| R016 | differentiator | deferred | M003/none yet | none | unmapped |
 | R017 | admin/support | deferred | none | none | unmapped |
 | R018 | operability | deferred | none | none | unmapped |
 | R019 | differentiator | deferred | M003/none yet | none | unmapped |
@@ -338,10 +448,20 @@ This file is the explicit capability and coverage contract for the project.
 | R025 | anti-feature | out-of-scope | none | none | n/a |
 | R026 | anti-feature | out-of-scope | none | none | n/a |
 | R027 | constraint | out-of-scope | none | none | n/a |
+| R028 | primary-user-loop | active | M002/S01-S04 | M002/S05, M002/S06, M002/S07 | validated only when the local UI shows the polished shell and the login → project selection → workspace path is exercised end-to-end. |
+| R029 | quality-attribute | active | M002/S05 | M002/S04 | validated when browser and test evidence show assistant chat messages render Markdown to HTML across the supported elements. |
+| R030 | quality-attribute | active | M002/S05 | M002/S04 | validated when inline image previews and a working enlargement flow are exercised in the browser. |
+| R031 | primary-user-loop | active | M002/S06 | M002/S04 | validated when the KB surface is visible, project-scoped, and explicitly mock-only in the browser flow. |
+| R032 | primary-user-loop | active | M002/S06 | M002/S04 | validated when the repository surface is visible, project-scoped, and the approval-gated future action language is present. |
+| R033 | core-capability | active | M002/S07 | M002/S04 | validated when the browser and tests prove the section order and labels are stable. |
+| R034 | launchability | active | M002/S01 | M002/S02, M002/S04 | validated when browser evidence shows the app shell or loading state appears immediately on startup and the blank-screen case is removed or materially reduced. |
+| R035 | anti-feature | active | M002/S01-S07 | none | validated when the implementation and browser/tests show only mock/stub behaviors and no live external actions are reachable. |
+| R036 | constraint | active | M002/S04 | M002/S05, M002/S06, M002/S07 | validated when the UI and API preserve account-level settings separation and project-scoped content boundaries. |
+| R037 | anti-feature | out-of-scope | none | none | n/a |
 
 ## Coverage Summary
 
-- Active requirements: 2
-- Mapped to slices: 2
+- Active requirements: 10
+- Mapped to slices: 10
 - Validated: 14 (R001, R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R012, R013, R014)
 - Unmapped active requirements: 0

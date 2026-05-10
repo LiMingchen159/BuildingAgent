@@ -3,8 +3,19 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles.css";
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+export function mountBuildingAgent(root: HTMLElement): void {
+  root.querySelector("[data-static-fallback]")?.setAttribute("data-static-fallback", "superseded");
+  root.replaceChildren();
+
+  ReactDOM.createRoot(root).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+}
+
+const root = document.getElementById("root");
+
+if (root) {
+  mountBuildingAgent(root);
+}

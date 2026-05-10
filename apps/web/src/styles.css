@@ -1,7 +1,7 @@
 :root {
   color: #172033;
   background: #edf2f7;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Avenir Next", Avenir, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -14,6 +14,139 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+}
+
+.html-fallback-shell {
+  align-items: center;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(35, 87, 217, 0.22), transparent 26rem),
+    radial-gradient(circle at 84% 18%, rgba(245, 177, 63, 0.22), transparent 24rem),
+    linear-gradient(135deg, #0f1726 0%, #172033 48%, #26334c 100%);
+  color: #f8fbff;
+  display: grid;
+  gap: 1.5rem;
+  min-height: 100vh;
+  overflow: hidden;
+  padding: clamp(1.5rem, 5vw, 4rem);
+  position: relative;
+}
+
+.html-fallback-shell::before {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 44px 44px;
+  content: "";
+  inset: 0;
+  mask-image: radial-gradient(circle at center, #000 0%, transparent 76%);
+  opacity: 0.55;
+  position: absolute;
+}
+
+.html-fallback-orb {
+  align-items: center;
+  background: linear-gradient(145deg, #fff7db, #f5b13f 54%, #2357d9);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 28px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+  color: #111827;
+  display: inline-flex;
+  font-size: clamp(1.4rem, 4vw, 2.4rem);
+  font-weight: 900;
+  height: clamp(4rem, 10vw, 6rem);
+  justify-content: center;
+  letter-spacing: -0.1em;
+  position: relative;
+  width: clamp(4rem, 10vw, 6rem);
+  z-index: 1;
+}
+
+.html-fallback-card {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 34px;
+  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.28);
+  max-width: 760px;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  position: relative;
+  z-index: 1;
+}
+
+.html-fallback-eyebrow {
+  color: #f8d57b;
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  margin: 0 0 0.75rem;
+  text-transform: uppercase;
+}
+
+.html-fallback-card h1 {
+  color: #fff;
+  font-size: clamp(2.25rem, 8vw, 5.75rem);
+  letter-spacing: -0.075em;
+  line-height: 0.9;
+  margin: 0 0 1rem;
+  max-width: 12ch;
+}
+
+.html-fallback-copy,
+.html-fallback-status {
+  color: #d9e3f7;
+  font-size: clamp(1rem, 2vw, 1.18rem);
+  line-height: 1.7;
+  margin: 0;
+  max-width: 62ch;
+}
+
+.html-fallback-skeleton {
+  display: grid;
+  gap: 0.75rem;
+  margin: 2rem 0;
+  max-width: 520px;
+}
+
+.html-fallback-skeleton span {
+  animation: fallback-shimmer 1.6s ease-in-out infinite;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.16));
+  background-size: 220% 100%;
+  border-radius: 999px;
+  display: block;
+  height: 0.9rem;
+}
+
+.html-fallback-skeleton span:nth-child(2) {
+  animation-delay: 120ms;
+  width: 82%;
+}
+
+.html-fallback-skeleton span:nth-child(3) {
+  animation-delay: 240ms;
+  width: 58%;
+}
+
+.html-fallback-status {
+  background: rgba(9, 14, 24, 0.5);
+  border: 1px solid rgba(248, 213, 123, 0.34);
+  border-radius: 18px;
+  color: #fff6d7;
+  padding: 1rem;
+}
+
+@keyframes fallback-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .html-fallback-skeleton span {
+    animation: none;
+  }
 }
 
 button,

@@ -1,0 +1,102 @@
+
+## apps/api/src/server.ts
+12: import { createSeedStore, type ChatMessage, type SeedStore } from "./seed.js";
+23: } from "./providers.js";
+27:   chatProvider?: ChatProvider;
+35:   projectId: string;
+49: function nextMessageId(): string {
+54: function bounded<T>(items: T[], limit: number): T[] {
+58: function boundedPlaceholderList<T>(items: T[], store: SeedStore): T[] {
+62: function isReply(value: unknown): value is FastifyReply {
+66: function validateChatMessage(body: unknown): string | null {
+71:   const message = (body as ChatBody).message;
+76:   const trimmed = message.trim();
+84: function trimChatMessages(messages: ChatMessage[], limit: number): void {
+90: function providerDiagnostics(provider: ProviderMetadata, fallbackUsed: boolean): ProviderMetadata & { fallbackUsed: boolean } {
+92:     id: provider.id,
+93:     mode: provider.mode,
+94:     model: provider.model,
+95:     ...(provider.fallbackReason ? { fallbackReason: provider.fallbackReason } : {}),
+96:     ...(provider.status ? { status: provider.status } : {}),
+101: function chatHistoryForProvider(messages: ChatMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
+105: export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
+106:   const store = options.store ?? createSeedStore();
+107:   const env = options.env ?? process.env;
+108:   const providerResolver =
+110:     ((providerEnv: ProviderEnv) => resolveChatProvider(providerEnv, options.fetch ? { fetch: options.fetch } : {}));
+111:   const allowProviderFallback = shouldAllowProviderFallback(env, options.allowProviderFallback);
+114:   const provider = options.chatProvider ?? providerResolver(env);
+115:   const app = Fastify({
+135:     const { email, password } = request.body ?? {};
+140:     const user = store.users.find((candidate) => candidate.email === email && candidate.password === password);
+145:     const token = Object.entries(store.tokens).find(([, userId]) => userId === user.id)?.[0];
+160:     const session = authenticateRequest(request, reply, store);
+168:         projectId: session.projectId,
+175:   app.get("/api/projects", async (request, reply) => {
+176:     const session = authenticateRequest(request, reply, store);
+181:     const memberships = store.memberships.filter((membership) => membership.userId === session.userId);
+182:     const projects = bounded(memberships, store.maxListSize).flatMap((membership) => {
+183:       const project = store.projects.find((candidate) => candidate.id === membership.projectId);
+184:       return project ? [{ id: project.id, name: project.name, permissions: membership.permissions }] : [];
+187:     return { projects, limit: store.maxListSize, requestId: requestIdFor(request) };
+190:   app.get("/api/registry", async (request, reply) => {
+191:     const session = authenticateRequest(request, reply, store);
+198:       tools: boundedPlaceholderList(store.tools, store),
+199:       skills: boundedPlaceholderList(store.skills, store),
+200:       gateways: boundedPlaceholderList(store.gateways, store),
+203:       placeholderOnly: true,
+208:   app.get<{ Params: ProjectParams }>("/api/projects/:projectId/management", async (request, reply) => {
+209:     const session = authenticateRequest(request, reply, store);
+214:     const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+219:     const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+224:     const readable = requirePermission(request, reply, membership, "chat:read");
+229:     const management = store.managementByProject[request.params.projectId] ?? {
+230:       gateways: [],
+231:       capabilities: [],
+232:       tools: []
+236:       projectId: request.params.projectId,
+237:       gateways: boundedPlaceholderList(management.gateways, store),
+238:       capabilities: boundedPlaceholderList(management.capabilities, store),
+239:       tools: boundedPlaceholderList(management.tools, store),
+241:       placeholderOnly: true,
+246:   app.post<{ Params: ProjectParams }>("/api/projects/:projectId/select", async (request, reply) => {
+247:     const session = authenticateRequest(request, reply, store);
+252:     const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+257:     const selectedSession = {
+259:       selectedProjectId: request.params.projectId
+266:         projectId: request.params.projectId,
+273:   app.get<{ Params: ProjectParams }>("/api/projects/:projectId/chat", async (request, reply) => {
+274:     const session = authenticateRequest(request, reply, store);
+279:     const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+284:     const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+289:     const readable = requirePermission(request, reply, membership, "chat:read");
+295:       messages: bounded(store.messagesByProject[request.params.projectId] ?? [], store.maxListSize),
+301:   app.post<{ Params: ProjectParams; Body: ChatBody }>("/api/projects/:projectId/chat", async (request, reply) => {
+302:     const session = authenticateRequest(request, reply, store);
+307:     const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+312:     const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+317:     const writable = requirePermission(request, reply, membership, "chat:write");
+322:     const content = validateChatMessage(request.body);
+324:       return sendError(request, reply, 422, "chat_invalid", "Chat message must be 1-1000 characters.");
+327:     const messages = store.messagesByProject[request.params.projectId] ?? [];
+328:     const message: ChatMessage = {
+330:       projectId: request.params.projectId,
+337:     store.messagesByProject[request.params.projectId] = messages;
+341:       completion = await provider.complete({
+342:         projectId: request.params.projectId,
+345:         messages: chatHistoryForProvider(messages)
+350:         return sendError(request, reply, 502, "provider_error", "Chat provider failed before producing a safe response.");
+354:         { requestId: requestIdFor(request), providerError: redactedProviderError(error) },
+355:         "Chat provider failed; using deterministic fallback"
+357:       const fallbackProvider = createDeterministicMockProvider(
+358:         error instanceof ProviderError ? error.code : "provider_unknown_error"
+361:         projectId: request.params.projectId,
+364:         messages: chatHistoryForProvider(messages)
+368:     const assistantMessage: ChatMessage = {
+370:       projectId: request.params.projectId,
+377:     store.messagesByProject[request.params.projectId] = messages;
+382:       provider: providerDiagnostics(completion.provider, completion.fallbackUsed),
+390:       return sendError(request, reply, 422, "chat_invalid", "Request payload is invalid.");
+-- total 398
+
+## apps/api/src/store.ts

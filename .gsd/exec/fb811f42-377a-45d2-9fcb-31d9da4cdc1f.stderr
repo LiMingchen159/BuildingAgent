@@ -1,0 +1,12 @@
+filter:  apps/web/src/appShell.test.tsx
+include: **/*.{test,spec}.?(c|m)[jt]s?(x)
+exclude:  **/node_modules/**, **/dist/**, **/cypress/**, **/.{idea,git,cache,output,temp}/**, **/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*
+
+No test files found, exiting with code 1
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /mnt/d/Git_Project/BuildingAgent/apps/web
+npm error workspace @building-agent/web@0.1.0
+npm error location /mnt/d/Git_Project/BuildingAgent/apps/web
+npm error command failed
+npm error command sh -c vitest run --run apps/web/src/appShell.test.tsx

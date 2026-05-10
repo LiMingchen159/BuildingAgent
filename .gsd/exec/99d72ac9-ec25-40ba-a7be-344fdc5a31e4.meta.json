@@ -1,0 +1,18 @@
+{
+  "id": "99d72ac9-ec25-40ba-a7be-344fdc5a31e4",
+  "runtime": "bash",
+  "purpose": "Re-run app shell tests after root guard",
+  "script_chars": 71,
+  "started_at": "2026-05-10T18:38:54.446Z",
+  "finished_at": "2026-05-10T18:39:45.985Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 51539,
+  "stdout_bytes": 562,
+  "stderr_bytes": 663,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/99d72ac9-ec25-40ba-a7be-344fdc5a31e4.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/99d72ac9-ec25-40ba-a7be-344fdc5a31e4.stderr"
+}

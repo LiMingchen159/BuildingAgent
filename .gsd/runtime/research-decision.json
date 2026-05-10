@@ -1,6 +1,0 @@
-{
-  "decision": "skip",
-  "decided_at": "2026-05-10T08:41:12.679Z",
-  "source": "workflow-preferences",
-  "reason": "deterministic-default"
-}

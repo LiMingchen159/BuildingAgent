@@ -1,0 +1,18 @@
+{
+  "id": "1390e01f-d861-42ce-94cc-e0bc8844f79d",
+  "runtime": "bash",
+  "purpose": "Run app shell tests after removing jsdom import",
+  "script_chars": 71,
+  "started_at": "2026-05-10T18:43:30.301Z",
+  "finished_at": "2026-05-10T18:44:27.474Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 57173,
+  "stdout_bytes": 492,
+  "stderr_bytes": 525,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/1390e01f-d861-42ce-94cc-e0bc8844f79d.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/1390e01f-d861-42ce-94cc-e0bc8844f79d.stderr"
+}

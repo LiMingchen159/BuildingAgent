@@ -1,0 +1,6 @@
+
+> @building-agent/web@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+src/appShell.test.tsx(4,23): error TS7016: Could not find a declaration file for module 'jsdom'. '/mnt/d/Git_Project/BuildingAgent/node_modules/jsdom/lib/api.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/jsdom` if it exists or add a new declaration (.d.ts) file containing `declare module 'jsdom';`

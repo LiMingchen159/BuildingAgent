@@ -1,0 +1,110 @@
+Test names:
+apps/web/src/App.test.tsx:144:describe("BuildingAgent Web flow", () => {
+apps/web/src/App.test.tsx:145:  it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
+apps/web/src/App.test.tsx:200:  it("guards the workspace when unauthenticated and clears invalid stored tokens", async () => {
+apps/web/src/App.test.tsx:220:  it("displays forbidden API errors with request ids without mutating the selected project", async () => {
+apps/web/src/App.test.tsx:252:  it("keeps current chat state on chat failure and shows the backend diagnostic", async () => {
+apps/web/src/App.test.tsx:296:  it("validates empty login fields, blank chat messages, malformed JSON, and local API outages", async () => {
+apps/web/src/App.test.tsx:342:  it("surfaces malformed API JSON as api_malformed without crashing", async () => {
+apps/web/src/App.test.tsx:364:  it("renders read-only selected projects with management inspection while chat compose remains disabled", async () => {
+apps/web/src/App.test.tsx:383:  it("shows requestId-aware registry and management diagnostics without clearing the selected project", async () => {
+apps/web/src/App.test.tsx:406:  it("surfaces malformed registry and management payloads as api_malformed and supports empty placeholder lists", async () => {
+apps/web/src/App.test.tsx:435:  it("fails closed on malformed S04 chat responses without appending user or assistant messages", async () => {
+apps/web/src/App.test.tsx:482:  it("requires assistant messages and well-formed redaction-safe provider metadata on chat POST", async () => {
+apps/web/src/App.test.tsx:528:  it("surfaces provider error envelopes with request ids without leaking secret-looking text", async () => {
+apps/cli/src/registry.test.ts:38:describe("registry and management inspection commands", () => {
+apps/cli/src/registry.test.ts:60:  it("surfaces placeholder-only registry and management metadata with request ids", async () => {
+apps/cli/src/registry.test.ts:89:  it("fails closed for missing auth and malformed placeholder payloads", async () => {
+apps/cli/src/commands.ts:169:    const [rawKey, inlineValue] = arg.slice(2).split("=", 2);
+apps/cli/src/config.test.ts:7:describe("cli config store", () => {
+apps/cli/src/config.test.ts:8:  it("uses an isolated home directory and never touches the real home", async () => {
+apps/cli/src/config.test.ts:28:  it("surfaces redaction-safe diagnostics for malformed config", async () => {
+apps/cli/src/commands.test.ts:28:describe("authenticated cli commands", () => {
+apps/cli/src/commands.test.ts:50:  it("logs in, persists auth, selects a project, and reuses it for chat in fresh invocations", async () => {
+apps/cli/src/commands.test.ts:113:  it("preserves backend error codes and request ids for forbidden project selection", async () => {
+apps/cli/src/commands.test.ts:131:  it("fails closed for missing auth and blank chat input without leaking secrets", async () => {
+apps/cli/src/commands.test.ts:149:  it("fails closed for malformed chat post payloads while preserving canonical provider errors", async () => {
+apps/cli/src/commands.test.ts:189:  it("surfaces registry and management placeholder state through the saved session", async () => {
+apps/api/src/registry.test.ts:29:describe("placeholder registry and management API contracts", () => {
+apps/api/src/registry.test.ts:30:  it("lists bounded synthetic registry data for an authenticated user", async () => {
+apps/api/src/registry.test.ts:51:  it("rejects missing, malformed, and unknown auth for registry with canonical envelopes", async () => {
+apps/api/src/registry.test.ts:71:  it("requires project membership and matching selected project before management listing", async () => {
+apps/api/src/registry.test.ts:100:  it("lists bounded synthetic management data for the selected authorized project", async () => {
+apps/api/src/registry.test.ts:125:  it("enforces read permission for project management listings", async () => {
+apps/api/src/registry.test.ts:141:  it("bounds registry and management arrays by maxListSize", async () => {
+apps/api/src/index.ts:13:  process.exit(1);
+apps/api/src/chat.test.ts:38:describe("project-scoped chat contract", () => {
+apps/api/src/chat.test.ts:39:  it("requires auth and a matching selected project before reading chat", async () => {
+apps/api/src/chat.test.ts:55:  it("stores a bounded user/assistant turn and returns provider diagnostics for the selected project", async () => {
+apps/api/src/chat.test.ts:122:  it("falls back deterministically when no provider credentials are configured", async () => {
+apps/api/src/chat.test.ts:149:  it("does not invoke the provider before auth, project, selection, permission, or body denial paths", async () => {
+apps/api/src/chat.test.ts:194:  it("preserves canonical provider error envelopes and avoids storing unsafe assistant content", async () => {
+apps/api/src/chat.test.ts:227:  it("uses explicit fallback metadata when configured provider failure fallback is allowed", async () => {
+apps/api/src/chat.test.ts:262:  it("rechecks membership on every operation and isolates projects between users", async () => {
+apps/api/src/providers.test.ts:24:describe("chat provider resolution and adapters", () => {
+apps/api/src/providers.test.ts:25:  it("uses deterministic mock fallback when no real provider credentials are configured", async () => {
+apps/api/src/providers.test.ts:47:  it("prefers BUILDING_AGENT_LLM_* configuration while keeping mock explicit", async () => {
+apps/api/src/providers.test.ts:80:  it("prefers a configured OpenAI-compatible provider and sends only chat messages to fetch", async () => {
+apps/api/src/providers.test.ts:112:  it("normalizes HTTP and malformed response failures without exposing provider secrets", async () => {
+apps/api/src/providers.test.ts:154:  it("allows explicit deterministic fallback provider construction for configured failure paths", async () => {
+apps/api/src/auth.ts:52:  const parts = header.trim().split(/\s+/u);
+apps/api/src/auth.test.ts:10:describe("auth, session, and project contract", () => {
+apps/api/src/auth.test.ts:11:  it("exposes health without authentication and includes a request id", async () => {
+apps/api/src/auth.test.ts:20:  it("logs in a seeded user without exposing the token in logs", async () => {
+apps/api/src/auth.test.ts:36:  it("rejects empty credentials with a canonical error", async () => {
+apps/api/src/auth.test.ts:54:  it("rejects missing, malformed, and unknown bearer tokens", async () => {
+apps/api/src/auth.test.ts:78:  it("returns session and bounded authorized projects for a valid token", async () => {
+apps/api/src/auth.test.ts:104:  it("selects an authorized project and rejects a forbidden project", async () => {
+
+TODO/mock keywords in web:
+apps/web/src/styles.css:266:.placeholder-badge,
+apps/web/src/styles.css:278:.placeholder-badge {
+apps/web/src/styles.css:327:.status-placeholder {
+apps/web/src/styles.css:332:.status-mock {
+apps/web/src/App.tsx:159:  return <span className="placeholder-badge">{label}</span>;
+apps/web/src/App.tsx:253:        <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project…" : "This project is read-only for your account."} />
+apps/web/src/App.tsx:275:          <ItemList<RuntimeProviderSummary> items={registry.runtimeProviders} getMeta={(item) => item.kind} emptyText="No runtime provider placeholders returned." />
+apps/web/src/App.tsx:276:          <h3>Tools</h3>
+apps/web/src/App.tsx:277:          <ItemList<ToolSummary> items={registry.tools} getMeta={(item) => item.category} emptyText="No tool placeholders returned." />
+apps/web/src/App.tsx:278:          <h3>Skills</h3>
+apps/web/src/App.tsx:279:          <ItemList<SkillSummary> items={registry.skills} getMeta={(item) => item.domain} emptyText="No skill placeholders returned." />
+apps/web/src/App.tsx:292:          <h2 id="gateways-title">Project gateway placeholders</h2>
+apps/web/src/App.tsx:298:      {management ? <ItemList<GatewaySummary> items={management.gateways} getMeta={(item) => item.protocol} emptyText="No project gateway placeholders returned." /> : <EmptyState>Project management data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:300:      {registry ? <ItemList<GatewaySummary> items={registry.gateways} getMeta={(item) => item.protocol} emptyText="No registry gateway placeholders returned." /> : <EmptyState>Registry gateway data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:315:      <p className="muted">Capability cards are mock or placeholder data only and contain no customer building records.</p>
+apps/web/src/App.tsx:319:      {management ? <ItemList<ToolSummary> items={management.tools} getMeta={(item) => item.category} emptyText="No project tool placeholders returned." /> : <EmptyState>Project tool data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:364:        <PlaceholderBadge label="Inspection surfaces are placeholder-only" />
+apps/web/src/App.test.tsx:13:  status: "placeholder",
+apps/web/src/App.test.tsx:20:  status: "placeholder",
+apps/web/src/App.test.tsx:27:  status: "placeholder",
+apps/web/src/App.test.tsx:31:  id: "gateway_bms_placeholder",
+apps/web/src/App.test.tsx:41:  status: "mock",
+apps/web/src/App.test.tsx:53:    placeholderOnly: true,
+apps/web/src/App.test.tsx:66:    placeholderOnly: true,
+apps/web/src/App.test.tsx:85:  vi.stubGlobal("fetch", fetchMock);
+apps/web/src/App.test.tsx:113:        provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
+apps/web/src/App.test.tsx:140:  vi.unstubAllGlobals();
+apps/web/src/App.test.tsx:164:    expect(screen.getAllByText(/placeholder-only/i).length).toBeGreaterThan(0);
+apps/web/src/App.test.tsx:183:    expect(diagnostics).toHaveTextContent("Provider: deterministic-mock");
+apps/web/src/App.test.tsx:184:    expect(diagnostics).toHaveTextContent("Mode: mock");
+apps/web/src/App.test.tsx:185:    expect(diagnostics).toHaveTextContent("Model: deterministic-local-mock");
+apps/web/src/App.test.tsx:190:    const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "POST");
+apps/web/src/App.test.tsx:406:  it("surfaces malformed registry and management payloads as api_malformed and supports empty placeholder lists", async () => {
+apps/web/src/App.test.tsx:407:    installBaseFetch({ registry: jsonResponse(registryBody({ placeholderOnly: undefined })) });
+apps/web/src/App.test.tsx:417:    vi.unstubAllGlobals();
+apps/web/src/App.test.tsx:425:    vi.unstubAllGlobals();
+apps/web/src/App.test.tsx:430:    expect(screen.getByText(/no runtime provider placeholders returned/i)).toBeInTheDocument();
+apps/web/src/App.test.tsx:432:    expect(screen.getByText(/no project gateway placeholders returned/i)).toBeInTheDocument();
+apps/web/src/App.test.tsx:456:          provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackUsed: true },
+apps/web/src/App.test.tsx:502:          provider: { id: "deterministic-mock", mode: "mock", model: 123, fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
+apps/web/src/api.ts:48:  mode: "mock" | "real";
+apps/web/src/api.ts:68:export type PlaceholderStatus = "placeholder" | "mock" | "not_configured";
+apps/web/src/api.ts:104:  placeholderOnly: true;
+apps/web/src/api.ts:114:  placeholderOnly: true;
+apps/web/src/api.ts:120:const PLACEHOLDER_STATUSES = new Set(["placeholder", "mock", "not_configured"]);
+apps/web/src/api.ts:256:  if (typeof payload.limit !== "number" || payload.placeholderOnly !== true || typeof payload.requestId !== "string") {
+apps/web/src/api.ts:346:    placeholderOnly: true,
+apps/web/src/api.ts:363:    placeholderOnly: true,
+apps/web/src/api.ts:376:  if (!isRecord(value) || typeof value.id !== "string" || (value.mode !== "mock" && value.mode !== "real") || typeof value.model !== "string") {
+
+Dependency lock markdown packages:

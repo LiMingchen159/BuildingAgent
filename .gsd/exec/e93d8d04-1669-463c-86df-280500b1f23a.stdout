@@ -1,0 +1,16 @@
+
+> @building-agent/web@0.1.0 test
+> vitest run --run src/appShell.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ❯ src/appShell.test.tsx (2 tests | 1 failed) 207ms
+   × BuildingAgent no-blank HTML shell > mountBuildingAgent removes the static fallback before React renders 174ms
+     → BuildingAgent root element was not found.
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+   Start at  02:36:45
+   Duration  47.33s (transform 220ms, setup 5.98s, collect 128ms, tests 207ms, environment 37.63s, prepare 2.25s)
+
