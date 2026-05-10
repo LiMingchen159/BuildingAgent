@@ -33,6 +33,37 @@ The API runs on `http://127.0.0.1:3000` by default. The Web app runs through Vit
 4. Send a message and verify it appears only in the selected project workspace.
 5. Select/read-only or forbidden projects through the API to see request-id-bearing error banners.
 
+### CLI and smoke path
+
+Build the workspaces before invoking the CLI directly. The CLI persists its local config under your home directory by default; set `BUILDING_AGENT_CLI_HOME` when you want an isolated throwaway config directory.
+
+```bash
+npm run build
+BUILDING_AGENT_CLI_HOME=/tmp/building-agent-cli \
+  node apps/cli/dist/apps/cli/src/index.js login \
+  --email ada@example.test \
+  --password local-dev-password \
+  --api-url http://127.0.0.1:3000
+BUILDING_AGENT_CLI_HOME=/tmp/building-agent-cli \
+  node apps/cli/dist/apps/cli/src/index.js use project_alpha
+BUILDING_AGENT_CLI_HOME=/tmp/building-agent-cli \
+  node apps/cli/dist/apps/cli/src/index.js registry
+BUILDING_AGENT_CLI_HOME=/tmp/building-agent-cli \
+  node apps/cli/dist/apps/cli/src/index.js management
+BUILDING_AGENT_CLI_HOME=/tmp/building-agent-cli \
+  node apps/cli/dist/apps/cli/src/index.js session
+```
+
+CLI output is JSON and includes backend `requestId` values where the API provides them. Saved bearer tokens are redacted from command output and should not be copied into logs or documentation.
+
+To prove the local API, Web UI proxy, and CLI agree on the same seeded contracts, run:
+
+```bash
+npm run smoke
+```
+
+The smoke runner builds all workspaces, probes or starts the API and Web dev servers, invokes the CLI through the workspace-linked built entrypoint, performs login → session → project selection → registry → management → chat checks, and cleans up child processes and the temporary CLI config directory on success, failure, or timeout. Its logs are prefixed with `[smoke]` stage markers plus child process exit codes so startup, reachability, CLI, and cleanup failures are easy to localize without printing auth material.
+
 ## Verification commands
 
 ```bash
