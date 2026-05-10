@@ -1,36 +1,10 @@
 #!/usr/bin/env node
-import { CliConfigError, getConfigDiagnostics, loadConfig, redactConfig } from "./config.js";
-
-function printJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-async function main(argv: string[]): Promise<number> {
-  const [command] = argv;
-
-  if (!command || command === "help" || command === "--help") {
-    process.stdout.write("building-agent <session|config-path>\n");
-    return 0;
-  }
-
-  if (command === "config-path") {
-    printJson(getConfigDiagnostics());
-    return 0;
-  }
-
-  if (command === "session") {
-    const diagnostics = getConfigDiagnostics();
-    const config = await loadConfig();
-    printJson({ diagnostics, config: redactConfig(config) });
-    return 0;
-  }
-
-  process.stderr.write(`Unknown command: ${command}\n`);
-  return 2;
-}
+import { CliConfigError } from "./config.js";
+import { runCommand } from "./commands.js";
 
 try {
-  process.exitCode = await main(process.argv.slice(2));
+  const result = await runCommand(process.argv.slice(2));
+  process.exitCode = result.exitCode;
 } catch (error) {
   if (error instanceof CliConfigError) {
     process.stderr.write(`${JSON.stringify(error.toJSON())}\n`);

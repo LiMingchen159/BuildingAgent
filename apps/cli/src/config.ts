@@ -9,6 +9,9 @@ export interface CliConfig {
   apiUrl?: string;
   token?: string;
   selectedProjectId?: string;
+  lastCommand?: string;
+  lastErrorCode?: string;
+  lastRequestId?: string;
 }
 
 export interface ConfigStoreOptions {
@@ -68,7 +71,7 @@ function assertPlainConfig(value: unknown, diagnostics: ConfigDiagnostics): CliC
   }
 
   const candidate = value as Record<string, unknown>;
-  for (const key of ["apiUrl", "token", "selectedProjectId"] as const) {
+  for (const key of ["apiUrl", "token", "selectedProjectId", "lastCommand", "lastErrorCode", "lastRequestId"] as const) {
     if (candidate[key] !== undefined && typeof candidate[key] !== "string") {
       throw new CliConfigError("config_parse_failed", `CLI config field ${key} must be a string.`, diagnostics);
     }
@@ -77,7 +80,10 @@ function assertPlainConfig(value: unknown, diagnostics: ConfigDiagnostics): CliC
   return {
     ...(typeof candidate.apiUrl === "string" ? { apiUrl: candidate.apiUrl } : {}),
     ...(typeof candidate.token === "string" ? { token: candidate.token } : {}),
-    ...(typeof candidate.selectedProjectId === "string" ? { selectedProjectId: candidate.selectedProjectId } : {})
+    ...(typeof candidate.selectedProjectId === "string" ? { selectedProjectId: candidate.selectedProjectId } : {}),
+    ...(typeof candidate.lastCommand === "string" ? { lastCommand: candidate.lastCommand } : {}),
+    ...(typeof candidate.lastErrorCode === "string" ? { lastErrorCode: candidate.lastErrorCode } : {}),
+    ...(typeof candidate.lastRequestId === "string" ? { lastRequestId: candidate.lastRequestId } : {})
   };
 }
 
