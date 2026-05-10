@@ -9,6 +9,7 @@ import {
   login,
   selectProject,
   sendChatMessage,
+  type ChatProviderDiagnostics,
   type BuildingCapabilitySummary,
   type ChatMessage,
   type GatewaySummary,
@@ -200,7 +201,23 @@ function ItemList<T extends { id: string; name: string; status: string; descript
   );
 }
 
-function ChatWorkspace({ project, messages, onSend, busy }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean }) {
+function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: string | undefined) {
+  if (!provider) {
+    return null;
+  }
+  return (
+    <p className="provider-notice" aria-label="Provider diagnostics">
+      <span>Provider: {provider.id}</span>
+      <span>Mode: {provider.mode}</span>
+      <span>Model: {provider.model}</span>
+      <span>Fallback: {provider.fallbackUsed ? "yes" : "no"}</span>
+      {provider.fallbackReason ? <span>Reason: {provider.fallbackReason}</span> : null}
+      {requestId ? <span>Request: {requestId}</span> : null}
+    </p>
+  );
+}
+
+function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
 
@@ -221,11 +238,12 @@ function ChatWorkspace({ project, messages, onSend, busy }: { project: ProjectSu
         <h2 id="chat-title">{project.name} chat</h2>
         <p className="muted">Project id: <strong>{project.id}</strong></p>
       </div>
+      {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
         {messages.length === 0 ? <p className="empty-state">No messages yet. Start with a project-scoped question.</p> : null}
         {messages.map((message) => (
-          <article className="message" key={message.id}>
-            <span>{message.userId}</span>
+          <article className={`message message-${message.role}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
+            <span>{message.role === "assistant" ? "Assistant" : message.userId}</span>
             <p>{message.content}</p>
           </article>
         ))}
@@ -308,6 +326,8 @@ function BuildingDomainPanel({ registry, management }: { registry: RegistryRespo
 function Workspace({
   project,
   messages,
+  providerDiagnostics,
+  providerRequestId,
   registry,
   management,
   activeTab,
@@ -317,6 +337,8 @@ function Workspace({
 }: {
   project: ProjectSummary;
   messages: ChatMessage[];
+  providerDiagnostics: ChatProviderDiagnostics | null;
+  providerRequestId: string | undefined;
   registry: RegistryResponse | null;
   management: ProjectManagementResponse | null;
   activeTab: WorkspaceTab;
@@ -348,7 +370,7 @@ function Workspace({
           </button>
         ))}
       </nav>
-      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
       {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
       {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
@@ -364,6 +386,8 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatProviderDiagnostics, setChatProviderDiagnostics] = useState<ChatProviderDiagnostics | null>(null);
+  const [chatProviderRequestId, setChatProviderRequestId] = useState<string | undefined>(undefined);
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
   const [management, setManagement] = useState<ProjectManagementResponse | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
@@ -378,6 +402,8 @@ export default function App() {
     setProjects([]);
     setSelectedProject(null);
     setMessages([]);
+    setChatProviderDiagnostics(null);
+    setChatProviderRequestId(undefined);
     setRegistry(null);
     setManagement(null);
     setActiveTab("chat");
@@ -473,6 +499,8 @@ export default function App() {
       setSession(selected.session);
       setSelectedProject(project);
       setMessages(chat.messages);
+      setChatProviderDiagnostics(null);
+      setChatProviderRequestId(undefined);
       setActiveTab("chat");
       storeSession({ token, user, projectId: project.id });
       setBanner({ tone: "success", title: "Project selected", message: `${project.name} is now active. Placeholder registry and management surfaces loaded.`, requestId: selected.requestId });
@@ -499,8 +527,10 @@ export default function App() {
     setBusy(true);
     try {
       const posted = await sendChatMessage(token, selectedProject.id, message.trim());
-      setMessages((current) => [...current, posted.message]);
-      setBanner({ tone: "success", title: "Message sent", message: "The API accepted the project-scoped message.", requestId: posted.requestId });
+      setMessages((current) => [...current, posted.message, posted.assistantMessage]);
+      setChatProviderDiagnostics(posted.provider);
+      setChatProviderRequestId(posted.requestId);
+      setBanner({ tone: "success", title: "Message sent", message: "The assistant response is ready with redaction-safe provider diagnostics.", requestId: posted.requestId });
     } catch (error) {
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
@@ -527,7 +557,7 @@ export default function App() {
       {bootstrapping ? <main className="workspace-card"><p>Checking your saved session…</p></main> : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
-      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
+      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </div>
   );

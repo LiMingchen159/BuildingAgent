@@ -39,8 +39,24 @@ export interface ChatMessage {
   id: string;
   projectId: string;
   userId: string;
-  role: "user";
+  role: "user" | "assistant";
   content: string;
+}
+
+export interface ChatProviderDiagnostics {
+  id: string;
+  mode: "mock" | "real";
+  model: string;
+  fallbackUsed: boolean;
+  fallbackReason?: string | undefined;
+}
+
+export interface SendChatResponse {
+  message: ChatMessage;
+  assistantMessage: ChatMessage;
+  provider: ChatProviderDiagnostics;
+  fallbackUsed: boolean;
+  requestId: string;
 }
 
 export interface LoginResponse {
@@ -309,12 +325,7 @@ export async function getChat(token: string, projectId: string): Promise<{ messa
     throw malformed("Chat returned an unexpected response.");
   }
   return {
-    messages: payload.messages.flatMap((message): ChatMessage[] => {
-      if (!isRecord(message) || typeof message.id !== "string" || typeof message.projectId !== "string" || typeof message.userId !== "string" || message.role !== "user" || typeof message.content !== "string") {
-        return [];
-      }
-      return [{ id: message.id, projectId: message.projectId, userId: message.userId, role: message.role, content: message.content }];
-    }),
+    messages: payload.messages.map((message) => parseChatMessage(message, "Chat returned an unexpected message.")),
     requestId: payload.requestId
   };
 }
@@ -354,23 +365,51 @@ export async function getProjectManagement(token: string, projectId: string): Pr
   };
 }
 
-export async function sendChatMessage(token: string, projectId: string, message: string): Promise<{ message: ChatMessage; requestId: string }> {
+function parseChatMessage(value: unknown, message: string): ChatMessage {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || typeof value.userId !== "string" || (value.role !== "user" && value.role !== "assistant") || typeof value.content !== "string") {
+    throw malformed(message);
+  }
+  return { id: value.id, projectId: value.projectId, userId: value.userId, role: value.role, content: value.content };
+}
+
+function parseProviderDiagnostics(value: unknown, fallbackUsed: boolean): ChatProviderDiagnostics {
+  if (!isRecord(value) || typeof value.id !== "string" || (value.mode !== "mock" && value.mode !== "real") || typeof value.model !== "string") {
+    throw malformed("Chat post returned unexpected provider diagnostics.");
+  }
+  if ("fallbackReason" in value && value.fallbackReason !== undefined && typeof value.fallbackReason !== "string") {
+    throw malformed("Chat post returned unexpected provider diagnostics.");
+  }
+  return {
+    id: value.id,
+    mode: value.mode,
+    model: value.model,
+    fallbackUsed,
+    ...(typeof value.fallbackReason === "string" ? { fallbackReason: value.fallbackReason } : {})
+  };
+}
+
+export async function sendChatMessage(token: string, projectId: string, message: string): Promise<SendChatResponse> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/chat`, {
     method: "POST",
     headers: authHeaders(token),
     body: JSON.stringify({ message })
   });
-  if (!isRecord(payload) || !isRecord(payload.message) || typeof payload.message.id !== "string" || typeof payload.message.projectId !== "string" || typeof payload.message.userId !== "string" || payload.message.role !== "user" || typeof payload.message.content !== "string" || typeof payload.requestId !== "string") {
+  if (!isRecord(payload) || typeof payload.requestId !== "string" || typeof payload.fallbackUsed !== "boolean") {
     throw malformed("Chat post returned an unexpected response.");
   }
+  const userMessage = parseChatMessage(payload.message, "Chat post returned an unexpected user message.");
+  if (userMessage.role !== "user") {
+    throw malformed("Chat post returned an unexpected user message.");
+  }
+  const assistantMessage = parseChatMessage(payload.assistantMessage, "Chat post returned an unexpected assistant message.");
+  if (assistantMessage.role !== "assistant") {
+    throw malformed("Chat post returned an unexpected assistant message.");
+  }
   return {
-    message: {
-      id: payload.message.id,
-      projectId: payload.message.projectId,
-      userId: payload.message.userId,
-      role: payload.message.role,
-      content: payload.message.content
-    },
+    message: userMessage,
+    assistantMessage,
+    provider: parseProviderDiagnostics(payload.provider, payload.fallbackUsed),
+    fallbackUsed: payload.fallbackUsed,
     requestId: payload.requestId
   };
 }
