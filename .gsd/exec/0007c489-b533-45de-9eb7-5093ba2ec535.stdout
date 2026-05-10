@@ -1,0 +1,145 @@
+### Fastify
+
+[38;5;250m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗[0m
+[38;5;248m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝[0m
+[38;5;245m███████╗█████╔╝ ██║██║     ██║     ███████╗[0m
+[38;5;243m╚════██║██╔═██╗ ██║██║     ██║     ╚════██║[0m
+[38;5;240m███████║██║  ██╗██║███████╗███████╗███████║[0m
+[38;5;238m╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝[0m
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mmcollina/skills@fastify-best-practices[0m [36m1.9K installs[0m
+[38;5;102m└ https://skills.sh/mcollina/skills/fastify-best-practices[0m
+
+[38;5;145mmindrally/skills@fastify-typescript[0m [36m353 installs[0m
+[38;5;102m└ https://skills.sh/mindrally/skills/fastify-typescript[0m
+
+[38;5;145mbobmatnyc/claude-mpm-skills@fastify[0m [36m347 installs[0m
+[38;5;102m└ https://skills.sh/bobmatnyc/claude-mpm-skills/fastify[0m
+
+[38;5;145mauth0/agent-skills@auth0-fastify-api[0m [36m215 installs[0m
+[38;5;102m└ https://skills.sh/auth0/agent-skills/auth0-fastify-api[0m
+
+[38;5;145mauth0/agent-skills@auth0-fastify[0m [36m212 installs[0m
+[38;5;102m└ https://skills.sh/auth0/agent-skills/auth0-fastify[0m
+
+[38;5;145mthecodepace/fastify-skills@fastify-best-practise[0m [36m101 installs[0m
+[38;5;102m└ https://skills.sh/thecodepace/fastify-skills/fastify-best-practise[0m
+
+### React
+
+[38;5;250m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗[0m
+[38;5;248m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝[0m
+[38;5;245m███████╗█████╔╝ ██║██║     ██║     ███████╗[0m
+[38;5;243m╚════██║██╔═██╗ ██║██║     ██║     ╚════██║[0m
+[38;5;240m███████║██║  ██╗██║███████╗███████╗███████║[0m
+[38;5;238m╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝[0m
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mvercel-labs/agent-skills@vercel-react-best-practices[0m [36m385.7K installs[0m
+[38;5;102m└ https://skills.sh/vercel-labs/agent-skills/vercel-react-best-practices[0m
+
+[38;5;145mvercel-labs/agent-skills@vercel-react-native-skills[0m [36m112.5K installs[0m
+[38;5;102m└ https://skills.sh/vercel-labs/agent-skills/vercel-react-native-skills[0m
+
+[38;5;145mgoogle-labs-code/stitch-skills@react:components[0m [36m43.2K installs[0m
+[38;5;102m└ https://skills.sh/google-labs-code/stitch-skills/react:components[0m
+
+[38;5;145mvercel-labs/agent-skills@vercel-react-view-transitions[0m [36m29.9K installs[0m
+[38;5;102m└ https://skills.sh/vercel-labs/agent-skills/vercel-react-view-transitions[0m
+
+[38;5;145mcallstackincubator/agent-skills@react-native-best-practices[0m [36m13K installs[0m
+[38;5;102m└ https://skills.sh/callstackincubator/agent-skills/react-native-best-practices[0m
+
+[38;5;145mvercel-labs/json-render@react[0m [36m1.8K installs[0m
+[38;5;102m└ https://skills.sh/vercel-labs/json-render/react[0m
+
+### Vite
+
+[38;5;250m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗[0m
+[38;5;248m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝[0m
+[38;5;245m███████╗█████╔╝ ██║██║     ██║     ███████╗[0m
+[38;5;243m╚════██║██╔═██╗ ██║██║     ██║     ╚════██║[0m
+[38;5;240m███████║██║  ██╗██║███████╗███████╗███████║[0m
+[38;5;238m╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝[0m
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mantfu/skills@vite[0m [36m21.4K installs[0m
+[38;5;102m└ https://skills.sh/antfu/skills/vite[0m
+
+[38;5;145mantfu/skills@vitest[0m [36m17.4K installs[0m
+[38;5;102m└ https://skills.sh/antfu/skills/vitest[0m
+
+[38;5;145mgoogleworkspace/cli@recipe-batch-invite-to-event[0m [36m12K installs[0m
+[38;5;102m└ https://skills.sh/googleworkspace/cli/recipe-batch-invite-to-event[0m
+
+[38;5;145mantfu/skills@vitepress[0m [36m7.3K installs[0m
+[38;5;102m└ https://skills.sh/antfu/skills/vitepress[0m
+
+[38;5;145msiviter-xyz/dot-agent@create-skill[0m [36m2K installs[0m
+[38;5;102m└ https://skills.sh/siviter-xyz/dot-agent/create-skill[0m
+
+[38;5;145monmax/nuxt-skills@vitest[0m [36m1.7K installs[0m
+[38;5;102m└ https://skills.sh/onmax/nuxt-skills/vitest[0m
+
+### Vitest
+
+[38;5;250m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗[0m
+[38;5;248m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝[0m
+[38;5;245m███████╗█████╔╝ ██║██║     ██║     ███████╗[0m
+[38;5;243m╚════██║██╔═██╗ ██║██║     ██║     ╚════██║[0m
+[38;5;240m███████║██║  ██╗██║███████╗███████╗███████║[0m
+[38;5;238m╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝[0m
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mantfu/skills@vitest[0m [36m17.4K installs[0m
+[38;5;102m└ https://skills.sh/antfu/skills/vitest[0m
+
+[38;5;145monmax/nuxt-skills@vitest[0m [36m1.7K installs[0m
+[38;5;102m└ https://skills.sh/onmax/nuxt-skills/vitest[0m
+
+[38;5;145msupabase/supabase@vitest[0m [36m987 installs[0m
+[38;5;102m└ https://skills.sh/supabase/supabase/vitest[0m
+
+[38;5;145mpproenca/dot-skills@vitest[0m [36m912 installs[0m
+[38;5;102m└ https://skills.sh/pproenca/dot-skills/vitest[0m
+
+[38;5;145mjezweb/claude-skills@vitest[0m [36m837 installs[0m
+[38;5;102m└ https://skills.sh/jezweb/claude-skills/vitest[0m
+
+[38;5;145mweb-infra-dev/midscene-skills@vitest-midscene-e2e[0m [36m755 installs[0m
+[38;5;102m└ https://skills.sh/web-infra-dev/midscene-skills/vitest-midscene-e2e[0m
+
+### TypeScript
+
+[38;5;250m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗[0m
+[38;5;248m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝[0m
+[38;5;245m███████╗█████╔╝ ██║██║     ██║     ███████╗[0m
+[38;5;243m╚════██║██╔═██╗ ██║██║     ██║     ╚════██║[0m
+[38;5;240m███████║██║  ██╗██║███████╗███████╗███████║[0m
+[38;5;238m╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝[0m
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mwshobson/agents@typescript-advanced-types[0m [36m39.8K installs[0m
+[38;5;102m└ https://skills.sh/wshobson/agents/typescript-advanced-types[0m
+
+[38;5;145mgithub/awesome-copilot@javascript-typescript-jest[0m [36m10.3K installs[0m
+[38;5;102m└ https://skills.sh/github/awesome-copilot/javascript-typescript-jest[0m
+
+[38;5;145mgithub/awesome-copilot@typescript-mcp-server-generator[0m [36m9.9K installs[0m
+[38;5;102m└ https://skills.sh/github/awesome-copilot/typescript-mcp-server-generator[0m
+
+[38;5;145msickn33/antigravity-awesome-skills@typescript-expert[0m [36m8.2K installs[0m
+[38;5;102m└ https://skills.sh/sickn33/antigravity-awesome-skills/typescript-expert[0m
+
+[38;5;145mdotneet/claude-code-marketplace@typescript-react-reviewer[0m [36m6.7K installs[0m
+[38;5;102m└ https://skills.sh/dotneet/claude-code-marketplace/typescript-react-reviewer[0m
+
+[38;5;145msoftaworks/agent-toolkit@openapi-to-typescript[0m [36m3.6K installs[0m
+[38;5;102m└ https://skills.sh/softaworks/agent-toolkit/openapi-to-typescript[0m
+

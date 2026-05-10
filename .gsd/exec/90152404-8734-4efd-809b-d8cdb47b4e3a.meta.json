@@ -1,0 +1,18 @@
+{
+  "id": "90152404-8734-4efd-809b-d8cdb47b4e3a",
+  "runtime": "bash",
+  "purpose": "Summarize source tree excluding generated deps",
+  "script_chars": 321,
+  "started_at": "2026-05-10T16:48:29.509Z",
+  "finished_at": "2026-05-10T16:48:31.022Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 1513,
+  "stdout_bytes": 20161,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/90152404-8734-4efd-809b-d8cdb47b4e3a.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/90152404-8734-4efd-809b-d8cdb47b4e3a.stderr"
+}

@@ -1,0 +1,255 @@
+Non-generated source files:
+apps/api/dist
+apps/api/node_modules
+apps/api/package.json
+apps/api/src/auth.test.ts
+apps/api/src/auth.ts
+apps/api/src/chat.test.ts
+apps/api/src/index.ts
+apps/api/src/providers.test.ts
+apps/api/src/providers.ts
+apps/api/src/registry.test.ts
+apps/api/src/seed.ts
+apps/api/src/server.ts
+apps/api/tsconfig.json
+apps/cli/dist
+apps/cli/node_modules
+apps/cli/package.json
+apps/cli/src/api.ts
+apps/cli/src/commands.test.ts
+apps/cli/src/commands.ts
+apps/cli/src/config.test.ts
+apps/cli/src/config.ts
+apps/cli/src/index.ts
+apps/cli/src/registry.test.ts
+apps/cli/src/registry.ts
+apps/cli/tsconfig.json
+apps/web/dist
+apps/web/index.html
+apps/web/node_modules
+apps/web/package.json
+apps/web/src/App.test.tsx
+apps/web/src/App.tsx
+apps/web/src/api.ts
+apps/web/src/main.tsx
+apps/web/src/styles.css
+apps/web/src/test/setup.ts
+apps/web/tsconfig.json
+apps/web/vite.config.ts
+scripts/run-api-tests.cjs
+scripts/run-tests.cjs
+scripts/smoke-local.cjs
+
+Data/project/auth/building references counts:
+datasource: 0
+data source: 0
+source: 1
+project: 500
+auth: 127
+permission: 60
+bim: 0
+brick: 0
+time-series: 0
+timeseries: 0
+mapping: 0
+
+Route/function names (api src):
+apps/api/src/seed.ts:1:export type Permission = "chat:read" | "chat:write";
+apps/api/src/seed.ts:47:  tools: PlaceholderTool[];
+apps/api/src/seed.ts:84:  projects: SeedProject[];
+apps/api/src/seed.ts:88:  tools: PlaceholderTool[];
+apps/api/src/seed.ts:89:  skills: PlaceholderSkill[];
+apps/api/src/seed.ts:99:  const projects: SeedProject[] = [
+apps/api/src/seed.ts:129:  const tools: PlaceholderTool[] = [
+apps/api/src/seed.ts:153:  const skills: PlaceholderSkill[] = [
+apps/api/src/seed.ts:233:    projects.map((project, index) => [
+apps/api/src/seed.ts:238:        tools: tools.slice(0, 2)
+apps/api/src/seed.ts:252:    projects,
+apps/api/src/seed.ts:254:      { userId: "user_ada", projectId: "project_alpha", permissions: ["chat:read", "chat:write"] },
+apps/api/src/seed.ts:255:      { userId: "user_ada", projectId: "project_beta", permissions: ["chat:read"] },
+apps/api/src/seed.ts:256:      { userId: "user_grace", projectId: "project_gamma", permissions: ["chat:read", "chat:write"] }
+apps/api/src/seed.ts:258:    messagesByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ChatMessage[]])),
+apps/api/src/seed.ts:260:    tools,
+apps/api/src/seed.ts:261:    skills,
+apps/api/src/seed.ts:275:    projects: store.projects.map((project) => ({ ...project })),
+apps/api/src/seed.ts:284:    tools: store.tools.map((tool) => ({ ...tool })),
+apps/api/src/seed.ts:285:    skills: store.skills.map((skill) => ({ ...skill })),
+apps/api/src/seed.ts:294:          tools: management.tools.map((tool) => ({ ...tool }))
+apps/api/src/server.ts:1:import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+apps/api/src/server.ts:2:import cors from "@fastify/cors";
+apps/api/src/server.ts:4:  authenticateRequest,
+apps/api/src/server.ts:11:} from "./auth.js";
+apps/api/src/server.ts:27:  chatProvider?: ChatProvider;
+apps/api/src/server.ts:101:function chatHistoryForProvider(messages: ChatMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
+apps/api/src/server.ts:114:  const provider = options.chatProvider ?? providerResolver(env);
+apps/api/src/server.ts:126:  void app.register(cors, { origin: true });
+apps/api/src/server.ts:128:  app.get("/health", async (request) => ({
+apps/api/src/server.ts:134:  app.post<{ Body: LoginBody }>("/api/login", async (request, reply) => {
+apps/api/src/server.ts:137:      return sendError(request, reply, 401, "auth_invalid", "Invalid credentials.");
+apps/api/src/server.ts:142:      return sendError(request, reply, 401, "auth_invalid", "Invalid credentials.");
+apps/api/src/server.ts:147:      return sendError(request, reply, 401, "auth_invalid", "Invalid credentials.");
+apps/api/src/server.ts:159:  app.get("/api/session", async (request, reply) => {
+apps/api/src/server.ts:160:    const session = authenticateRequest(request, reply, store);
+apps/api/src/server.ts:175:  app.get("/api/projects", async (request, reply) => {
+apps/api/src/server.ts:176:    const session = authenticateRequest(request, reply, store);
+apps/api/src/server.ts:182:    const projects = bounded(memberships, store.maxListSize).flatMap((membership) => {
+apps/api/src/server.ts:183:      const project = store.projects.find((candidate) => candidate.id === membership.projectId);
+apps/api/src/server.ts:187:    return { projects, limit: store.maxListSize, requestId: requestIdFor(request) };
+apps/api/src/server.ts:190:  app.get("/api/registry", async (request, reply) => {
+apps/api/src/server.ts:191:    const session = authenticateRequest(request, reply, store);
+apps/api/src/server.ts:198:      tools: boundedPlaceholderList(store.tools, store),
+apps/api/src/server.ts:199:      skills: boundedPlaceholderList(store.skills, store),
+apps/api/src/server.ts:208:  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/management", async (request, reply) => {
+apps/api/src/server.ts:209:    const session = authenticateRequest(request, reply, store);
+apps/api/src/server.ts:224:    const readable = requirePermission(request, reply, membership, "chat:read");
+apps/api/src/server.ts:232:      tools: []
+apps/api/src/server.ts:239:      tools: boundedPlaceholderList(management.tools, store),
+apps/api/src/server.ts:246:  app.post<{ Params: ProjectParams }>("/api/projects/:projectId/select", async (request, reply) => {
+apps/api/src/server.ts:247:    const session = authenticateRequest(request, reply, store);
+apps/api/src/server.ts:273:  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/chat", async (request, reply) => {
+apps/api/src/server.ts:274:    const session = authenticateRequest(request, reply, store);
+apps/api/src/server.ts:289:    const readable = requirePermission(request, reply, membership, "chat:read");
+apps/api/src/server.ts:301:  app.post<{ Params: ProjectParams; Body: ChatBody }>("/api/projects/:projectId/chat", async (request, reply) => {
+apps/api/src/server.ts:302:    const session = authenticateRequest(request, reply, store);
+apps/api/src/server.ts:317:    const writable = requirePermission(request, reply, membership, "chat:write");
+apps/api/src/server.ts:324:      return sendError(request, reply, 422, "chat_invalid", "Chat message must be 1-1000 characters.");
+apps/api/src/server.ts:345:        messages: chatHistoryForProvider(messages)
+apps/api/src/server.ts:364:        messages: chatHistoryForProvider(messages)
+apps/api/src/server.ts:388:  app.setErrorHandler((error, request, reply) => {
+apps/api/src/server.ts:390:      return sendError(request, reply, 422, "chat_invalid", "Request payload is invalid.");
+apps/api/src/providers.test.ts:19:  for (const forbidden of ["provider-test-key", "bearer", "authorization", "api_key", "apikey", "password"]) {
+apps/api/src/providers.test.ts:24:describe("chat provider resolution and adapters", () => {
+apps/api/src/providers.test.ts:72:    expect(String(calls[0]?.input)).toBe("https://provider.example/v1/chat/completions");
+apps/api/src/providers.test.ts:80:  it("prefers a configured OpenAI-compatible provider and sends only chat messages to fetch", async () => {
+apps/api/src/providers.test.ts:99:    expect(String(calls[0]?.input)).toBe("https://provider.example/v1/chat/completions");
+apps/api/src/registry.test.ts:9:  return { authorization: `Bearer ${value}` };
+apps/api/src/registry.test.ts:30:  it("lists bounded synthetic registry data for an authenticated user", async () => {
+apps/api/src/registry.test.ts:32:    const response = await app.inject({ method: "GET", url: "/api/registry", headers: bearer(adaToken) });
+apps/api/src/registry.test.ts:39:      tools: expect.arrayContaining([expect.objectContaining({ id: "tool_space_summary", status: "placeholder" })]),
+apps/api/src/registry.test.ts:40:      skills: expect.arrayContaining([expect.objectContaining({ id: "skill_building_triage", status: "placeholder" })]),
+apps/api/src/registry.test.ts:51:  it("rejects missing, malformed, and unknown auth for registry with canonical envelopes", async () => {
+apps/api/src/registry.test.ts:54:    const missing = await app.inject({ method: "GET", url: "/api/registry" });
+apps/api/src/registry.test.ts:56:    expectCanonicalError(missing.json(), "auth_missing");
+apps/api/src/registry.test.ts:58:    const malformed = await app.inject({
+apps/api/src/registry.test.ts:61:      headers: { authorization: "Token definitely-not-bearer" }
+apps/api/src/registry.test.ts:64:    expectCanonicalError(malformed.json(), "auth_invalid");
+apps/api/src/registry.test.ts:66:    const unknown = await app.inject({ method: "GET", url: "/api/registry", headers: bearer("missing-token") });
+apps/api/src/registry.test.ts:68:    expectCanonicalError(unknown.json(), "auth_invalid");
+apps/api/src/registry.test.ts:74:    const notSelected = await app.inject({
+apps/api/src/registry.test.ts:76:      url: "/api/projects/project_alpha/management",
+apps/api/src/registry.test.ts:82:    await app.inject({ method: "POST", url: "/api/projects/project_beta/select", headers: bearer(adaToken) });
+apps/api/src/registry.test.ts:83:    const wrongSelection = await app.inject({
+apps/api/src/registry.test.ts:85:      url: "/api/projects/project_alpha/management",
+apps/api/src/registry.test.ts:91:    const forbidden = await app.inject({
+apps/api/src/registry.test.ts:93:      url: "/api/projects/project_gamma/management",
+apps/api/src/registry.test.ts:100:  it("lists bounded synthetic management data for the selected authorized project", async () => {
+apps/api/src/registry.test.ts:102:    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+apps/api/src/registry.test.ts:104:    const response = await app.inject({
+apps/api/src/registry.test.ts:106:      url: "/api/projects/project_alpha/management",
+apps/api/src/registry.test.ts:117:      tools: expect.arrayContaining([expect.objectContaining({ id: "tool_space_summary", status: "placeholder" })]),
+apps/api/src/registry.test.ts:130:    await app.inject({ method: "POST", url: "/api/projects/project_gamma/select", headers: bearer(adaToken) });
+apps/api/src/registry.test.ts:131:    const denied = await app.inject({
+apps/api/src/registry.test.ts:133:      url: "/api/projects/project_gamma/management",
+apps/api/src/registry.test.ts:146:    const registry = await app.inject({ method: "GET", url: "/api/registry", headers: bearer(graceToken) });
+apps/api/src/registry.test.ts:150:    expect(registry.json().tools).toHaveLength(1);
+apps/api/src/registry.test.ts:151:    expect(registry.json().skills).toHaveLength(1);
+apps/api/src/registry.test.ts:155:    await app.inject({ method: "POST", url: "/api/projects/project_gamma/select", headers: bearer(graceToken) });
+apps/api/src/registry.test.ts:156:    const management = await app.inject({
+apps/api/src/registry.test.ts:158:      url: "/api/projects/project_gamma/management",
+apps/api/src/registry.test.ts:165:    expect(management.json().tools).toHaveLength(1);
+apps/api/src/providers.ts:167:        response = await fetchImpl(`${baseUrl}/chat/completions`, {
+apps/api/src/providers.ts:170:            authorization: `Bearer ${options.apiKey}`,
+apps/api/src/providers.ts:228:    throw new ProviderError("Unsupported chat provider configured.", {
+apps/api/src/index.ts:9:  await app.listen({ port, host });
+apps/api/src/index.ts:10:  app.log.info({ host, port }, "BuildingAgent API listening");
+apps/api/src/index.ts:12:  app.log.error({ err: error }, "BuildingAgent API failed to start");
+apps/api/src/chat.test.ts:10:  return { authorization: `Bearer ${value}` };
+apps/api/src/chat.test.ts:33:  for (const forbidden of ["secret", "apikey", "api_key", "bearer", "password", "client_secret", "private_key", "authorization"]) {
+apps/api/src/chat.test.ts:38:describe("project-scoped chat contract", () => {
+apps/api/src/chat.test.ts:39:  it("requires auth and a matching selected project before reading chat", async () => {
+apps/api/src/chat.test.ts:42:    const unauthorized = await app.inject({ method: "GET", url: "/api/projects/project_alpha/chat" });
+apps/api/src/chat.test.ts:43:    expect(unauthorized.statusCode).toBe(401);
+apps/api/src/chat.test.ts:44:    expect(unauthorized.json().error).toMatchObject({ code: "auth_missing" });
+apps/api/src/chat.test.ts:46:    const notSelected = await app.inject({
+apps/api/src/chat.test.ts:48:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:59:    const app = buildServer({ store, chatProvider: provider });
+apps/api/src/chat.test.ts:61:    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:62:    const posted = await app.inject({
+apps/api/src/chat.test.ts:64:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:100:    const alphaChat = await app.inject({
+apps/api/src/chat.test.ts:102:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:112:    await app.inject({ method: "POST", url: "/api/projects/project_beta/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:113:    const betaChat = await app.inject({
+apps/api/src/chat.test.ts:115:      url: "/api/projects/project_beta/chat",
+apps/api/src/chat.test.ts:125:    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:126:    const posted = await app.inject({
+apps/api/src/chat.test.ts:128:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:149:  it("does not invoke the provider before auth, project, selection, permission, or body denial paths", async () => {
+apps/api/src/chat.test.ts:151:    const app = buildServer({ chatProvider: provider });
+apps/api/src/chat.test.ts:154:      app.inject({ method: "POST", url: "/api/projects/project_alpha/chat", payload: { message: "Hello" } }),
+apps/api/src/chat.test.ts:155:      app.inject({ method: "POST", url: "/api/projects/project_alpha/chat", headers: bearer("missing-token"), payload: { message: "Hello" } }),
+apps/api/src/chat.test.ts:156:      app.inject({ method: "POST", url: "/api/projects/project_gamma/chat", headers: bearer(adaToken), payload: { message: "Hello" } }),
+apps/api/src/chat.test.ts:157:      app.inject({ method: "POST", url: "/api/projects/project_alpha/chat", headers: bearer(adaToken), payload: { message: "Hello" } })
+apps/api/src/chat.test.ts:162:    expect(missingAuth?.json().error).toMatchObject({ code: "auth_missing" });
+apps/api/src/chat.test.ts:164:    expect(invalidAuth?.json().error).toMatchObject({ code: "auth_invalid" });
+apps/api/src/chat.test.ts:170:    await app.inject({ method: "POST", url: "/api/projects/project_beta/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:171:    const noWrite = await app.inject({
+apps/api/src/chat.test.ts:173:      url: "/api/projects/project_beta/chat",
+apps/api/src/chat.test.ts:180:    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:182:      const invalid = await app.inject({
+apps/api/src/chat.test.ts:184:        url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:189:      expect(invalid.json().error).toMatchObject({ code: "chat_invalid" });
+apps/api/src/chat.test.ts:205:    const app = buildServer({ store, chatProvider: provider, allowProviderFallback: false });
+apps/api/src/chat.test.ts:207:    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:208:    const failed = await app.inject({
+apps/api/src/chat.test.ts:210:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:236:    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+apps/api/src/chat.test.ts:238:    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:239:    const response = await app.inject({
+apps/api/src/chat.test.ts:241:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:262:  it("rechecks membership on every operation and isolates projects between users", async () => {
+apps/api/src/chat.test.ts:265:    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+apps/api/src/chat.test.ts:266:    await app.inject({
+apps/api/src/chat.test.ts:268:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:273:    const graceForbidden = await app.inject({
+apps/api/src/chat.test.ts:275:      url: "/api/projects/project_alpha/chat",
+apps/api/src/chat.test.ts:281:    await app.inject({ method: "POST", url: "/api/projects/project_gamma/select", headers: bearer(graceToken) });
+apps/api/src/chat.test.ts:282:    const graceChat = await app.inject({
+apps/api/src/chat.test.ts:284:      url: "/api/projects/project_gamma/chat",
+apps/api/src/auth.test.ts:7:  return { authorization: `Bearer ${value}` };
+apps/api/src/auth.test.ts:10:describe("auth, session, and project contract", () => {
+apps/api/src/auth.test.ts:11:  it("exposes health without authentication and includes a request id", async () => {
+apps/api/src/auth.test.ts:13:    const response = await app.inject({ method: "GET", url: "/health" });
+apps/api/src/auth.test.ts:22:    const response = await app.inject({
+apps/api/src/auth.test.ts:38:    const response = await app.inject({
+apps/api/src/auth.test.ts:47:        code: "auth_invalid",
+apps/api/src/auth.test.ts:57:    const missing = await app.inject({ method: "GET", url: "/api/session" });
+apps/api/src/auth.test.ts:59:    expect(missing.json().error).toMatchObject({ code: "auth_missing" });
+apps/api/src/auth.test.ts:61:    const malformed = await app.inject({
+apps/api/src/auth.test.ts:64:      headers: { authorization: "Token definitely-not-bearer" }
+apps/api/src/auth.test.ts:67:    expect(malformed.json().error).toMatchObject({ code: "auth_invalid" });
+apps/api/src/auth.test.ts:69:    const unknown = await app.inject({
+apps/api/src/auth.test.ts:75:    expect(unknown.json().error).toMatchObject({ code: "auth_invalid" });
+apps/api/src/auth.test.ts:78:  it("returns session and bounded authorized projects for a valid token", async () => {
+apps/api/src/auth.test.ts:81:    const session = await app.inject({ method: "GET", url: "/api/session", headers: bearer() });
+apps/api/src/auth.test.ts:92:    const projects = await app.inject({ method: "GET", url: "/api/projects", headers: bearer() });
+apps/api/src/auth.test.ts:93:    expect(projects.statusCode).toBe(200);
+apps/api/src/auth.test.ts:94:    expect(projects.json()).toEqual({
+apps/api/src/auth.test.ts:95:      projects: [
+apps/api/src/auth.test.ts:96:        { id: "project_alpha", name: "Alpha Build", permissions: ["chat:read", "chat:write"] },
+apps/api/src/auth.test.ts:97:        { id: "project_beta", name: "Beta Build", permissions: ["chat:read"] }
+apps/api/src/auth.test.ts:104:  it("selects an authorized project and rejects a forbidden project", async () => {
+apps/api/src/auth.test.ts:107:    const selected = await app.inject({
+apps/api/src/auth.test.ts:109:      url: "/api/projects/project_alpha/select",
+apps/api/src/auth.test.ts:117:        permissions: ["chat:read", "chat:write"]
+apps/api/src/auth.test.ts:122:    const forbidden = await app.inject({
+apps/api/src/auth.test.ts:124:      url: "/api/projects/project_gamma/select",
+apps/api/src/auth.ts:1:import type { FastifyReply, FastifyRequest } from "fastify";
+apps/api/src/auth.ts:73:export function authenticateRequest(
+apps/api/src/auth.ts:78:  const authorization = request.headers.authorization;
+apps/api/src/auth.ts:79:  if (authorization === undefined) {
+apps/api/src/auth.ts:80:    return sendError(request, reply, 401, "auth_missing", "Missing bearer token.");
+apps/api/src/auth.ts:83:  const token = parseBearer(authorization);
+apps/api/src/auth.ts:85:    return sendError(request, reply, 401, "auth_invalid", "Invalid bearer token.");
+apps/api/src/auth.ts:90:    return sendError(request, reply, 401, "auth_invalid", "Invalid bearer token.");
+apps/api/src/auth.ts:111:  const projectExists = store.projects.some((project) => project.id === projectId);

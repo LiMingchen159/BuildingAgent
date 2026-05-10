@@ -1,0 +1,259 @@
+Web files:
+apps/web/src/App.test.tsx
+apps/web/src/App.tsx
+apps/web/src/api.ts
+apps/web/src/main.tsx
+apps/web/src/styles.css
+apps/web/src/test/setup.ts
+
+CLI files:
+apps/cli/src/api.ts
+apps/cli/src/commands.test.ts
+apps/cli/src/commands.ts
+apps/cli/src/config.test.ts
+apps/cli/src/config.ts
+apps/cli/src/index.ts
+apps/cli/src/registry.test.ts
+apps/cli/src/registry.ts
+
+Web data source/settings/navigation refs:
+apps/cli/src/registry.ts:19:  domain: "building" | "project" | "runtime";
+apps/cli/src/registry.ts:42:  projectId: string;
+apps/cli/src/registry.ts:52:  readonly code = "api_malformed";
+apps/cli/src/registry.ts:67:const SKILL_DOMAINS = new Set(["building", "project", "runtime"]);
+apps/cli/src/registry.ts:167:  if (!isRecord(payload) || typeof payload.projectId !== "string") {
+apps/cli/src/registry.ts:168:    malformed("Project management returned an unexpected response.");
+apps/cli/src/registry.ts:171:  const meta = parsePlaceholderMeta(payload, "Project management returned an unexpected response.");
+apps/cli/src/registry.ts:173:    projectId: payload.projectId,
+apps/cli/src/registry.ts:174:    gateways: parseArray(payload.gateways, parseGateway, "Project management returned unexpected gateways."),
+apps/cli/src/registry.ts:175:    capabilities: parseArray(payload.capabilities, parseCapability, "Project management returned unexpected capabilities."),
+apps/cli/src/registry.ts:176:    tools: parseArray(payload.tools, parseTool, "Project management returned unexpected tools."),
+apps/web/src/styles.css:206:.project-grid {
+apps/web/src/styles.css:213:.project-card {
+apps/web/src/styles.css:222:.project-card p {
+apps/web/src/styles.css:232:.chat-shell {
+apps/web/src/styles.css:237:.workspace-management {
+apps/web/src/styles.css:283:.management-panel {
+apps/web/src/styles.css:292:.management-meta {
+apps/web/src/styles.css:303:.management-grid {
+apps/web/src/styles.css:309:.management-item {
+apps/web/src/styles.css:316:.management-item h3,
+apps/web/src/styles.css:317:.management-panel h3 {
+apps/web/src/styles.css:342:.management-empty {
+apps/web/src/styles.css:435:  .management-meta {
+apps/cli/src/registry.test.ts:5:import { buildServer } from "../../api/src/server.js";
+apps/cli/src/registry.test.ts:38:describe("registry and management inspection commands", () => {
+apps/cli/src/registry.test.ts:40:  let apiUrl: string;
+apps/cli/src/registry.test.ts:44:    homeDir = await mkdtemp(join(tmpdir(), "building-agent-cli-registry-"));
+apps/cli/src/registry.test.ts:51:    apiUrl = `http://127.0.0.1:${address.port}`;
+apps/cli/src/registry.test.ts:60:  it("surfaces placeholder-only registry and management metadata with request ids", async () => {
+apps/cli/src/registry.test.ts:62:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/registry.test.ts:65:    await runCommand(["use", "project_alpha"], { homeDir, io: createIo() });
+apps/cli/src/registry.test.ts:67:    const registryIo = createIo();
+apps/cli/src/registry.test.ts:68:    await expect(runCommand(["registry"], { homeDir, io: registryIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/registry.test.ts:69:    expect(parseOutput(registryIo)).toMatchObject({
+apps/cli/src/registry.test.ts:76:    const managementIo = createIo();
+apps/cli/src/registry.test.ts:77:    await expect(runCommand(["management"], { homeDir, io: managementIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/registry.test.ts:78:    expect(parseOutput(managementIo)).toMatchObject({
+apps/cli/src/registry.test.ts:79:      projectId: "project_alpha",
+apps/cli/src/registry.test.ts:86:    await expect(loadConfig({ homeDir })).resolves.toMatchObject({ lastCommand: "management" });
+apps/cli/src/registry.test.ts:91:    await expect(runCommand(["registry"], { homeDir, io: unauthenticatedIo })).resolves.toEqual({ exitCode: 1 });
+apps/cli/src/registry.test.ts:110:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/registry.test.ts:116:      runCommand(["registry"], {
+apps/cli/src/registry.test.ts:119:        fetchImpl: malformedFetch as unknown as typeof fetch
+apps/cli/src/registry.test.ts:122:    expect(parseError(malformedIo).error).toMatchObject({ code: "api_malformed" });
+apps/web/src/App.tsx:24:} from "./api";
+apps/web/src/App.tsx:27:type WorkspaceTab = "chat" | "registry" | "gateways" | "building";
+apps/web/src/App.tsx:32:  projectId: string | null;
+apps/web/src/App.tsx:47:      return { token: "", user: null, projectId: null };
+apps/web/src/App.tsx:53:      projectId: typeof parsed.projectId === "string" ? parsed.projectId : null
+apps/web/src/App.tsx:57:    return { token: "", user: null, projectId: null };
+apps/web/src/App.tsx:134:function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; busy: boolean }) {
+apps/web/src/App.tsx:136:    <main className="workspace-card" aria-labelledby="projects-title">
+apps/web/src/App.tsx:138:      <h1 id="projects-title">Choose an authorized project</h1>
+apps/web/src/App.tsx:139:      <p className="muted">Only projects returned by the API for this seeded session are selectable.</p>
+apps/web/src/App.tsx:140:      <div className="project-grid">
+apps/web/src/App.tsx:141:        {projects.map((project) => (
+apps/web/src/App.tsx:142:          <article className="project-card" key={project.id}>
+apps/web/src/App.tsx:144:              <h2>{project.name}</h2>
+apps/web/src/App.tsx:145:              <p>{project.id}</p>
+apps/web/src/App.tsx:146:              <p className="permissions">{project.permissions.join(" · ") || "No chat permissions"}</p>
+apps/web/src/App.tsx:148:            <button type="button" onClick={() => void onSelect(project)} disabled={busy}>
+apps/web/src/App.tsx:149:              Select project
+apps/web/src/App.tsx:164:    <p className="management-meta">
+apps/web/src/App.tsx:173:  return <p className="empty-state management-empty">{children}</p>;
+apps/web/src/App.tsx:189:    <div className="management-grid">
+apps/web/src/App.tsx:191:        <article className="management-item" key={item.id}>
+apps/web/src/App.tsx:220:function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
+apps/web/src/App.tsx:222:  const canWrite = project.permissions.includes("chat:write");
+apps/web/src/App.tsx:235:    <section className="chat-shell" aria-labelledby="chat-title">
+apps/web/src/App.tsx:237:        <p className="eyebrow">Selected project</p>
+apps/web/src/App.tsx:238:        <h2 id="chat-title">{project.name} chat</h2>
+apps/web/src/App.tsx:239:        <p className="muted">Project id: <strong>{project.id}</strong></p>
+apps/web/src/App.tsx:242:      <section className="message-list" aria-label={`${project.name} messages`}>
+apps/web/src/App.tsx:243:        {messages.length === 0 ? <p className="empty-state">No messages yet. Start with a project-scoped question.</p> : null}
+apps/web/src/App.tsx:252:        <label htmlFor="chat-message">Message</label>
+apps/web/src/App.tsx:253:        <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project…" : "This project is read-only for your account."} />
+apps/web/src/App.tsx:256:      {!canWrite ? <p className="field-error" role="status">This project does not grant chat write permission.</p> : null}
+apps/web/src/App.tsx:261:function RegistryPanel({ registry }: { registry: RegistryResponse | null }) {
+apps/web/src/App.tsx:263:    <section className="management-panel" aria-labelledby="registry-title">
+apps/web/src/App.tsx:266:          <p className="eyebrow">Platform registry</p>
+apps/web/src/App.tsx:267:          <h2 id="registry-title">Runtime providers, tools, and skills</h2>
+apps/web/src/App.tsx:269:        <MetaBar limit={registry?.limit} requestId={registry?.requestId} />
+apps/web/src/App.tsx:271:      {!registry ? <EmptyState>Registry data is unavailable. Check the diagnostic banner and retry.</EmptyState> : null}
+apps/web/src/App.tsx:272:      {registry ? (
+apps/web/src/App.tsx:275:          <ItemList<RuntimeProviderSummary> items={registry.runtimeProviders} getMeta={(item) => item.kind} emptyText="No runtime provider placeholders returned." />
+apps/web/src/App.tsx:276:          <h3>Tools</h3>
+apps/web/src/App.tsx:277:          <ItemList<ToolSummary> items={registry.tools} getMeta={(item) => item.category} emptyText="No tool placeholders returned." />
+apps/web/src/App.tsx:278:          <h3>Skills</h3>
+apps/web/src/App.tsx:279:          <ItemList<SkillSummary> items={registry.skills} getMeta={(item) => item.domain} emptyText="No skill placeholders returned." />
+apps/web/src/App.tsx:286:function GatewayPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
+apps/web/src/App.tsx:288:    <section className="management-panel" aria-labelledby="gateways-title">
+apps/web/src/App.tsx:294:        <MetaBar limit={management?.limit ?? registry?.limit} requestId={management?.requestId ?? registry?.requestId} />
+apps/web/src/App.tsx:298:      {management ? <ItemList<GatewaySummary> items={management.gateways} getMeta={(item) => item.protocol} emptyText="No project gateway placeholders returned." /> : <EmptyState>Project management data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:300:      {registry ? <ItemList<GatewaySummary> items={registry.gateways} getMeta={(item) => item.protocol} emptyText="No registry gateway placeholders returned." /> : <EmptyState>Registry gateway data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:305:function BuildingDomainPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
+apps/web/src/App.tsx:307:    <section className="management-panel" aria-labelledby="building-title">
+apps/web/src/App.tsx:313:        <MetaBar limit={management?.limit ?? registry?.limit} requestId={management?.requestId ?? registry?.requestId} />
+apps/web/src/App.tsx:317:      {management ? <ItemList<BuildingCapabilitySummary> items={management.capabilities} getMeta={(item) => item.domain} emptyText="No project building capabilities returned." /> : <EmptyState>Project capability data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:319:      {management ? <ItemList<ToolSummary> items={management.tools} getMeta={(item) => item.category} emptyText="No project tool placeholders returned." /> : <EmptyState>Project tool data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:321:      {registry ? <ItemList<BuildingCapabilitySummary> items={registry.buildingCapabilities} getMeta={(item) => item.domain} emptyText="No registry building capabilities returned." /> : <EmptyState>Registry capability data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:327:  project,
+apps/web/src/App.tsx:331:  registry,
+apps/web/src/App.tsx:332:  management,
+apps/web/src/App.tsx:338:  project: ProjectSummary;
+apps/web/src/App.tsx:342:  registry: RegistryResponse | null;
+apps/web/src/App.tsx:343:  management: ProjectManagementResponse | null;
+apps/web/src/App.tsx:350:    { id: "chat", label: "Chat" },
+apps/web/src/App.tsx:351:    { id: "registry", label: "Platform Registry" },
+apps/web/src/App.tsx:357:    <main className="workspace-card workspace-management" aria-labelledby="workspace-title">
+apps/web/src/App.tsx:360:          <p className="eyebrow">Selected project</p>
+apps/web/src/App.tsx:361:          <h1 id="workspace-title">{project.name} workspace</h1>
+apps/web/src/App.tsx:362:          <p className="muted">Project id: <strong>{project.id}</strong></p>
+apps/web/src/App.tsx:373:      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} /> : null}
+apps/web/src/App.tsx:374:      {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
+apps/web/src/App.tsx:375:      {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
+apps/web/src/App.tsx:376:      {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
+apps/web/src/App.tsx:386:  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+apps/web/src/App.tsx:389:  const [chatProviderDiagnostics, setChatProviderDiagnostics] = useState<ChatProviderDiagnostics | null>(null);
+apps/web/src/App.tsx:390:  const [chatProviderRequestId, setChatProviderRequestId] = useState<string | undefined>(undefined);
+apps/web/src/App.tsx:391:  const [registry, setRegistry] = useState<RegistryResponse | null>(null);
+apps/web/src/App.tsx:392:  const [management, setManagement] = useState<ProjectManagementResponse | null>(null);
+apps/web/src/App.tsx:393:  const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
+apps/web/src/App.tsx:409:    setActiveTab("chat");
+apps/web/src/App.tsx:410:    storeSession({ token: "", user: null, projectId: null });
+apps/web/src/App.tsx:414:  async function loadManagementSurfaces(currentToken: string, projectId: string) {
+apps/web/src/App.tsx:415:    const [registryResponse, managementResponse] = await Promise.all([getRegistry(currentToken), getProjectManagement(currentToken, projectId)]);
+apps/web/src/App.tsx:416:    setRegistry(registryResponse);
+apps/web/src/App.tsx:417:    setManagement(managementResponse);
+apps/web/src/App.tsx:418:    return { registryResponse, managementResponse };
+apps/web/src/App.tsx:431:        const [sessionResponse, projectResponse] = await Promise.all([getSession(token), listProjects(token)]);
+apps/web/src/App.tsx:436:        setProjects(projectResponse.projects);
+apps/web/src/App.tsx:437:        const restoredProject = projectResponse.projects.find((project) => project.id === sessionResponse.session.projectId) ?? null;
+apps/web/src/App.tsx:440:          const [chatResponse, registryResponse, managementResponse] = await Promise.all([
+apps/web/src/App.tsx:446:            setMessages(chatResponse.messages);
+apps/web/src/App.tsx:447:            setRegistry(registryResponse);
+apps/web/src/App.tsx:448:            setManagement(managementResponse);
+apps/web/src/App.tsx:479:      storeSession({ token: response.token, user: response.user, projectId: null });
+apps/web/src/App.tsx:490:  async function handleProjectSelect(project: ProjectSummary) {
+apps/web/src/App.tsx:492:      setBanner({ tone: "error", title: "Authentication required", message: "Sign in before selecting a project.", code: "auth_missing" });
+apps/web/src/App.tsx:497:      const selected = await selectProject(token, project.id);
+apps/web/src/App.tsx:498:      const [chat] = await Promise.all([getChat(token, project.id), loadManagementSurfaces(token, project.id)]);
+apps/web/src/App.tsx:500:      setSelectedProject(project);
+apps/web/src/App.tsx:501:      setMessages(chat.messages);
+apps/web/src/App.tsx:504:      setActiveTab("chat");
+apps/web/src/App.tsx:505:      storeSession({ token, user, projectId: project.id });
+apps/web/src/App.tsx:506:      setBanner({ tone: "success", title: "Project selected", message: `${project.name} is now active. Placeholder registry and management surfaces loaded.`, requestId: selected.requestId });
+apps/web/src/App.tsx:520:      setBanner({ tone: "error", title: "Select a project first", message: "Chat is available only after authentication and project selection.", code: "project_not_selected" });
+apps/web/src/App.tsx:524:      setBanner({ tone: "error", title: "Message required", message: "Enter a non-empty message before sending.", code: "chat_invalid" });
+apps/web/src/App.tsx:559:      {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
+apps/web/src/App.tsx:560:      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
+apps/web/src/App.tsx:561:      {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
+apps/cli/src/config.test.ts:11:      { apiUrl: "http://127.0.0.1:3000", token: "secret-token", selectedProjectId: "proj_1" },
+apps/cli/src/config.test.ts:21:      apiUrl: "http://127.0.0.1:3000",
+apps/cli/src/config.test.ts:57:    expect(redactConfig({ apiUrl: "x", token: "secret" })).toEqual({ apiUrl: "x", token: "[redacted]" });
+apps/cli/src/commands.test.ts:5:import { buildServer } from "../../api/src/server.js";
+apps/cli/src/commands.test.ts:30:  let apiUrl: string;
+apps/cli/src/commands.test.ts:41:    apiUrl = `http://127.0.0.1:${address.port}`;
+apps/cli/src/commands.test.ts:50:  it("logs in, persists auth, selects a project, and reuses it for chat in fresh invocations", async () => {
+apps/cli/src/commands.test.ts:54:        ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:59:    await expect(loadConfig({ homeDir })).resolves.toMatchObject({ apiUrl, token: "seed-token-ada" });
+apps/cli/src/commands.test.ts:61:    const projectsIo = createIo();
+apps/cli/src/commands.test.ts:62:    await expect(runCommand(["projects"], { homeDir, io: projectsIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/commands.test.ts:63:    expect(parseOutput(projectsIo)).toMatchObject({
+apps/cli/src/commands.test.ts:64:      projects: expect.arrayContaining([expect.objectContaining({ id: "project_alpha" })])
+apps/cli/src/commands.test.ts:68:    await expect(runCommand(["use", "project_alpha"], { homeDir, io: useIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/commands.test.ts:69:    await expect(loadConfig({ homeDir })).resolves.toMatchObject({ selectedProjectId: "project_alpha" });
+apps/cli/src/commands.test.ts:71:    const chatIo = createIo();
+apps/cli/src/commands.test.ts:72:    await expect(runCommand(["chat", "hello", "from", "the", "cli"], { homeDir, io: chatIo })).resolves.toEqual({
+apps/cli/src/commands.test.ts:75:    expect(parseOutput(chatIo)).toMatchObject({
+apps/cli/src/commands.test.ts:76:      message: { projectId: "project_alpha", role: "user", content: "hello from the cli" },
+apps/cli/src/commands.test.ts:78:        projectId: "project_alpha",
+apps/cli/src/commands.test.ts:80:        content: "Mock assistant response for project_alpha: hello from the cli"
+apps/cli/src/commands.test.ts:92:    expect(chatIo.stdoutText()).not.toMatch(/seed-token-ada|Bearer\s+[A-Za-z0-9._-]+|local-dev-password|sk-[A-Za-z0-9_-]+/u);
+apps/cli/src/commands.test.ts:95:    await expect(runCommand(["chat:list"], { homeDir, io: listIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/commands.test.ts:99:        expect.objectContaining({ role: "assistant", content: "Mock assistant response for project_alpha: hello from the cli" })
+apps/cli/src/commands.test.ts:108:      session: { userId: "user_ada", projectId: "project_alpha" },
+apps/cli/src/commands.test.ts:109:      config: { token: "[redacted]", selectedProjectId: "project_alpha", lastCommand: "session" }
+apps/cli/src/commands.test.ts:113:  it("preserves backend error codes and request ids for forbidden project selection", async () => {
+apps/cli/src/commands.test.ts:116:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:121:    await expect(runCommand(["use", "project_gamma"], { homeDir, io: useIo })).resolves.toEqual({ exitCode: 1 });
+apps/cli/src/commands.test.ts:123:    expect(failure.error).toMatchObject({ code: "project_forbidden", requestId: expect.stringMatching(/^req_/u) });
+apps/cli/src/commands.test.ts:126:      lastErrorCode: "project_forbidden",
+apps/cli/src/commands.test.ts:131:  it("fails closed for missing auth and blank chat input without leaking secrets", async () => {
+apps/cli/src/commands.test.ts:132:    const projectsIo = createIo();
+apps/cli/src/commands.test.ts:133:    await expect(runCommand(["projects"], { homeDir, io: projectsIo })).resolves.toEqual({ exitCode: 1 });
+apps/cli/src/commands.test.ts:134:    expect(parseError(projectsIo).error).toMatchObject({ code: "auth_missing" });
+apps/cli/src/commands.test.ts:138:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:141:    await runCommand(["use", "project_alpha"], { homeDir, io: createIo() });
+apps/cli/src/commands.test.ts:143:    const chatIo = createIo();
+apps/cli/src/commands.test.ts:144:    await expect(runCommand(["chat", "   "], { homeDir, io: chatIo })).resolves.toEqual({ exitCode: 1 });
+apps/cli/src/commands.test.ts:145:    expect(parseError(chatIo).error).toMatchObject({ code: "chat_invalid" });
+apps/cli/src/commands.test.ts:146:    expect(chatIo.stderrText()).not.toContain("seed-token-ada");
+apps/cli/src/commands.test.ts:149:  it("fails closed for malformed chat post payloads while preserving canonical provider errors", async () => {
+apps/cli/src/commands.test.ts:151:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:154:    await runCommand(["use", "project_alpha"], { homeDir, io: createIo() });
+apps/cli/src/commands.test.ts:159:        message: { id: "msg_1", projectId: "project_alpha", userId: "user_ada", role: "user", content: "hi" },
+apps/cli/src/commands.test.ts:165:          apiKey: "provider-secret-should-not-print"
+apps/cli/src/commands.test.ts:172:    await expect(runCommand(["chat", "hi"], { homeDir, io: malformedIo, fetchImpl: async () => malformedResponse })).resolves.toEqual({
+apps/cli/src/commands.test.ts:175:    expect(parseError(malformedIo).error).toMatchObject({ code: "api_malformed" });
+apps/cli/src/commands.test.ts:183:    await expect(runCommand(["chat", "hi"], { homeDir, io: providerErrorIo, fetchImpl: async () => providerErrorResponse })).resolves.toEqual({
+apps/cli/src/commands.test.ts:189:  it("surfaces registry and management placeholder state through the saved session", async () => {
+apps/cli/src/commands.test.ts:191:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:194:    await runCommand(["use", "project_alpha"], { homeDir, io: createIo() });
+apps/cli/src/commands.test.ts:196:    const registryIo = createIo();
+apps/cli/src/commands.test.ts:197:    await expect(runCommand(["registry"], { homeDir, io: registryIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/commands.test.ts:198:    expect(parseOutput(registryIo)).toMatchObject({ placeholderOnly: true, requestId: expect.stringMatching(/^req_/u) });
+apps/cli/src/commands.test.ts:200:    const managementIo = createIo();
+apps/cli/src/commands.test.ts:201:    await expect(runCommand(["management"], { homeDir, io: managementIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/commands.test.ts:202:    expect(parseOutput(managementIo)).toMatchObject({
+apps/cli/src/commands.test.ts:203:      projectId: "project_alpha",
+apps/cli/src/api.ts:2:  apiUrl: string;
+apps/cli/src/api.ts:4:  fetchImpl?: typeof fetch | undefined;
+apps/cli/src/api.ts:17:  projectId: string;
+apps/cli/src/api.ts:70:  private readonly apiUrl: string;
+apps/cli/src/api.ts:72:  private readonly fetchImpl: typeof fetch;
+apps/cli/src/api.ts:75:    this.apiUrl = options.apiUrl.replace(/\/+$/u, "");
+apps/cli/src/api.ts:77:    this.fetchImpl = options.fetchImpl ?? fetch;
+apps/cli/src/api.ts:81:    return this.request("/api/login", {
+apps/cli/src/api.ts:89:    return this.request("/api/session", { method: "GET" });
+apps/cli/src/api.ts:92:  async projects(): Promise<unknown> {
+apps/cli/src/api.ts:93:    return this.request("/api/projects", { method: "GET" });
+apps/cli/src/api.ts:96:  async selectProject(projectId: string): Promise<unknown> {
+apps/cli/src/api.ts:97:    return this.request(`/api/projects/${encodeURIComponent(projectId)}/select`, { method: "POST" });
+apps/cli/src/api.ts:100:  async registry(): Promise<unknown> {
+apps/cli/src/api.ts:101:    return this.request("/api/registry", { method: "GET" });
+apps/cli/src/api.ts:104:  async management(projectId: string): Promise<unknown> {
+apps/cli/src/api.ts:105:    return this.request(`/api/projects/${encodeURIComponent(projectId)}/management`, { method: "GET" });
+apps/cli/src/api.ts:108:  async listChat(projectId: string): Promise<ChatListResponse> {
+apps/cli/src/api.ts:109:    return parseChatListResponse(await this.request(`/api/projects/${encodeURIComponent(projectId)}/chat`, { method: "GET" }));
+apps/cli/src/api.ts:112:  async sendChat(projectId: string, message: string): Promise<SendChatResponse> {
+apps/cli/src/api.ts:114:      await this.request(`/api/projects/${encodeURIComponent(projectId)}/chat`, {
+apps/cli/src/api.ts:141:    const response = await this.fetchImpl(`${this.apiUrl}${path}`, requestInit);
+apps/cli/src/api.ts:161:      throw new ApiClientError(response.status, "api_invalid_json", "API returned a non-JSON error response.");
+apps/cli/src/api.ts:163:    throw new ApiClientError(response.status, "api_invalid_json", "API returned a non-JSON response.");
+apps/cli/src/api.ts:169:  const code = typeof body?.error?.code === "string" ? body.error.code : "api_error";
+apps/cli/src/api.ts:176:  return new ApiClientError(200, "api_malformed", message);
+apps/cli/src/api.ts:187:    typeof value.projectId !== "string" ||
+apps/cli/src/api.ts:197:    projectId: value.projectId,
+apps/cli/src/commands.ts:1:import { ApiClient, ApiClientError } from "./api.js";
