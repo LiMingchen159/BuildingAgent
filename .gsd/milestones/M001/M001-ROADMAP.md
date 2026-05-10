@@ -21,7 +21,7 @@
 - [x] **S03: S03** `risk:Multi-entrypoint coherence is the last major proof that the skeleton is truly platform-wide instead of only a web demo.` `depends:[]`
   > After this: After this, the CLI can authenticate, select a project, and exercise the same local platform contracts; startup smoke checks confirm the backend, Web UI, and CLI all run coherently.
 
-- [ ] **S04: S04** `risk:Medium: provider seams must prove real-provider-first behavior while staying safe for local no-secret smoke runs.` `depends:[]`
+- [x] **S04: S04** `risk:Medium: provider seams must prove real-provider-first behavior while staying safe for local no-secret smoke runs.` `depends:[]`
   > After this: After this, chat has explicit provider-selection behavior: it prefers a configured real provider when credentials/configuration exist, retains a deterministic local/mock fallback for smoke and no-credential runs, and Web/CLI/API tests prove both paths without leaking secrets.
 
 - [ ] **S05: Requirement coverage reconciliation remediation** `risk:Low-medium: mostly documentation and targeted tests, but must avoid overstating placeholder surfaces as real integrations.` `depends:[S01,S02,S03,S04]`

@@ -1,7 +1,7 @@
 # Codebase Map
 
-Generated: 2026-05-10T14:37:49Z | Files: 37 | Described: 0/37
-<!-- gsd:codebase-meta {"generatedAt":"2026-05-10T14:37:49Z","fingerprint":"cc9062a5bb29f13a08385cc7057711be5fe48a05","fileCount":37,"truncated":false} -->
+Generated: 2026-05-10T15:31:02Z | Files: 39 | Described: 0/39
+<!-- gsd:codebase-meta {"generatedAt":"2026-05-10T15:31:02Z","fingerprint":"5f4dc37faa91893bdeb56be3be85adcec5c36f0e","fileCount":39,"truncated":false} -->
 
 ### (root)/
 - `.gitignore`
@@ -19,6 +19,8 @@ Generated: 2026-05-10T14:37:49Z | Files: 37 | Described: 0/37
 - `apps/api/src/auth.ts`
 - `apps/api/src/chat.test.ts`
 - `apps/api/src/index.ts`
+- `apps/api/src/providers.test.ts`
+- `apps/api/src/providers.ts`
 - `apps/api/src/registry.test.ts`
 - `apps/api/src/seed.ts`
 - `apps/api/src/server.ts`

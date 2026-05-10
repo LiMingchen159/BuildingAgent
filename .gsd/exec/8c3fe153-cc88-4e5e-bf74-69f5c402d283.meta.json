@@ -1,0 +1,18 @@
+{
+  "id": "8c3fe153-cc88-4e5e-bf74-69f5c402d283",
+  "runtime": "bash",
+  "purpose": "S04 redaction scan touched source docs",
+  "script_chars": 1404,
+  "started_at": "2026-05-10T15:19:41.539Z",
+  "finished_at": "2026-05-10T15:19:41.609Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 70,
+  "stdout_bytes": 920,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/8c3fe153-cc88-4e5e-bf74-69f5c402d283.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/8c3fe153-cc88-4e5e-bf74-69f5c402d283.stderr"
+}

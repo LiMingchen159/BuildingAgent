@@ -1,0 +1,18 @@
+{
+  "id": "518243a8-e917-4bf1-8b88-95a683e31be9",
+  "runtime": "bash",
+  "purpose": "S04 full verification command after redaction fixture updates all",
+  "script_chars": 327,
+  "started_at": "2026-05-10T15:23:16.487Z",
+  "finished_at": "2026-05-10T15:25:54.036Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 157549,
+  "stdout_bytes": 4317,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/518243a8-e917-4bf1-8b88-95a683e31be9.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/518243a8-e917-4bf1-8b88-95a683e31be9.stderr"
+}

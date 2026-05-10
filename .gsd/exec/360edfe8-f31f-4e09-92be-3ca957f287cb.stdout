@@ -1,0 +1,2 @@
+S04 refined redaction scan files: apps/api/src/providers.ts, apps/api/src/chat.test.ts, apps/web/src/App.test.tsx, apps/cli/src/commands.test.ts, scripts/smoke-local.cjs, README.md
+No unallowed real-looking provider key, bearer token, password, token, or API-key literal found beyond documented seeded/test fixtures.

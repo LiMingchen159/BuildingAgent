@@ -53,17 +53,17 @@ Consumes S01/S03 authenticated chat, selected-project, CLI, and smoke contracts 
   - Files: ``apps/api/src/providers.ts``, ``apps/api/src/server.ts``, ``apps/api/src/seed.ts``, ``apps/api/src/chat.test.ts``, ``apps/api/src/providers.test.ts``
   - Verify: `npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts && npm run typecheck --workspace @building-agent/api`
 
-- [ ] **T02: Render assistant replies and provider diagnostics in Web chat** `est:1.5h`
+- [x] **T02: Render assistant replies and provider diagnostics in Web chat** `est:1.5h`
   Update the React/Vite Web client and chat workspace so assistant messages and provider fallback diagnostics are parsed and displayed safely.
   - Files: ``apps/web/src/api.ts``, ``apps/web/src/App.tsx``, ``apps/web/src/styles.css``, ``apps/web/src/App.test.tsx``
   - Verify: `npm test -- --run apps/web/src/App.test.tsx && npm run typecheck --workspace @building-agent/web`
 
-- [ ] **T03: Prove provider fallback through CLI and smoke** `est:1h`
+- [x] **T03: Prove provider fallback through CLI and smoke** `est:1h`
   Align CLI chat behavior and the root smoke check with the new provider-backed chat contract while keeping default no-secret runs deterministic.
   - Files: ``apps/cli/src/api.ts``, ``apps/cli/src/commands.ts``, ``apps/cli/src/commands.test.ts``, ``scripts/smoke-local.cjs``
   - Verify: `npm test -- --run apps/cli/src/commands.test.ts && npm run smoke`
 
-- [ ] **T04: Document provider configuration and run full verification** `est:45m`
+- [x] **T04: Document provider configuration and run full verification** `est:45m`
   Document the provider configuration/fallback contract and run the full S04 verification suite before marking the slice complete.
   - Files: ``README.md``
   - Verify: `npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts && npm run typecheck && npm run build && npm run smoke`

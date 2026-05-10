@@ -1,0 +1,18 @@
+{
+  "id": "1a8717ff-64ac-46be-b0e4-e3a93930417c",
+  "runtime": "python",
+  "purpose": "S04 redaction scan for committed secret-like strings in provider/chat/web/cli/smoke/readme files",
+  "script_chars": 1172,
+  "started_at": "2026-05-10T15:31:43.928Z",
+  "finished_at": "2026-05-10T15:31:43.999Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 71,
+  "stdout_bytes": 2060,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/1a8717ff-64ac-46be-b0e4-e3a93930417c.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/1a8717ff-64ac-46be-b0e4-e3a93930417c.stderr"
+}

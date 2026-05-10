@@ -1,0 +1,18 @@
+{
+  "id": "360edfe8-f31f-4e09-92be-3ca957f287cb",
+  "runtime": "python",
+  "purpose": "S04 redaction scan refined allow seeded smoke password fixture",
+  "script_chars": 1425,
+  "started_at": "2026-05-10T15:32:04.586Z",
+  "finished_at": "2026-05-10T15:32:04.722Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 136,
+  "stdout_bytes": 317,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/360edfe8-f31f-4e09-92be-3ca957f287cb.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/360edfe8-f31f-4e09-92be-3ca957f287cb.stderr"
+}

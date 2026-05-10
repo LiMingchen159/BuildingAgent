@@ -1,0 +1,18 @@
+{
+  "id": "0a6b5558-df22-4231-aad8-5b660e74928a",
+  "runtime": "python",
+  "purpose": "S04 redaction scan refined with documented seeded/test fixtures allowed",
+  "script_chars": 1392,
+  "started_at": "2026-05-10T15:31:57.743Z",
+  "finished_at": "2026-05-10T15:31:57.816Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 73,
+  "stdout_bytes": 289,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/0a6b5558-df22-4231-aad8-5b660e74928a.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/0a6b5558-df22-4231-aad8-5b660e74928a.stderr"
+}

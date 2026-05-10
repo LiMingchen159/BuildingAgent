@@ -48,17 +48,6 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: mapped
 - Notes: Building-domain skills remain placeholders in v1 but should follow a Hermes-inspired registry/execution pattern where useful.
 
-### R008 — The platform includes an extensible model/provider configuration skeleton and M001 chat prefers a real configured LLM provider/API when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials.
-- Class: integration
-- Status: active
-- Description: The platform includes an extensible model/provider configuration skeleton and M001 chat prefers a real configured LLM provider/API when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials.
-- Why it matters: Provider abstraction is required for a Hermes-like agent foundation and future model flexibility.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Do not hard-code one provider too deeply. README must explain local provider configuration through environment variables or ignored local config files. Secrets must never be committed.
-
 ### R009 — The Web UI provides a coherent modern React/Next.js-style shell for login, project selection, chat workspace, and navigable placeholder management pages.
 - Class: primary-user-loop
 - Status: active
@@ -103,27 +92,21 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: mapped
 - Notes: Placeholders only in v1; no real building analytics or real building data should be included. Small clearly marked synthetic/demo Brick-like and time-series data is acceptable for local testing of workflows, permissions, and project isolation. Placeholder gateways and building-domain demo data are lower priority than authenticated backend, real-provider-first chat, Web/CLI chat/project flows, project isolation, skeleton registries, smoke checks, and README.
 
-### R013 — The local backend, Web UI, and CLI can start or run their skeleton flows, and basic tests or smoke checks prove the foundation works, including the real-provider path when configured and mock fallback when credentials are absent.
+### R013 — Untitled
 - Class: launchability
-- Status: active
-- Description: The local backend, Web UI, and CLI can start or run their skeleton flows, and basic tests or smoke checks prove the foundation works, including the real-provider path when configured and mock fallback when credentials are absent.
 - Why it matters: A foundation skeleton is only useful if it can be run and verified locally.
 - Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Smoke checks should cover authenticated happy path, key permission/project-isolation boundaries where practical, provider fallback behavior, and CLI/Web access through backend auth checks.
+- Supporting slices: M001/S03, M001/S04
+- Validation: Advanced by S04 verification on 2026-05-10: full slice suite passed API provider/chat tests, Web chat tests, CLI command tests, typecheck, build, and live npm run smoke. Smoke specifically exercised authenticated CLI login/project/registry/management/chat against live API/Web and asserted deterministic provider fallback metadata in the no-secret run.
+- Notes: S04 added provider-path coverage to the existing local launchability contract. Default smoke remains no-secret and deterministic; real-provider behavior is proven through injected/fake provider tests rather than live network credentials.
 
-### R014 — The README explains how to run the local backend, Web UI, CLI, seeded auth flow, model/provider configuration, fallback behavior, and smoke checks concisely.
+### R014 — Untitled
 - Class: operability
-- Status: active
-- Description: The README explains how to run the local backend, Web UI, CLI, seeded auth flow, model/provider configuration, fallback behavior, and smoke checks concisely.
 - Why it matters: The builder/operator and local evaluator need a clear path to run the platform without tribal knowledge.
 - Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Documentation should be implementation-oriented. It must explain using environment variables or ignored local config files for provider credentials and must warn against committing secrets or private building data.
+- Supporting slices: M001/S04
+- Validation: Advanced by S04 documentation and verification on 2026-05-10: README provider configuration/fallback instructions were included in the full build/smoke-verified slice, and redaction scan included README to guard against committed provider keys or secret-looking examples.
+- Notes: S04 updated README coverage for provider environment variables, default mock fallback, explicit fallback policy, and verification commands. Final M001 validation should reconcile the complete README coverage across all slices.
 
 ### R015 — The platform can represent project-scoped external data source configuration surfaces for future BIM, Brick/RDF/SPARQL, time-series, and mapping sources.
 - Class: integration
@@ -181,6 +164,16 @@ This file is the explicit capability and coverage contract for the project.
 - Supporting slices: M002
 - Validation: Validated by S01 API chat tests proving a user cannot select/chat in a project they are not a member of and chat history is read/written through the selected project boundary; full slice verification passed on 2026-05-10.
 - Notes: S01 validates in-memory chat messages/memory keyed by project boundary for seeded local projects. Broader data-source isolation remains for later milestones.
+
+### R008 — Untitled
+- Class: integration
+- Status: validated
+- Why it matters: Provider abstraction is required for a Hermes-like agent foundation and future model flexibility.
+- Source: user
+- Primary owning slice: M001/S04
+- Supporting slices: M001/S04
+- Validation: Validated by S04 verification on 2026-05-10: npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts passed 29 tests; npm run typecheck passed API/CLI/Web; npm run build passed all workspaces and Vite production build; npm run smoke passed live API/Web/CLI no-secret fallback flow; refined redaction scan found no unallowed real-looking provider key, bearer token, password, token, or API-key literal beyond documented seeded/test fixtures.
+- Notes: S04 implements the provider configuration skeleton with OpenAI-compatible real-provider selection when BUILDING_AGENT_LLM_* configuration is present, deterministic mock fallback for no-secret/local smoke runs, redaction-safe provider diagnostics, and API/Web/CLI/smoke proof. Live external provider operation remains optional/env-gated and was not exercised with real credentials.
 
 ## Deferred
 
@@ -318,13 +311,13 @@ This file is the explicit capability and coverage contract for the project.
 | R005 | core-capability | active | M001/none yet | none | mapped |
 | R006 | core-capability | active | M001/none yet | none | mapped |
 | R007 | core-capability | active | M001/none yet | none | mapped |
-| R008 | integration | active | M001/none yet | none | mapped |
+| R008 | integration | validated | M001/S04 | M001/S04 | Validated by S04 verification on 2026-05-10: npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts passed 29 tests; npm run typecheck passed API/CLI/Web; npm run build passed all workspaces and Vite production build; npm run smoke passed live API/Web/CLI no-secret fallback flow; refined redaction scan found no unallowed real-looking provider key, bearer token, password, token, or API-key literal beyond documented seeded/test fixtures. |
 | R009 | primary-user-loop | active | M001/none yet | none | mapped |
 | R010 | primary-user-loop | active | M001/none yet | none | mapped |
 | R011 | integration | active | M001/none yet | none | mapped |
 | R012 | differentiator | active | M001/none yet | none | mapped |
-| R013 | launchability | active | M001/none yet | none | mapped |
-| R014 | operability | active | M001/none yet | none | mapped |
+| R013 | launchability |  | none | M001/S03, M001/S04 | Advanced by S04 verification on 2026-05-10: full slice suite passed API provider/chat tests, Web chat tests, CLI command tests, typecheck, build, and live npm run smoke. Smoke specifically exercised authenticated CLI login/project/registry/management/chat against live API/Web and asserted deterministic provider fallback metadata in the no-secret run. |
+| R014 | operability |  | none | M001/S04 | Advanced by S04 documentation and verification on 2026-05-10: README provider configuration/fallback instructions were included in the full build/smoke-verified slice, and redaction scan included README to guard against committed provider keys or secret-looking examples. |
 | R015 | integration | active | M002/none yet | none | mapped |
 | R016 | differentiator | active | M003/none yet | none | mapped |
 | R017 | admin/support | deferred | M001/none yet | none | unmapped |
@@ -341,7 +334,7 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Coverage Summary
 
-- Active requirements: 13
-- Mapped to slices: 13
-- Validated: 3 (R002, R003, R004)
+- Active requirements: 12
+- Mapped to slices: 12
+- Validated: 4 (R002, R003, R004, R008)
 - Unmapped active requirements: 0
