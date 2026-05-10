@@ -1,0 +1,14 @@
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/web/src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ✓ src/App.test.tsx (7 tests) 709ms
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+   Start at  17:59:29
+   Duration  54.47s (transform 301ms, setup 5.98s, collect 6.56s, tests 709ms, environment 37.88s, prepare 2.16s)
+

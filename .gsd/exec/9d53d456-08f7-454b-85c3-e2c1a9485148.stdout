@@ -1,0 +1,11 @@
+PASS TC1 health request-id: 3 markers found
+PASS TC2 seeded web login: 4 markers found
+FAIL TC2 token not rendered: missing /not\.toHaveTextContent\([^\n]*local-dev-token|queryByText\([^\n]*token|not.*token/i
+PASS TC3 authorized project selection: 3 markers found
+PASS TC4 project-scoped chat happy path: 4 markers found
+PASS TC5 missing/invalid auth rejection: 3 markers found
+PASS TC6 forbidden project access: 2 markers found
+PASS TC7 selected-project enforcement: 1 markers found
+FAIL TC8 read-only permission denial: missing /permission_denied/
+PASS TC9 invalid chat input: 3 markers found
+PASS Diagnostic error envelope: 4 markers found

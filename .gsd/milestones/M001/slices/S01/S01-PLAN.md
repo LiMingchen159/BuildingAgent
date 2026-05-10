@@ -49,7 +49,7 @@ Upstream surfaces consumed: existing `README.md`, `.gitignore`, and GSD requirem
   - Files: ``package.json``, ``tsconfig.base.json``, ``apps/api/package.json``, ``apps/api/tsconfig.json``, ``apps/api/src/seed.ts``, ``apps/api/src/auth.ts``, ``apps/api/src/server.ts``, ``apps/api/src/index.ts``, ``apps/api/src/auth.test.ts``, ``apps/api/src/chat.test.ts``
   - Verify: `npm test -- --run apps/api/src/auth.test.ts apps/api/src/chat.test.ts` and `npm run typecheck` pass.
 
-- [ ] **T02: Wire React Web login, project selection, and chat workspace to the API** `est:2h`
+- [x] **T02: Wire React Web login, project selection, and chat workspace to the API** `est:2h`
   Build the real Web UI vertical flow against the API contract from T01. The UI should not use mocked-only state for the main path: it should call the API client, store the local dev token in browser state, route guarded screens through session/project checks, and render clear failure states.
   - Files: ``apps/web/package.json``, ``apps/web/tsconfig.json``, ``apps/web/index.html``, ``apps/web/src/api.ts``, ``apps/web/src/App.tsx``, ``apps/web/src/main.tsx``, ``apps/web/src/styles.css``, ``apps/web/src/App.test.tsx``, ``README.md``
   - Verify: `npm test -- --run apps/web/src/App.test.tsx`, `npm run typecheck`, and `npm run build` pass.

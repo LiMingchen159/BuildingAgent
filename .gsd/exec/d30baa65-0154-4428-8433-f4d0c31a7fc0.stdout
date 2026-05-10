@@ -1,0 +1,60 @@
+9:- Status: active
+13:- Primary owning slice: M001/none yet
+15:- Validation: mapped
+18:### R003 — The backend enforces authentication, RBAC, and project-scoped permission checks before protected operations run.
+20:- Status: active
+24:- Primary owning slice: M001/none yet
+26:- Validation: mapped
+29:### R004 — Project data and project memory are isolated by project boundary.
+31:- Status: active
+35:- Primary owning slice: M001/none yet
+37:- Validation: mapped
+42:- Status: active
+46:- Primary owning slice: M001/none yet
+48:- Validation: mapped
+53:- Status: active
+57:- Primary owning slice: M001/none yet
+59:- Validation: mapped
+64:- Status: active
+68:- Primary owning slice: M001/none yet
+70:- Validation: mapped
+75:- Status: active
+79:- Primary owning slice: M001/none yet
+81:- Validation: mapped
+86:- Status: active
+90:- Primary owning slice: M001/none yet
+92:- Validation: mapped
+97:- Status: active
+101:- Primary owning slice: M001/none yet
+103:- Validation: mapped
+108:- Status: active
+112:- Primary owning slice: M001/none yet
+114:- Validation: mapped
+119:- Status: active
+123:- Primary owning slice: M001/none yet
+125:- Validation: mapped
+130:- Status: active
+134:- Primary owning slice: M001/none yet
+136:- Validation: mapped
+141:- Status: active
+145:- Primary owning slice: M001/none yet
+147:- Validation: mapped
+152:- Status: active
+156:- Primary owning slice: M002/none yet
+158:- Validation: mapped
+163:- Status: active
+167:- Primary owning slice: M003/none yet
+169:- Validation: mapped
+174:### R002 — Untitled
+176:- Status: validated
+179:- Primary owning slice: M001/S01
+180:- Validation: Validated by S01 verification: API auth/project/chat contract tests, Web App tests, typecheck, and build all passed on 2026-05-10. Evidence: npm test -- --run apps/api/src/auth.test.ts apps/api/src/chat.test.ts; npm test -- --run apps/web/src/App.test.tsx; npm run typecheck; npm run build.
+187:- Status: deferred
+191:- Primary owning slice: M001/none yet
+193:- Validation: unmapped
+198:- Status: deferred
+202:- Primary owning slice: M001/none yet
+204:- Validation: unmapped
+209:- Status: deferred
+213:- Primary owning slice: M003/none yet
+215:- Validation: unmapped

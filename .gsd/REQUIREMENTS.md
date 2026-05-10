@@ -15,39 +15,6 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: mapped
 - Notes: V1 uses pragmatic local auth with seeded users/tokens, not production identity. Anonymous interaction is explicitly excluded.
 
-### R002 — A signed-in user can select a project and enter a project-scoped chat workspace.
-- Class: primary-user-loop
-- Status: active
-- Description: A signed-in user can select a project and enter a project-scoped chat workspace.
-- Why it matters: This is the main vertical slice that proves the platform foundation is usable rather than only structural.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: The core v1 flow is login → project selection → chat workspace. Project memory and tool context must be scoped to the selected project.
-
-### R003 — The backend enforces authentication, RBAC, and project-scoped permission checks before protected operations run.
-- Class: compliance/security
-- Status: active
-- Description: The backend enforces authentication, RBAC, and project-scoped permission checks before protected operations run.
-- Why it matters: Weak RBAC or unclear permission boundaries are the highest-risk failure mode for v1.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Tool calls must go through backend-side permission checks. Code/platform permissions and project/data permissions should remain conceptually separate.
-
-### R004 — Project data and project memory are isolated by project boundary.
-- Class: core-capability
-- Status: active
-- Description: Project data and project memory are isolated by project boundary.
-- Why it matters: BuildingAgent's future building data workflows depend on trustable project isolation from the foundation.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: No project should read or mutate another project's data or memory through the normal platform paths.
-
 ### R005 — The platform includes a Hermes-inspired general agent runtime skeleton for sessions, planning/execution loop shape, and agent interaction flow.
 - Class: core-capability
 - Status: active
@@ -182,6 +149,39 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Validated
 
+### R002 — A signed-in user can select a project and enter a project-scoped chat workspace.
+- Class: primary-user-loop
+- Status: validated
+- Description: A signed-in user can select a project and enter a project-scoped chat workspace.
+- Why it matters: This is the main vertical slice that proves the platform foundation is usable rather than only structural.
+- Source: user
+- Primary owning slice: M001/S01
+- Supporting slices: M001/S03
+- Validation: Validated by S01 verification: API auth/project/chat contract tests, Web App tests, typecheck, and build all passed on 2026-05-10. Evidence: npm test -- --run apps/api/src/auth.test.ts apps/api/src/chat.test.ts; npm test -- --run apps/web/src/App.test.tsx; npm run typecheck; npm run build.
+- Notes: S01 proves the Web UI login → project selection → project-scoped chat workspace flow for seeded local users. CLI parity remains for S03.
+
+### R003 — The backend enforces authentication, RBAC, and project-scoped permission checks before protected operations run.
+- Class: compliance/security
+- Status: validated
+- Description: The backend enforces authentication, RBAC, and project-scoped permission checks before protected operations run.
+- Why it matters: Weak RBAC or unclear permission boundaries are the highest-risk failure mode for v1.
+- Source: user
+- Primary owning slice: M001/S01
+- Supporting slices: M001/S02, M001/S03
+- Validation: Validated by S01 API contract tests covering missing/invalid bearer tokens, forbidden project selection, selected-project enforcement, read/write permission checks, and project-scoped chat access; full slice verification passed on 2026-05-10.
+- Notes: S01 validates backend auth, selected-project, project membership, and chat permission checks for current project/chat protected operations. Future tool/registry/CLI operations must reuse this boundary in S02/S03.
+
+### R004 — Project data and project memory are isolated by project boundary.
+- Class: core-capability
+- Status: validated
+- Description: Project data and project memory are isolated by project boundary.
+- Why it matters: BuildingAgent's future building data workflows depend on trustable project isolation from the foundation.
+- Source: user
+- Primary owning slice: M001/S01
+- Supporting slices: M002
+- Validation: Validated by S01 API chat tests proving a user cannot select/chat in a project they are not a member of and chat history is read/written through the selected project boundary; full slice verification passed on 2026-05-10.
+- Notes: S01 validates in-memory chat messages/memory keyed by project boundary for seeded local projects. Broader data-source isolation remains for later milestones.
+
 ## Deferred
 
 ### R017 — Enterprise identity and account lifecycle capabilities such as SSO, invitations, and password reset are useful later but not required for v1.
@@ -312,9 +312,9 @@ This file is the explicit capability and coverage contract for the project.
 | ID | Class | Status | Primary owner | Supporting | Proof |
 |---|---|---|---|---|---|
 | R001 | primary-user-loop | active | M001/none yet | none | mapped |
-| R002 | primary-user-loop | active | M001/none yet | none | mapped |
-| R003 | compliance/security | active | M001/none yet | none | mapped |
-| R004 | core-capability | active | M001/none yet | none | mapped |
+| R002 | primary-user-loop | validated | M001/S01 | M001/S03 | Validated by S01 verification: API auth/project/chat contract tests, Web App tests, typecheck, and build all passed on 2026-05-10. Evidence: npm test -- --run apps/api/src/auth.test.ts apps/api/src/chat.test.ts; npm test -- --run apps/web/src/App.test.tsx; npm run typecheck; npm run build. |
+| R003 | compliance/security | validated | M001/S01 | M001/S02, M001/S03 | Validated by S01 API contract tests covering missing/invalid bearer tokens, forbidden project selection, selected-project enforcement, read/write permission checks, and project-scoped chat access; full slice verification passed on 2026-05-10. |
+| R004 | core-capability | validated | M001/S01 | M002 | Validated by S01 API chat tests proving a user cannot select/chat in a project they are not a member of and chat history is read/written through the selected project boundary; full slice verification passed on 2026-05-10. |
 | R005 | core-capability | active | M001/none yet | none | mapped |
 | R006 | core-capability | active | M001/none yet | none | mapped |
 | R007 | core-capability | active | M001/none yet | none | mapped |
@@ -341,7 +341,7 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Coverage Summary
 
-- Active requirements: 16
-- Mapped to slices: 16
-- Validated: 0
+- Active requirements: 13
+- Mapped to slices: 13
+- Validated: 3 (R002, R003, R004)
 - Unmapped active requirements: 0

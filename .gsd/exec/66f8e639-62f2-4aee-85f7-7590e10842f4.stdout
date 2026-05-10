@@ -1,0 +1,20 @@
+== apps/api/src/auth.test.ts test names ==
+- exposes health without authentication and includes a request id
+- logs in a seeded user without exposing the token in logs
+- rejects empty credentials with a canonical error
+- rejects missing, malformed, and unknown bearer tokens
+- returns session and bounded authorized projects for a valid token
+- selects an authorized project and rejects a forbidden project
+== apps/api/src/chat.test.ts test names ==
+- requires auth and a matching selected project before reading chat
+- stores and returns chat messages only for the selected project
+- rejects chat writes without selected project, write permission, or valid body
+- rechecks membership on every operation and isolates projects between users
+== apps/web/src/App.test.tsx test names ==
+- logs in, selects a project, loads chat, and sends project-scoped messages
+- guards the workspace when unauthenticated and clears invalid stored tokens
+- displays forbidden API errors with request ids without mutating the selected project
+- keeps current chat state on chat failure and shows the backend diagnostic
+- validates empty login fields, blank chat messages, malformed JSON, and local API outages
+- surfaces malformed API JSON as api_malformed without crashing
+- renders read-only selected projects without usable chat compose controls

@@ -17,7 +17,9 @@ The one thing that must work even if everything else is cut is a clean, authenti
 
 ## Current State
 
-The BuildingAgent repository is effectively greenfield, with only a minimal README present. No backend, Web UI, CLI, auth model, runtime, registries, memory layer, or building-domain placeholders have been implemented yet.
+M001 is in progress. S01 is complete: the repository now contains a local npm workspace with a Fastify API and React/Vite Web UI that prove seeded local authentication, project membership, selected-project state, permission checks, and project-scoped chat. A seeded user can log into the Web UI, list authorized projects, select a project, and send chat messages scoped to that project; backend tests verify unauthorized/forbidden access and project isolation failure modes.
+
+Remaining M001 work is still substantial: S02 must add authenticated runtime/provider/tool/skill/gateway/building-domain placeholder registry surfaces, and S03 must add the authenticated CLI plus full local smoke checks and final README verification.
 
 Hermes Agent is available locally as a read-only architectural and engineering reference at `/mnt/d/Git_project/references/hermes-agent`. Do not modify that repository. Do not blindly vendor the full Hermes codebase. Selected Hermes components may be reused, copied, and adapted when doing so materially speeds up development and preserves BuildingAgent’s own project structure, naming, permission model, and building-domain roadmap. Preserve license notices and attribution for any Hermes-derived code.
 
@@ -37,9 +39,21 @@ BuildingAgent should use Hermes Agent as the engineering baseline/reference for 
 - permission, approval, audit, and safety patterns
 - tests and smoke-check patterns
 
+S01 established these concrete foundation patterns:
+
+- npm workspaces at the root compose `apps/api` and `apps/web`.
+- The API is Fastify/TypeScript with an in-memory seeded development store.
+- Protected API handlers authenticate bearer tokens and enforce project membership, selected-project state, and per-project permissions before returning project data or accepting chat messages.
+- API failures use canonical machine-readable errors with request ids: missing/invalid auth, forbidden project, missing selected project, permission denial, invalid chat payload, and internal error.
+- The Web UI is React/Vite, not Streamlit, and calls the real local API through a typed client for login, session rehydration, project listing/selection, and chat.
+- Browser session state is intentionally minimal for local development: seeded bearer token plus minimal user/project identifiers, with guarded rehydration through `/api/session` and `/api/projects`.
+- Workspace-aware test forwarding is handled by `scripts/run-tests.cjs` so root verification commands can target API or Web test files.
+
+The S01 auth model is local-development only. Seeded credentials/tokens are public fixtures, the API defaults to loopback (`127.0.0.1`), and this must not be treated as production authentication. Before any shared demo or non-loopback run, add a guard that refuses seeded auth outside an explicit local/dev mode and restrict CORS to known local Web origins.
+
 The first working version should establish a practical Hermes-like platform skeleton before later milestones specialize it for BIM, Brick/RDF/SPARQL, time-series, HHW, and building-operations workflows. M001 should prioritize a working vertical slice over broad placeholder coverage: preserve the authenticated backend, real-provider-first chat path with mock fallback, login → project selection → chat workspace, CLI authenticated chat/project commands, project isolation and backend-side permission checks, Hermes-inspired runtime/tool/skill/model-provider skeleton, smoke checks, and README before expanding placeholder breadth.
 
-Chat/model behavior in M001 should prefer a real configured LLM provider/API from day one. Chat should flow through the real runtime → model/provider path when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials. The provider abstraction should remain extensible and should not hard-code one provider too deeply. Provider credentials must be configured through environment variables or ignored local config files and must never be committed.
+Chat/model behavior in M001 should prefer a real configured LLM provider/API from day one. Chat should flow through the real runtime → model/provider path when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials. Provider credentials must be configured through environment variables or ignored local config files and must never be committed.
 
 The Web UI should use a modern React/Next.js-style product interface, not Streamlit. The first user flow is login → project selection → chat workspace. The UI should also include coherent navigable placeholder pages for project dashboard, model/provider settings, skills manager, tools manager, data source settings, user and permission settings, and audit logs.
 
@@ -88,6 +102,6 @@ See `.gsd/REQUIREMENTS.md` for the explicit capability contract, requirement sta
 
 ## Milestone Sequence
 
-- [ ] M001: Local Hermes-Like Foundation Skeleton — Build the smallest authenticated local platform where backend, Web UI, CLI, login, project selection, chat workspace, runtime/memory/tool/skill/provider skeletons, placeholder gateways, placeholder building tools and skills, smoke checks, and README all work coherently.
+- [ ] M001: Local Hermes-Like Foundation Skeleton — Build the smallest authenticated local platform where backend, Web UI, CLI, login, project selection, chat workspace, runtime/memory/tool/skill/provider skeletons, placeholder gateways, placeholder building tools and skills, smoke checks, and README all work coherently. S01 is complete; S02 and S03 remain.
 - [ ] M002: Building-Domain Data Source Stubs — Add project-scoped external data source configuration surfaces and safe placeholder contracts for BIM, Brick/RDF/SPARQL, time-series, and mapping sources without storing real building data in the repository.
 - [ ] M003: Building Operations Workflow Prototypes — Introduce first non-placeholder building-operations workflows, likely around equipment exploration, semantic query scaffolding, trend inspection, and HHW reset analysis once the foundation boundaries are proven.

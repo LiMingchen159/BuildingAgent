@@ -1,0 +1,36 @@
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/registry.test.ts > placeholder registry and management API contracts > lists bounded synthetic registry data for an authenticated user
+AssertionError: expected '{"runtimeproviders":[{"id":"runtime_p…' not to contain 'customer'
+
+Expected: "customer"
+Received: "{"runtimeproviders":[{"id":"runtime_provider_local_llm","name":"local llm provider placeholder","kind":"llm","status":"placeholder","description":"synthetic local runtime provider slot for future model routing diagnostics."},{"id":"runtime_provider_embeddings","name":"embedding provider placeholder","kind":"embedding","status":"not_configured","description":"synthetic embedding provider slot with no external key or live index configured."},{"id":"runtime_provider_workflow","name":"workflow runtime placeholder","kind":"workflow","status":"mock","description":"mock workflow provider entry used only to exercise registry listings."}],"tools":[{"id":"tool_space_summary","name":"space summary tool placeholder","category":"building","status":"placeholder","description":"synthetic tool definition for summarizing sample space metadata."},{"id":"tool_document_lookup","name":"document lookup tool placeholder","category":"retrieval","status":"not_configured","description":"synthetic retrieval tool slot with no live document connector."},{"id":"tool_energy_snapshot","name":"energy snapshot tool placeholder","category":"analysis","status":"mock","description":"mock analysis tool entry backed only by placeholder fixtures."}],"skills":[{"id":"skill_building_triage","name":"building triage skill placeholder","domain":"building","status":"placeholder","description":"synthetic skill card for routing future building diagnostics."},{"id":"skill_project_readiness","name":"project readiness skill placeholder","domain":"project","status":"mock","description":"mock skill card for project-management workflow inspection."},{"id":"skill_runtime_health","name":"runtime health skill placeholder","domain":"runtime","status":"not_configured","description":"synthetic runtime health skill with no external observability backend."}],"gateways":[{"id":"gateway_bms_placeholder","name":"bms gateway placeholder","protocol":"http","status":"not_configured","description":"synthetic building-management gateway; no live bms endpoint is configured."},{"id":"gateway_mcp_placeholder","name":"mcp gateway placeholder","protocol":"mcp","status":"placeholder","description":"placeholder mcp gateway definition for future external tool bridging."},{"id":"gateway_local_fixture","name":"local fixture gateway","protocol":"local","status":"mock","description":"mock local gateway backed by in-memory synthetic fixtures only."}],"buildingcapabilities":[{"id":"capability_energy_baseline","name":"energy baseline placeholder","domain":"energy","status":"mock","description":"synthetic capability for future energy baseline analysis without real meter data."},{"id":"capability_life_safety_review","name":"life safety review placeholder","domain":"safety","status":"placeholder","description":"placeholder capability for safety review workflows using no customer records."},{"id":"capability_maintenance_priorities","name":"maintenance priorities placeholder","domain":"maintenance","status":"not_configured","description":"synthetic maintenance planning capability with no live cmms integration."},{"id":"capability_project_phasing","name":"project phasing placeholder","domain":"planning","status":"placeholder","description":"placeholder project phasing capability for management page diagnostics."}],"limit":50,"placeholderonly":true,"requestid":"req_000001"}"
+
+ ❯ assertNoLiveIntegrationFields src/registry.test.ts:25:28
+     23|   const serialized = JSON.stringify(value).toLowerCase();
+     24|   for (const forbidden of ["secret", "token", "apikey", "api_key", "be…
+     25|     expect(serialized).not.toContain(forbidden);
+       |                            ^
+     26|   }
+     27| }
+ ❯ src/registry.test.ts:50:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/registry.test.ts > placeholder registry and management API contracts > lists bounded synthetic management data for the selected authorized project
+AssertionError: expected '{"projectid":"project_alpha","gateway…' not to contain 'customer'
+
+Expected: "customer"
+Received: "{"projectid":"project_alpha","gateways":[{"id":"gateway_bms_placeholder","name":"bms gateway placeholder","protocol":"http","status":"not_configured","description":"synthetic building-management gateway; no live bms endpoint is configured."}],"capabilities":[{"id":"capability_energy_baseline","name":"energy baseline placeholder","domain":"energy","status":"mock","description":"synthetic capability for future energy baseline analysis without real meter data."},{"id":"capability_life_safety_review","name":"life safety review placeholder","domain":"safety","status":"placeholder","description":"placeholder capability for safety review workflows using no customer records."}],"tools":[{"id":"tool_space_summary","name":"space summary tool placeholder","category":"building","status":"placeholder","description":"synthetic tool definition for summarizing sample space metadata."},{"id":"tool_document_lookup","name":"document lookup tool placeholder","category":"retrieval","status":"not_configured","description":"synthetic retrieval tool slot with no live document connector."}],"limit":50,"placeholderonly":true,"requestid":"req_000002"}"
+
+ ❯ assertNoLiveIntegrationFields src/registry.test.ts:25:28
+     23|   const serialized = JSON.stringify(value).toLowerCase();
+     24|   for (const forbidden of ["secret", "token", "apikey", "api_key", "be…
+     25|     expect(serialized).not.toContain(forbidden);
+       |                            ^
+     26|   }
+     27| }
+ ❯ src/registry.test.ts:124:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+

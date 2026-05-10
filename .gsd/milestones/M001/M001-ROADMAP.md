@@ -12,10 +12,10 @@
 
 ## Slices
 
-- [ ] **S01: S01** `risk:Highest-risk boundary: auth, session shape, and project isolation must be correct before any other surface can trust them.` `depends:[]`
+- [x] **S01: S01** `risk:Highest-risk boundary: auth, session shape, and project isolation must be correct before any other surface can trust them.` `depends:[]`
   > After this: After this, a seeded local user can log in through the real Web UI, choose a project, and reach a protected project-scoped chat workspace; unauthorized access is blocked by the backend.
 
-- [ ] **S02: Registry skeletons, placeholder gateways, and management pages** `risk:Placeholder boundaries can easily drift into accidental real integrations or undocumented privilege paths.` `depends:[S01]`
+- [ ] **S02: S02** `risk:Placeholder boundaries can easily drift into accidental real integrations or undocumented privilege paths.` `depends:[]`
   > After this: After this, an authenticated user can inspect real placeholder pages and backend listings for runtime providers, skills, tools, gateways, and building-domain capabilities without exposing real external integrations.
 
 - [ ] **S03: Authenticated CLI shell and local smoke checks** `risk:Multi-entrypoint coherence is the last major proof that the skeleton is truly platform-wide instead of only a web demo.` `depends:[S01,S02]`

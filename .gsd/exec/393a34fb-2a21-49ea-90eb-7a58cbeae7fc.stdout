@@ -1,0 +1,86 @@
+== package scripts ==
+{
+  "dev": "npm --workspace @building-agent/api run dev",
+  "dev:api": "npm --workspace @building-agent/api run dev",
+  "dev:web": "npm --workspace @building-agent/web run dev",
+  "build": "npm --workspaces --if-present run build",
+  "test": "node scripts/run-tests.cjs",
+  "typecheck": "npm --workspaces --if-present run typecheck"
+}
+
+== API auth/chat tests ==
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/api/src/auth.test.ts apps/api/src/chat.test.ts
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/api
+
+ ✓ src/chat.test.ts (4 tests) 154ms
+ ✓ src/auth.test.ts (6 tests) 156ms
+
+ Test Files  2 passed (2)
+      Tests  10 passed (10)
+   Start at  18:15:25
+   Duration  7.49s (transform 525ms, setup 0ms, collect 9.20s, tests 310ms, environment 0ms, prepare 3.03s)
+
+
+== Web App tests ==
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/web/src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ✓ src/App.test.tsx (7 tests) 716ms
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+   Start at  18:15:37
+   Duration  54.48s (transform 388ms, setup 5.96s, collect 6.77s, tests 716ms, environment 37.72s, prepare 2.10s)
+
+
+== Typecheck ==
+
+> building-agent@0.1.0 typecheck
+> npm --workspaces --if-present run typecheck
+
+
+> @building-agent/api@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> @building-agent/web@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+== Build ==
+
+> building-agent@0.1.0 build
+> npm --workspaces --if-present run build
+
+
+> @building-agent/api@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @building-agent/web@0.1.0 build
+> tsc -p tsconfig.json && vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 32 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.40 kB │ gzip:  0.27 kB
+dist/assets/index-BKbhu7OA.css    3.59 kB │ gzip:  1.41 kB
+dist/assets/index-BThpvDb4.js   154.51 kB │ gzip: 49.51 kB
+✓ built in 875ms
+
+== Targeted artifact assertions ==
+FAIL api server apps/api/src/server.ts: missing /auth_missing/, /project_forbidden/, /project_not_selected/, /permission_denied/
+PASS api seed apps/api/src/seed.ts: 5 expected markers present
+PASS web app apps/web/src/App.tsx: 4 expected markers present
+FAIL api client apps/web/src/api.ts: missing /Authorization/
+PASS readme README.md: 4 expected markers present

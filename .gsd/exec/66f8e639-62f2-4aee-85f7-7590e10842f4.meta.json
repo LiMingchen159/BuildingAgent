@@ -1,0 +1,18 @@
+{
+  "id": "66f8e639-62f2-4aee-85f7-7590e10842f4",
+  "runtime": "bash",
+  "purpose": "S01 UAT verification: list test case names and selected evidence lines",
+  "script_chars": 347,
+  "started_at": "2026-05-10T10:17:58.291Z",
+  "finished_at": "2026-05-10T10:17:58.366Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 75,
+  "stdout_bytes": 1329,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/66f8e639-62f2-4aee-85f7-7590e10842f4.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/66f8e639-62f2-4aee-85f7-7590e10842f4.stderr"
+}

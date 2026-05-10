@@ -39,6 +39,10 @@ function bounded<T>(items: T[], limit: number): T[] {
   return items.slice(0, limit);
 }
 
+function boundedPlaceholderList<T>(items: T[], store: SeedStore): T[] {
+  return bounded(items, store.maxListSize);
+}
+
 function isReply(value: unknown): value is FastifyReply {
   return typeof value === "object" && value !== null && "sent" in value;
 }
@@ -138,6 +142,62 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
 
     return { projects, limit: store.maxListSize, requestId: requestIdFor(request) };
+  });
+
+  app.get("/api/registry", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    return {
+      runtimeProviders: boundedPlaceholderList(store.runtimeProviders, store),
+      tools: boundedPlaceholderList(store.tools, store),
+      skills: boundedPlaceholderList(store.skills, store),
+      gateways: boundedPlaceholderList(store.gateways, store),
+      buildingCapabilities: boundedPlaceholderList(store.buildingCapabilities, store),
+      limit: store.maxListSize,
+      placeholderOnly: true,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/management", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) {
+      return membership;
+    }
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) {
+      return selected;
+    }
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) {
+      return readable;
+    }
+
+    const management = store.managementByProject[request.params.projectId] ?? {
+      gateways: [],
+      capabilities: [],
+      tools: []
+    };
+
+    return {
+      projectId: request.params.projectId,
+      gateways: boundedPlaceholderList(management.gateways, store),
+      capabilities: boundedPlaceholderList(management.capabilities, store),
+      tools: boundedPlaceholderList(management.tools, store),
+      limit: store.maxListSize,
+      placeholderOnly: true,
+      requestId: requestIdFor(request)
+    };
   });
 
   app.post<{ Params: ProjectParams }>("/api/projects/:projectId/select", async (request, reply) => {
