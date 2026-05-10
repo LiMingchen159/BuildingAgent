@@ -1,0 +1,166 @@
+FILES
+apps/api/src/auth.test.ts
+apps/api/src/auth.ts
+apps/api/src/chat.test.ts
+apps/api/src/index.ts
+apps/api/src/providers.test.ts
+apps/api/src/providers.ts
+apps/api/src/registry.test.ts
+apps/api/src/seed.ts
+apps/api/src/server.ts
+apps/cli/src/api.ts
+apps/cli/src/commands.test.ts
+apps/cli/src/commands.ts
+apps/cli/src/config.test.ts
+apps/cli/src/config.ts
+apps/cli/src/index.ts
+apps/cli/src/registry.test.ts
+apps/cli/src/registry.ts
+apps/web/src/App.test.tsx
+apps/web/src/App.tsx
+apps/web/src/api.ts
+apps/web/src/main.tsx
+apps/web/src/styles.css
+apps/web/src/test/setup.ts
+scripts/run-api-tests.cjs
+scripts/run-tests.cjs
+scripts/smoke-local.cjs
+
+DISPATCH_OR_INVOCATION_TERMS
+README.md:9:Production auth and SSO are out of scope for this slice. There are no anonymous Web or API paths beyond `/health`; use one of the local seeded accounts:
+README.md:69:  --email ada@example.test \
+README.md:92:The smoke runner builds all workspaces, probes or starts the API and Web dev servers, invokes the CLI through the workspace-linked built entrypoint, performs login → session → project selection → registry → management → chat checks, and cleans up child processes and the temporary CLI config directory on success, failure, or timeout. Its logs are prefixed with `[smoke]` stage markers plus child process exit codes so startup, reachability, CLI, provider fallback, and cleanup failures are easy to localize without printing auth material.
+scripts/smoke-local.cjs:264:  const login = await runCli("login", ["login", "--email", SEEDED_EMAIL, "--password", SEEDED_PASSWORD, "--api-url", API_URL]);
+scripts/smoke-local.cjs:278:  assert(registry?.placeholderOnly === true && Array.isArray(registry.runtimeProviders), "Registry output was not the authenticated placeholder registry.");
+apps/api/src/server.ts:39:  email?: unknown;
+apps/api/src/server.ts:135:    const { email, password } = request.body ?? {};
+apps/api/src/server.ts:136:    if (typeof email !== "string" || typeof password !== "string" || !email.trim() || !password) {
+apps/api/src/server.ts:140:    const user = store.users.find((candidate) => candidate.email === email && candidate.password === password);
+apps/api/src/server.ts:197:      runtimeProviders: boundedPlaceholderList(store.runtimeProviders, store),
+apps/api/src/server.ts:200:      gateways: boundedPlaceholderList(store.gateways, store),
+apps/api/src/server.ts:230:      gateways: [],
+apps/api/src/server.ts:237:      gateways: boundedPlaceholderList(management.gateways, store),
+apps/api/src/seed.ts:23:  domain: "building" | "project" | "runtime";
+apps/api/src/seed.ts:39:  domain: "energy" | "safety" | "maintenance" | "planning";
+apps/api/src/seed.ts:45:  gateways: PlaceholderGateway[];
+apps/api/src/seed.ts:53:  email: string;
+apps/api/src/seed.ts:87:  runtimeProviders: PlaceholderRuntimeProvider[];
+apps/api/src/seed.ts:90:  gateways: PlaceholderGateway[];
+apps/api/src/seed.ts:105:  const runtimeProviders: PlaceholderRuntimeProvider[] = [
+apps/api/src/seed.ts:107:      id: "runtime_provider_local_llm",
+apps/api/src/seed.ts:111:      description: "Synthetic local runtime provider slot for future model routing diagnostics."
+apps/api/src/seed.ts:114:      id: "runtime_provider_embeddings",
+apps/api/src/seed.ts:121:      id: "runtime_provider_workflow",
+apps/api/src/seed.ts:169:      id: "skill_runtime_health",
+apps/api/src/seed.ts:171:      domain: "runtime",
+apps/api/src/seed.ts:173:      description: "Synthetic runtime health skill with no external observability backend."
+apps/api/src/seed.ts:177:  const gateways: PlaceholderGateway[] = [
+apps/api/src/seed.ts:179:      id: "gateway_bms_placeholder",
+apps/api/src/seed.ts:183:      description: "Synthetic building-management gateway; no live BMS endpoint is configured."
+apps/api/src/seed.ts:186:      id: "gateway_mcp_placeholder",
+apps/api/src/seed.ts:190:      description: "Placeholder MCP gateway definition for future external tool bridging."
+apps/api/src/seed.ts:193:      id: "gateway_local_fixture",
+apps/api/src/seed.ts:197:      description: "Mock local gateway backed by in-memory synthetic fixtures only."
+apps/api/src/seed.ts:214:      description: "Placeholder capability for safety review workflows using no customer records."
+apps/api/src/seed.ts:221:      description: "Synthetic maintenance planning capability with no live CMMS integration."
+apps/api/src/seed.ts:226:      domain: "planning",
+apps/api/src/seed.ts:236:        gateways: gateways.slice(index % gateways.length, (index % gateways.length) + 1),
+apps/api/src/seed.ts:245:      { id: "user_ada", name: "Ada Lovelace", email: "ada@example.test", password: "local-dev-password" },
+apps/api/src/seed.ts:246:      { id: "user_grace", name: "Grace Hopper", email: "grace@example.test", password: "local-dev-password" }
+apps/api/src/seed.ts:259:    runtimeProviders,
+apps/api/src/seed.ts:262:    gateways,
+apps/api/src/seed.ts:283:    runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),
+apps/api/src/seed.ts:286:    gateways: store.gateways.map((gateway) => ({ ...gateway })),
+apps/api/src/seed.ts:292:          gateways: management.gateways.map((gateway) => ({ ...gateway })),
+apps/api/src/registry.test.ts:36:      runtimeProviders: expect.arrayContaining([
+apps/api/src/registry.test.ts:37:        expect.objectContaining({ id: "runtime_provider_local_llm", status: "placeholder" })
+apps/api/src/registry.test.ts:41:      gateways: expect.arrayContaining([expect.objectContaining({ id: "gateway_bms_placeholder", status: "not_configured" })]),
+apps/api/src/registry.test.ts:47:    expect(response.json().runtimeProviders).toHaveLength(3);
+apps/api/src/registry.test.ts:113:      gateways: [expect.objectContaining({ id: "gateway_bms_placeholder", status: "not_configured" })],
+apps/api/src/registry.test.ts:149:    expect(registry.json().runtimeProviders).toHaveLength(1);
+apps/api/src/registry.test.ts:152:    expect(registry.json().gateways).toHaveLength(1);
+apps/api/src/registry.test.ts:163:    expect(management.json().gateways).toHaveLength(1);
+apps/api/src/chat.test.ts:149:  it("does not invoke the provider before auth, project, selection, permission, or body denial paths", async () => {
+apps/api/src/auth.test.ts:25:      payload: { email: "ada@example.test", password: "local-dev-password" }
+apps/api/src/auth.test.ts:41:      payload: { email: "", password: "" }
+apps/cli/src/registry.ts:19:  domain: "building" | "project" | "runtime";
+apps/cli/src/registry.ts:27:  domain: "energy" | "safety" | "maintenance" | "planning";
+apps/cli/src/registry.ts:31:  runtimeProviders: RuntimeProviderSummary[];
+apps/cli/src/registry.ts:34:  gateways: GatewaySummary[];
+apps/cli/src/registry.ts:43:  gateways: GatewaySummary[];
+apps/cli/src/registry.ts:67:const SKILL_DOMAINS = new Set(["building", "project", "runtime"]);
+apps/cli/src/registry.ts:69:const CAPABILITY_DOMAINS = new Set(["energy", "safety", "maintenance", "planning"]);
+apps/cli/src/registry.ts:155:    runtimeProviders: parseArray(payload.runtimeProviders, parseRuntimeProvider, "Registry returned unexpected runtime providers."),
+apps/cli/src/registry.ts:158:    gateways: parseArray(payload.gateways, parseGateway, "Registry returned unexpected gateways."),
+apps/cli/src/registry.ts:174:    gateways: parseArray(payload.gateways, parseGateway, "Project management returned unexpected gateways."),
+apps/cli/src/registry.test.ts:62:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/registry.test.ts:73:      runtimeProviders: expect.arrayContaining([expect.objectContaining({ id: "runtime_provider_local_llm" })])
+apps/cli/src/registry.test.ts:83:      gateways: expect.arrayContaining([expect.objectContaining({ id: "gateway_bms_placeholder" })])
+apps/cli/src/registry.test.ts:97:          runtimeProviders: [{ id: "runtime_provider_local_llm", name: "bad", status: "placeholder", description: "x" }],
+apps/cli/src/registry.test.ts:100:          gateways: [],
+apps/cli/src/registry.test.ts:110:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.ts:63:    const output = await execute(command, args, options);
+apps/cli/src/commands.ts:78:async function execute(command: string, args: string[], options: CommandOptions): Promise<unknown> {
+apps/cli/src/commands.ts:85:    const email = valueFromFlag(flags, "email");
+apps/cli/src/commands.ts:88:    if (!email || !password) {
+apps/cli/src/commands.ts:89:      throw new CliCommandError("cli_usage", "login requires --email and --password.");
+apps/cli/src/commands.ts:93:    const response = await api.login(email, password);
+apps/cli/src/commands.test.ts:50:  it("logs in, persists auth, selects a project, and reuses it for chat in fresh invocations", async () => {
+apps/cli/src/commands.test.ts:54:        ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:116:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:138:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:151:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/cli/src/commands.test.ts:191:      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+apps/web/src/App.tsx:27:type WorkspaceTab = "chat" | "registry" | "gateways" | "building";
+apps/web/src/App.tsx:98:function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: string) => Promise<void>; busy: boolean }) {
+apps/web/src/App.tsx:99:  const [email, setEmail] = useState("ada@example.test");
+apps/web/src/App.tsx:105:    if (!email.trim() || !password) {
+apps/web/src/App.tsx:106:      setValidation("Enter the seeded email and password to continue.");
+apps/web/src/App.tsx:110:    await onLogin(email.trim(), password);
+apps/web/src/App.tsx:121:          <input autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} />
+apps/web/src/App.tsx:275:          <ItemList<RuntimeProviderSummary> items={registry.runtimeProviders} getMeta={(item) => item.kind} emptyText="No runtime provider placeholders returned." />
+apps/web/src/App.tsx:288:    <section className="management-panel" aria-labelledby="gateways-title">
+apps/web/src/App.tsx:292:          <h2 id="gateways-title">Project gateway placeholders</h2>
+apps/web/src/App.tsx:296:      <p className="muted">These entries are read-only synthetic gateway slots; no external BMS, MCP, or customer integration is live.</p>
+apps/web/src/App.tsx:297:      <h3>Project gateways</h3>
+apps/web/src/App.tsx:298:      {management ? <ItemList<GatewaySummary> items={management.gateways} getMeta={(item) => item.protocol} emptyText="No project gateway placeholders returned." /> : <EmptyState>Project management data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:299:      <h3>Registry gateway catalog</h3>
+apps/web/src/App.tsx:300:      {registry ? <ItemList<GatewaySummary> items={registry.gateways} getMeta={(item) => item.protocol} emptyText="No registry gateway placeholders returned." /> : <EmptyState>Registry gateway data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:315:      <p className="muted">Capability cards are mock or placeholder data only and contain no customer building records.</p>
+apps/web/src/App.tsx:352:    { id: "gateways", label: "Gateways" },
+apps/web/src/App.tsx:375:      {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
+apps/web/src/App.tsx:473:  async function handleLogin(email: string, password: string) {
+apps/web/src/App.tsx:476:      const response = await login(email, password);
+apps/cli/src/api.ts:80:  async login(email: string, password: string): Promise<unknown> {
+apps/cli/src/api.ts:83:      body: { email, password },
+apps/web/src/App.test.tsx:9:const runtimeProvider = {
+apps/web/src/App.test.tsx:10:  id: "runtime_provider_local_llm",
+apps/web/src/App.test.tsx:14:  description: "Synthetic local runtime provider slot."
+apps/web/src/App.test.tsx:30:const gateway = {
+apps/web/src/App.test.tsx:31:  id: "gateway_bms_placeholder",
+apps/web/src/App.test.tsx:35:  description: "Synthetic building-management gateway."
+apps/web/src/App.test.tsx:47:    runtimeProviders: [runtimeProvider],
+apps/web/src/App.test.tsx:50:    gateways: [gateway],
+apps/web/src/App.test.tsx:62:    gateways: [gateway],
+apps/web/src/App.test.tsx:160:    expect(screen.getByRole("heading", { name: /runtime providers, tools, and skills/i })).toBeInTheDocument();
+apps/web/src/App.test.tsx:166:    await user.click(screen.getByRole("button", { name: /gateways/i }));
+apps/web/src/App.test.tsx:324:    await user.clear(screen.getByLabelText(/email/i));
+apps/web/src/App.test.tsx:326:    expect(screen.getByRole("alert")).toHaveTextContent(/enter the seeded email/i);
+apps/web/src/App.test.tsx:329:    await user.type(screen.getByLabelText(/email/i), "ada@example.test");
+apps/web/src/App.test.tsx:418:    installBaseFetch({ management: jsonResponse(managementBody({ gateways: [{ ...gateway, protocol: "smtp" }] })) });
+apps/web/src/App.test.tsx:426:    installBaseFetch({ registry: jsonResponse(registryBody({ runtimeProviders: [], tools: [], skills: [], gateways: [], buildingCapabilities: [] })), management: jsonResponse(managementBody({ gateways: [], capabilities: [], tools: [] })) });
+apps/web/src/App.test.tsx:430:    expect(screen.getByText(/no runtime provider placeholders returned/i)).toBeInTheDocument();
+apps/web/src/App.test.tsx:431:    await user.click(screen.getByRole("button", { name: /gateways/i }));
+apps/web/src/App.test.tsx:432:    expect(screen.getByText(/no project gateway placeholders returned/i)).toBeInTheDocument();
+apps/web/src/api.ts:86:  domain: "building" | "project" | "runtime";
+apps/web/src/api.ts:94:  domain: "energy" | "safety" | "maintenance" | "planning";
+apps/web/src/api.ts:98:  runtimeProviders: RuntimeProviderSummary[];
+apps/web/src/api.ts:101:  gateways: GatewaySummary[];
+apps/web/src/api.ts:110:  gateways: GatewaySummary[];
+apps/web/src/api.ts:123:const SKILL_DOMAINS = new Set(["building", "project", "runtime"]);
+apps/web/src/api.ts:125:const CAPABILITY_DOMAINS = new Set(["energy", "safety", "maintenance", "planning"]);
+apps/web/src/api.ts:262:export async function login(email: string, password: string): Promise<LoginResponse> {
+apps/web/src/api.ts:265:    body: JSON.stringify({ email, password })
+apps/web/src/api.ts:340:    runtimeProviders: parseArray(payload.runtimeProviders, parseRuntimeProvider, "Registry returned unexpected runtime providers."),
+apps/web/src/api.ts:343:    gateways: parseArray(payload.gateways, parseGateway, "Registry returned unexpected gateways."),
+apps/web/src/api.ts:359:    gateways: parseArray(payload.gateways, parseGateway, "Project management returned unexpected gateways."),

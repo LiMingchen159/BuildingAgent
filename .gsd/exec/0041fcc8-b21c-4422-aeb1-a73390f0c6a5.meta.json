@@ -1,0 +1,18 @@
+{
+  "id": "0041fcc8-b21c-4422-aeb1-a73390f0c6a5",
+  "runtime": "bash",
+  "purpose": "S04 UAT supplemental artifact/redaction scan after CLI output contract confirmed via tests/API types",
+  "script_chars": 3025,
+  "started_at": "2026-05-10T16:13:33.470Z",
+  "finished_at": "2026-05-10T16:13:33.616Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 146,
+  "stdout_bytes": 910,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/0041fcc8-b21c-4422-aeb1-a73390f0c6a5.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/0041fcc8-b21c-4422-aeb1-a73390f0c6a5.stderr"
+}

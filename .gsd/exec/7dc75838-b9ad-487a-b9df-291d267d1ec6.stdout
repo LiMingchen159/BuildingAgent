@@ -1,0 +1,3 @@
+__S04_UAT_REDACTION_START=2026-05-11T00:14:30+08:00
+PASS redaction scan: no unallowed real-looking provider keys, bearer tokens, password/token/API-key literals found in selected S04 files.
+__S04_UAT_REDACTION_END=2026-05-11T00:14:30+08:00

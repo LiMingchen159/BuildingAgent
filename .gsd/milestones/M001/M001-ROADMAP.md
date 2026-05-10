@@ -24,7 +24,7 @@
 - [x] **S04: S04** `risk:Medium: provider seams must prove real-provider-first behavior while staying safe for local no-secret smoke runs.` `depends:[]`
   > After this: After this, chat has explicit provider-selection behavior: it prefers a configured real provider when credentials/configuration exist, retains a deterministic local/mock fallback for smoke and no-credential runs, and Web/CLI/API tests prove both paths without leaking secrets.
 
-- [ ] **S05: Requirement coverage reconciliation remediation** `risk:Low-medium: mostly documentation and targeted tests, but must avoid overstating placeholder surfaces as real integrations.` `depends:[S01,S02,S03,S04]`
+- [ ] **S05: S05** `risk:Low-medium: mostly documentation and targeted tests, but must avoid overstating placeholder surfaces as real integrations.` `depends:[]`
   > After this: After this, M001 artifacts explicitly reconcile requirement coverage: active in-scope requirements are proven, later-milestone/deferred and anti-feature/constraint requirements are marked as intentionally out of scope where applicable, and placeholder gateway/building-domain negative boundaries are evidenced for validation.
 
 ## Boundary Map

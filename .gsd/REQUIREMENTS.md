@@ -4,110 +4,6 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Active
 
-### R001 — All user-facing entry points require authentication before use, including the Web UI, CLI, Email gateway placeholder, and WhatsApp gateway placeholder.
-- Class: primary-user-loop
-- Status: active
-- Description: All user-facing entry points require authentication before use, including the Web UI, CLI, Email gateway placeholder, and WhatsApp gateway placeholder.
-- Why it matters: The first useful platform foundation must prove that no interaction path bypasses authentication.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: V1 uses pragmatic local auth with seeded users/tokens, not production identity. Anonymous interaction is explicitly excluded.
-
-### R005 — The platform includes a Hermes-inspired general agent runtime skeleton for sessions, planning/execution loop shape, and agent interaction flow.
-- Class: core-capability
-- Status: active
-- Description: The platform includes a Hermes-inspired general agent runtime skeleton for sessions, planning/execution loop shape, and agent interaction flow.
-- Why it matters: M001 must establish the reusable general agent foundation before later building-operations specialization.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Use Hermes as the engineering baseline/reference for the general agent platform layer. BuildingAgent should not be built from zero unnecessarily.
-
-### R006 — The platform includes a permission-checked tool registry and dispatcher skeleton.
-- Class: core-capability
-- Status: active
-- Description: The platform includes a permission-checked tool registry and dispatcher skeleton.
-- Why it matters: Tool dispatch is a central platform boundary and must not be retrofitted after building-domain tools arrive.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Placeholder tools should register and dispatch through the same backend permission path future real tools will use.
-
-### R007 — The platform includes a skill registry skeleton for listing and invoking placeholder skills through defined platform boundaries.
-- Class: core-capability
-- Status: active
-- Description: The platform includes a skill registry skeleton for listing and invoking placeholder skills through defined platform boundaries.
-- Why it matters: Skills are a first-class extension point for future building-operations workflows.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Building-domain skills remain placeholders in v1 but should follow a Hermes-inspired registry/execution pattern where useful.
-
-### R009 — The Web UI provides a coherent modern React/Next.js-style shell for login, project selection, chat workspace, and navigable placeholder management pages.
-- Class: primary-user-loop
-- Status: active
-- Description: The Web UI provides a coherent modern React/Next.js-style shell for login, project selection, chat workspace, and navigable placeholder management pages.
-- Why it matters: The platform needs a usable local product interface for the builder/operator and internal evaluator.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Do not use Streamlit. Placeholder pages include project dashboard, model/provider settings, skills manager, tools manager, data source settings, user/permission settings, and audit logs.
-
-### R010 — The CLI provides authenticated skeleton commands for login, project list, project use, chat, model list, skill list, and tool list.
-- Class: primary-user-loop
-- Status: active
-- Description: The CLI provides authenticated skeleton commands for login, project list, project use, chat, model list, skill list, and tool list.
-- Why it matters: The CLI is a required platform entry point and should prove the backend contract is not Web-only.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Use Hermes CLI interaction patterns where useful, adapted to BuildingAgent naming and backend contract.
-
-### R011 — Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path, and may remain minimal in M001 if needed to preserve the core working vertical slice.
-- Class: integration
-- Status: active
-- Description: Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path, and may remain minimal in M001 if needed to preserve the core working vertical slice.
-- Why it matters: External channel boundaries must be safe from the start even before real integrations are built.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: They do not need real channel integration in v1. The placeholder boundary must make auth expectations explicit, but gateway breadth is lower priority than authenticated backend, real-provider-first chat, Web/CLI chat/project flows, project isolation, skeleton registries, smoke checks, and README.
-
-### R012 — The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis, kept minimal if needed to preserve the core working vertical slice.
-- Class: differentiator
-- Status: active
-- Description: The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis, kept minimal if needed to preserve the core working vertical slice.
-- Why it matters: The platform should visibly point toward BuildingAgent's building-operations direction while keeping v1 executable.
-- Source: user
-- Primary owning slice: M001/none yet
-- Supporting slices: none
-- Validation: mapped
-- Notes: Placeholders only in v1; no real building analytics or real building data should be included. Small clearly marked synthetic/demo Brick-like and time-series data is acceptable for local testing of workflows, permissions, and project isolation. Placeholder gateways and building-domain demo data are lower priority than authenticated backend, real-provider-first chat, Web/CLI chat/project flows, project isolation, skeleton registries, smoke checks, and README.
-
-### R013 — Untitled
-- Class: launchability
-- Why it matters: A foundation skeleton is only useful if it can be run and verified locally.
-- Source: user
-- Supporting slices: M001/S03, M001/S04
-- Validation: Advanced by S04 verification on 2026-05-10: full slice suite passed API provider/chat tests, Web chat tests, CLI command tests, typecheck, build, and live npm run smoke. Smoke specifically exercised authenticated CLI login/project/registry/management/chat against live API/Web and asserted deterministic provider fallback metadata in the no-secret run.
-- Notes: S04 added provider-path coverage to the existing local launchability contract. Default smoke remains no-secret and deterministic; real-provider behavior is proven through injected/fake provider tests rather than live network credentials.
-
-### R014 — Untitled
-- Class: operability
-- Why it matters: The builder/operator and local evaluator need a clear path to run the platform without tribal knowledge.
-- Source: user
-- Supporting slices: M001/S04
-- Validation: Advanced by S04 documentation and verification on 2026-05-10: README provider configuration/fallback instructions were included in the full build/smoke-verified slice, and redaction scan included README to guard against committed provider keys or secret-looking examples.
-- Notes: S04 updated README coverage for provider environment variables, default mock fallback, explicit fallback policy, and verification commands. Final M001 validation should reconcile the complete README coverage across all slices.
-
 ### R015 — The platform can represent project-scoped external data source configuration surfaces for future BIM, Brick/RDF/SPARQL, time-series, and mapping sources.
 - Class: integration
 - Status: active
@@ -131,6 +27,17 @@ This file is the explicit capability and coverage contract for the project.
 - Notes: Likely directions include equipment exploration, semantic query scaffolding, trend inspection, and HHW reset analysis. This is not part of M001.
 
 ## Validated
+
+### R001 — All user-facing M001 entry points require authentication before use across the proven local Web UI, CLI, registry/management, provider-backed chat, and smoke paths; Email and WhatsApp gateways are authenticated placeholder inspections only.
+- Class: primary-user-loop
+- Status: validated
+- Description: All user-facing M001 entry points require authentication before use across the proven local Web UI, CLI, registry/management, provider-backed chat, and smoke paths; Email and WhatsApp gateways are authenticated placeholder inspections only.
+- Why it matters: The first useful platform foundation must prove that no interaction path bypasses authentication.
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: M001/S01, M001/S02, M001/S03, M001/S04
+- Validation: Validated by S01-S04 evidence: S01 Web/API auth/project/chat tests, typecheck, and build; S02 authenticated registry/management API and Web tests; S03 authenticated CLI command tests and npm run smoke; S04 provider-backed chat tests/build/smoke proving provider invocation occurs only after auth, selected-project, membership, and permission checks. Scope is local M001 skeleton auth, not enterprise identity or production deployment.
+- Notes: V1 uses pragmatic local auth with seeded users/tokens, not production identity. Anonymous interaction is explicitly excluded. S01 proves Web/API login, project selection, protected chat, and project isolation; S02 proves authenticated placeholder registry/management/gateway inspection; S03 proves authenticated CLI login, session, project, registry, management, and chat smoke paths; S04 proves provider-backed chat remains behind the same auth/project/permission guards. Gateway surfaces are placeholder-only inspections with no anonymous path and no live channel integration.
 
 ### R002 — A signed-in user can select a project and enter a project-scoped chat workspace.
 - Class: primary-user-loop
@@ -165,15 +72,115 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: Validated by S01 API chat tests proving a user cannot select/chat in a project they are not a member of and chat history is read/written through the selected project boundary; full slice verification passed on 2026-05-10.
 - Notes: S01 validates in-memory chat messages/memory keyed by project boundary for seeded local projects. Broader data-source isolation remains for later milestones.
 
-### R008 — Untitled
+### R005 — The platform includes a Hermes-inspired general agent runtime skeleton for authenticated sessions, project-scoped chat interaction flow, provider-backed assistant responses, and observable planning/execution loop boundaries.
+- Class: core-capability
+- Status: validated
+- Description: The platform includes a Hermes-inspired general agent runtime skeleton for authenticated sessions, project-scoped chat interaction flow, provider-backed assistant responses, and observable planning/execution loop boundaries.
+- Why it matters: M001 must establish the reusable general agent foundation before later building-operations specialization.
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: M001/S01, M001/S04
+- Validation: Validated at M001 skeleton/contract level by S01 Web/API foundation tests and S04 provider-backed chat tests/build/smoke. Evidence proves the local session/chat/provider seams and observable request-id/provider metadata, but does not claim a full autonomous planning/execution runtime.
+- Notes: M001 validates skeleton/contract coverage only. S01 establishes authenticated sessions, project selection, project-scoped chat memory, and canonical request-id diagnostics; S04 adds the provider seam and assistant response contract. The full autonomous planning/execution loop, real task planner/executor, long-running runtime orchestration, and production resilience remain future work under the Hermes-inspired roadmap.
+
+### R006 — The platform includes an authenticated, permission-checked tool registry and dispatcher skeleton boundary for inspecting placeholder tools without enabling real tool execution in M001.
+- Class: core-capability
+- Status: validated
+- Description: The platform includes an authenticated, permission-checked tool registry and dispatcher skeleton boundary for inspecting placeholder tools without enabling real tool execution in M001.
+- Why it matters: Tool dispatch is a central platform boundary and must not be retrofitted after building-domain tools arrive.
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: M001/S02, M001/S03
+- Validation: Validated at M001 skeleton/contract level by S02 registry/management API and Web tests plus S03 CLI registry/management tests and npm run smoke. Evidence proves authenticated, bounded placeholder tool inspection and selected-project management checks; it does not claim real dispatcher execution.
+- Notes: M001 validates skeleton/contract coverage only. S02 proves authenticated global registry listing and selected-project management inspection for placeholder tools behind membership, selected-project, and chat:read checks; S03 proves the same surfaces through CLI/smoke. Real tool dispatch, execution/mutation routes, approvals, audit trails, and live integrations remain future work. This preserves D009's coherent vertical-slice priority and D010's placeholder-only boundary with no accidental live integrations.
+
+### R007 — The platform includes an authenticated skill registry skeleton boundary for listing placeholder skills through defined platform and project-management surfaces without real skill invocation in M001.
+- Class: core-capability
+- Status: validated
+- Description: The platform includes an authenticated skill registry skeleton boundary for listing placeholder skills through defined platform and project-management surfaces without real skill invocation in M001.
+- Why it matters: Skills are a first-class extension point for future building-operations workflows.
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: M001/S02, M001/S03
+- Validation: Validated at M001 skeleton/contract level by S02 registry/management API and Web tests plus S03 CLI registry/management tests and npm run smoke. Evidence proves authenticated placeholder skill inspection; it does not claim real skill invocation.
+- Notes: M001 validates skeleton/contract coverage only. S02 proves authenticated placeholder skill listings in the global registry and Web management tabs, and S03 proves registry/management inspection through the authenticated CLI/smoke path. Real skill invocation, skill execution runtime, approvals, and building-workflow skills remain future work. The boundary remains placeholder-only and does not introduce live integrations or real building analytics.
+
+### R008 — The chat layer uses a provider abstraction that prefers configured OpenAI-compatible real-provider mode when BUILDING_AGENT_LLM_* configuration exists and otherwise supports deterministic local mock fallback for no-secret development, CI, and smoke runs.
 - Class: integration
 - Status: validated
+- Description: The chat layer uses a provider abstraction that prefers configured OpenAI-compatible real-provider mode when BUILDING_AGENT_LLM_* configuration exists and otherwise supports deterministic local mock fallback for no-secret development, CI, and smoke runs.
 - Why it matters: Provider abstraction is required for a Hermes-like agent foundation and future model flexibility.
 - Source: user
 - Primary owning slice: M001/S04
 - Supporting slices: M001/S04
 - Validation: Validated by S04 verification on 2026-05-10: npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts passed 29 tests; npm run typecheck passed API/CLI/Web; npm run build passed all workspaces and Vite production build; npm run smoke passed live API/Web/CLI no-secret fallback flow; refined redaction scan found no unallowed real-looking provider key, bearer token, password, token, or API-key literal beyond documented seeded/test fixtures.
 - Notes: S04 implements the provider configuration skeleton with OpenAI-compatible real-provider selection when BUILDING_AGENT_LLM_* configuration is present, deterministic mock fallback for no-secret/local smoke runs, redaction-safe provider diagnostics, and API/Web/CLI/smoke proof. Live external provider operation remains optional/env-gated and was not exercised with real credentials.
+
+### R009 — The Web UI provides a coherent modern React/Vite product shell for login, project selection, project-scoped chat, and navigable placeholder management pages.
+- Class: primary-user-loop
+- Status: validated
+- Description: The Web UI provides a coherent modern React/Vite product shell for login, project selection, project-scoped chat, and navigable placeholder management pages.
+- Why it matters: The platform needs a usable local product interface for the builder/operator and internal evaluator.
+- Source: user
+- Primary owning slice: M001/S02
+- Supporting slices: M001/S01
+- Validation: Validated by S01 Web/API flow tests, typecheck, and build plus S02 Web management tests, typecheck, and build. Evidence includes S01 App tests for login/project/chat and S02 App tests for registry, gateway, building-domain tabs, diagnostics, malformed payload handling, and empty states.
+- Notes: Validated by S01/S02 Web implementation and verification. The UI remains a local skeleton, not a production deployment surface.
+
+### R010 — The CLI provides authenticated skeleton commands for login, session inspection, project list/use, chat send/list, registry inspection, and project management inspection.
+- Class: primary-user-loop
+- Status: validated
+- Description: The CLI provides authenticated skeleton commands for login, session inspection, project list/use, chat send/list, registry inspection, and project management inspection.
+- Why it matters: The CLI is a required platform entry point and should prove the backend contract is not Web-only.
+- Source: user
+- Primary owning slice: M001/S03
+- Supporting slices: M001/S04
+- Validation: Validated by S03 CLI tests, typecheck, and npm run smoke; S04 extended CLI chat JSON metadata and reran CLI command tests, typecheck, build, and smoke with provider fallback assertions.
+- Notes: Validated for the local skeleton. Packaging/bin alignment remains a follow-up before treating the CLI as publish-ready.
+
+### R011 — Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path and no real channel integration in M001.
+- Class: integration
+- Status: validated
+- Description: Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path and no real channel integration in M001.
+- Why it matters: External channel boundaries must be safe from the start even before real integrations are built.
+- Source: user
+- Primary owning slice: M001/S02
+- Supporting slices: M001/S03
+- Validation: Validated by S02 registry/management API and Web tests proving authenticated placeholder gateway listings, selected-project management access, request-id diagnostics, placeholderOnly metadata, and no obvious secret-like fields in successful payloads.
+- Notes: Validated only as authenticated placeholder surfaces. Real gateway integrations remain out of scope for M001.
+
+### R012 — The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis, without real building analytics or real building data in M001.
+- Class: differentiator
+- Status: validated
+- Description: The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis, without real building analytics or real building data in M001.
+- Why it matters: The platform should visibly point toward BuildingAgent's building-operations direction while keeping v1 executable.
+- Source: user
+- Primary owning slice: M001/S02
+- Supporting slices: M001/S03
+- Validation: Validated by S02 registry/management API and Web tests covering synthetic runtime provider, tool, skill, gateway, and building-domain capability fixtures; S03 smoke exercised registry and management inspection through the authenticated CLI.
+- Notes: Validated as placeholder-only BuildingAgent direction markers. Real BIM/Brick/time-series/HHW analytics remain deferred/out of scope for M001.
+
+### R013 — The platform can be built, typechecked, tested, and smoke-tested locally through documented commands that exercise the API, Web UI, and CLI coherence path.
+- Class: launchability
+- Status: validated
+- Description: The platform can be built, typechecked, tested, and smoke-tested locally through documented commands that exercise the API, Web UI, and CLI coherence path.
+- Why it matters: A foundation skeleton is only useful if it can be run and verified locally.
+- Source: user
+- Primary owning slice: M001/S03
+- Supporting slices: M001/S01, M001/S04
+- Validation: Validated by S03 npm run smoke plus CLI tests/typecheck, and advanced by S04 full verification: API provider/chat tests, Web chat tests, CLI command tests, npm run typecheck, npm run build, and live npm run smoke all passed. Smoke exercised authenticated CLI login/project/registry/management/chat against live API/Web and asserted deterministic provider fallback metadata in the no-secret run.
+- Notes: Default smoke remains no-secret and deterministic. Real-provider behavior is proven through injected/fake provider tests rather than live network credentials.
+
+### R014 — The README documents local setup, seeded auth, CLI/Web/API usage, provider configuration, fallback behavior, and verification commands for the M001 skeleton.
+- Class: operability
+- Status: validated
+- Description: The README documents local setup, seeded auth, CLI/Web/API usage, provider configuration, fallback behavior, and verification commands for the M001 skeleton.
+- Why it matters: The builder/operator and local evaluator need a clear path to run the platform without tribal knowledge.
+- Source: user
+- Primary owning slice: M001/S04
+- Supporting slices: M001/S01, M001/S03
+- Validation: Validated by S01 README local-run documentation, S03 smoke documentation, and S04 README provider configuration/fallback instructions included in the full build/smoke-verified slice; redaction scan included README to guard against committed provider keys or secret-looking examples.
+- Notes: S04 updated README coverage for provider environment variables, default mock fallback, explicit fallback policy, and verification commands. Final M001 validation should reconcile complete README coverage across all slices.
 
 ## Deferred
 
@@ -183,7 +190,7 @@ This file is the explicit capability and coverage contract for the project.
 - Description: Enterprise identity and account lifecycle capabilities such as SSO, invitations, and password reset are useful later but not required for v1.
 - Why it matters: These capabilities matter later but would distract from proving the local foundation skeleton.
 - Source: user
-- Primary owning slice: M001/none yet
+- Primary owning slice: none
 - Supporting slices: none
 - Validation: unmapped
 - Notes: V1 uses seeded local users/tokens. Revisit when optimizing for external customers or enterprise deployment.
@@ -194,7 +201,7 @@ This file is the explicit capability and coverage contract for the project.
 - Description: Production-grade deployment is deferred beyond the first local working foundation.
 - Why it matters: The first version should prove platform boundaries locally before deployment hardening.
 - Source: user
-- Primary owning slice: M001/none yet
+- Primary owning slice: none
 - Supporting slices: none
 - Validation: unmapped
 - Notes: V1 only needs local runability and smoke checks.
@@ -304,24 +311,24 @@ This file is the explicit capability and coverage contract for the project.
 
 | ID | Class | Status | Primary owner | Supporting | Proof |
 |---|---|---|---|---|---|
-| R001 | primary-user-loop | active | M001/none yet | none | mapped |
+| R001 | primary-user-loop | validated | M001/S05 | M001/S01, M001/S02, M001/S03, M001/S04 | Validated by S01-S04 evidence: S01 Web/API auth/project/chat tests, typecheck, and build; S02 authenticated registry/management API and Web tests; S03 authenticated CLI command tests and npm run smoke; S04 provider-backed chat tests/build/smoke proving provider invocation occurs only after auth, selected-project, membership, and permission checks. Scope is local M001 skeleton auth, not enterprise identity or production deployment. |
 | R002 | primary-user-loop | validated | M001/S01 | M001/S03 | Validated by S01 verification: API auth/project/chat contract tests, Web App tests, typecheck, and build all passed on 2026-05-10. Evidence: npm test -- --run apps/api/src/auth.test.ts apps/api/src/chat.test.ts; npm test -- --run apps/web/src/App.test.tsx; npm run typecheck; npm run build. |
 | R003 | compliance/security | validated | M001/S01 | M001/S02, M001/S03 | Validated by S01 API contract tests covering missing/invalid bearer tokens, forbidden project selection, selected-project enforcement, read/write permission checks, and project-scoped chat access; full slice verification passed on 2026-05-10. |
 | R004 | core-capability | validated | M001/S01 | M002 | Validated by S01 API chat tests proving a user cannot select/chat in a project they are not a member of and chat history is read/written through the selected project boundary; full slice verification passed on 2026-05-10. |
-| R005 | core-capability | active | M001/none yet | none | mapped |
-| R006 | core-capability | active | M001/none yet | none | mapped |
-| R007 | core-capability | active | M001/none yet | none | mapped |
+| R005 | core-capability | validated | M001/S05 | M001/S01, M001/S04 | Validated at M001 skeleton/contract level by S01 Web/API foundation tests and S04 provider-backed chat tests/build/smoke. Evidence proves the local session/chat/provider seams and observable request-id/provider metadata, but does not claim a full autonomous planning/execution runtime. |
+| R006 | core-capability | validated | M001/S05 | M001/S02, M001/S03 | Validated at M001 skeleton/contract level by S02 registry/management API and Web tests plus S03 CLI registry/management tests and npm run smoke. Evidence proves authenticated, bounded placeholder tool inspection and selected-project management checks; it does not claim real dispatcher execution. |
+| R007 | core-capability | validated | M001/S05 | M001/S02, M001/S03 | Validated at M001 skeleton/contract level by S02 registry/management API and Web tests plus S03 CLI registry/management tests and npm run smoke. Evidence proves authenticated placeholder skill inspection; it does not claim real skill invocation. |
 | R008 | integration | validated | M001/S04 | M001/S04 | Validated by S04 verification on 2026-05-10: npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts passed 29 tests; npm run typecheck passed API/CLI/Web; npm run build passed all workspaces and Vite production build; npm run smoke passed live API/Web/CLI no-secret fallback flow; refined redaction scan found no unallowed real-looking provider key, bearer token, password, token, or API-key literal beyond documented seeded/test fixtures. |
-| R009 | primary-user-loop | active | M001/none yet | none | mapped |
-| R010 | primary-user-loop | active | M001/none yet | none | mapped |
-| R011 | integration | active | M001/none yet | none | mapped |
-| R012 | differentiator | active | M001/none yet | none | mapped |
-| R013 | launchability |  | none | M001/S03, M001/S04 | Advanced by S04 verification on 2026-05-10: full slice suite passed API provider/chat tests, Web chat tests, CLI command tests, typecheck, build, and live npm run smoke. Smoke specifically exercised authenticated CLI login/project/registry/management/chat against live API/Web and asserted deterministic provider fallback metadata in the no-secret run. |
-| R014 | operability |  | none | M001/S04 | Advanced by S04 documentation and verification on 2026-05-10: README provider configuration/fallback instructions were included in the full build/smoke-verified slice, and redaction scan included README to guard against committed provider keys or secret-looking examples. |
+| R009 | primary-user-loop | validated | M001/S02 | M001/S01 | Validated by S01 Web/API flow tests, typecheck, and build plus S02 Web management tests, typecheck, and build. Evidence includes S01 App tests for login/project/chat and S02 App tests for registry, gateway, building-domain tabs, diagnostics, malformed payload handling, and empty states. |
+| R010 | primary-user-loop | validated | M001/S03 | M001/S04 | Validated by S03 CLI tests, typecheck, and npm run smoke; S04 extended CLI chat JSON metadata and reran CLI command tests, typecheck, build, and smoke with provider fallback assertions. |
+| R011 | integration | validated | M001/S02 | M001/S03 | Validated by S02 registry/management API and Web tests proving authenticated placeholder gateway listings, selected-project management access, request-id diagnostics, placeholderOnly metadata, and no obvious secret-like fields in successful payloads. |
+| R012 | differentiator | validated | M001/S02 | M001/S03 | Validated by S02 registry/management API and Web tests covering synthetic runtime provider, tool, skill, gateway, and building-domain capability fixtures; S03 smoke exercised registry and management inspection through the authenticated CLI. |
+| R013 | launchability | validated | M001/S03 | M001/S01, M001/S04 | Validated by S03 npm run smoke plus CLI tests/typecheck, and advanced by S04 full verification: API provider/chat tests, Web chat tests, CLI command tests, npm run typecheck, npm run build, and live npm run smoke all passed. Smoke exercised authenticated CLI login/project/registry/management/chat against live API/Web and asserted deterministic provider fallback metadata in the no-secret run. |
+| R014 | operability | validated | M001/S04 | M001/S01, M001/S03 | Validated by S01 README local-run documentation, S03 smoke documentation, and S04 README provider configuration/fallback instructions included in the full build/smoke-verified slice; redaction scan included README to guard against committed provider keys or secret-looking examples. |
 | R015 | integration | active | M002/none yet | none | mapped |
 | R016 | differentiator | active | M003/none yet | none | mapped |
-| R017 | admin/support | deferred | M001/none yet | none | unmapped |
-| R018 | operability | deferred | M001/none yet | none | unmapped |
+| R017 | admin/support | deferred | none | none | unmapped |
+| R018 | operability | deferred | none | none | unmapped |
 | R019 | differentiator | deferred | M003/none yet | none | unmapped |
 | R020 | integration | deferred | M002/none yet | none | unmapped |
 | R021 | anti-feature | out-of-scope | none | none | n/a |
@@ -334,7 +341,7 @@ This file is the explicit capability and coverage contract for the project.
 
 ## Coverage Summary
 
-- Active requirements: 12
-- Mapped to slices: 12
-- Validated: 4 (R002, R003, R004, R008)
+- Active requirements: 2
+- Mapped to slices: 2
+- Validated: 14 (R001, R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R012, R013, R014)
 - Unmapped active requirements: 0

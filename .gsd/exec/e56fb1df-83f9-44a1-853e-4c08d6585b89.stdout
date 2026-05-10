@@ -1,0 +1,156 @@
+
+## apps/api/package.json
+{
+  "name": "@building-agent/api",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "fastify": "^4.28.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3",
+    "vitest": "^2.0.4"
+  }
+}
+
+## apps/web/package.json
+{
+  "name": "@building-agent/web",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -p tsconfig.json && vite build",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.4.6",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "jsdom": "^24.1.0",
+    "typescript": "^5.5.3",
+    "vitest": "^2.0.4"
+  }
+}
+
+## apps/cli/package.json
+{
+  "name": "@building-agent/cli",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "typescript": "^5.5.3",
+    "vitest": "^2.0.4"
+  },
+  "bin": {
+    "building-agent": "dist/index.js"
+  }
+}
+
+## scripts/run-tests.cjs
+const { spawnSync } = require("node:child_process");
+
+const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
+const runIndex = rawArgs.indexOf("--run");
+const args = rawArgs.filter((arg) => arg !== "--run");
+
+const webFiles = args.filter((arg) => arg.startsWith("apps/web/"));
+const apiFiles = args.filter((arg) => arg.startsWith("apps/api/"));
+const cliFiles = args.filter((arg) => arg.startsWith("apps/cli/"));
+const passthrough = args.filter(
+  (arg) => !arg.startsWith("apps/web/") && !arg.startsWith("apps/api/") && !arg.startsWith("apps/cli/")
+);
+
+function runWorkspace(workspace, files, prefix) {
+  const normalizedFiles = files.map((arg) => arg.replace(new RegExp(`^${prefix}/`, "u"), ""));
+  const result = spawnSync(
+    "npm",
+    ["--workspace", workspace, "exec", "--", "vitest", "run", ...passthrough, ...normalizedFiles],
+    { stdio: "inherit" }
+  );
+  return result.status ?? 1;
+}
+
+const targetedRuns = [
+  { files: apiFiles, workspace: "@building-agent/api", prefix: "apps/api" },
+  { files: cliFiles, workspace: "@building-agent/cli", prefix: "apps/cli" },
+  { files: webFiles, workspace: "@building-agent/web", prefix: "apps/web" }
+].filter((run) => run.files.length > 0);
+
+if (targetedRuns.length > 0) {
+  for (const run of targetedRuns) {
+    const status = runWorkspace(run.workspace, run.files, run.prefix);
+    if (status !== 0) {
+      process.exit(status);
+    }
+  }
+  process.exit(0);
+}
+
+if (runIndex !== -1 || args.length === 0) {
+  process.exit(runWorkspace("@building-agent/api", apiFiles, "apps/api"));
+}
+
+const result = spawnSync("npm", ["--workspaces", "--if-present", "run", "test"], { stdio: "inherit" });
+process.exit(result.status ?? 1);
+
+
+## scripts/smoke-local.cjs
+#!/usr/bin/env node
+const { mkdtemp, rm } = require("node:fs/promises");
+const { tmpdir } = require("node:os");
+const { join, resolve } = require("node:path");
+const { spawn } = require("node:child_process");
+
+const ROOT = resolve(__dirname, "..");
+const API_URL = process.env.SMOKE_API_URL ?? "http://127.0.0.1:3130";
+const WEB_URL = process.env.SMOKE_WEB_URL ?? "http://127.0.0.1:5174";
+const API_HEALTH_URL = `${API_URL.replace(/\/+$/u, "")}/health`;
+const WEB_HEALTH_URL = `${WEB_URL.replace(/\/+$/u, "")}/health`;
+const DEFAULT_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 90000);
+const PROBE_INTERVAL_MS = 500;
+const SEEDED_EMAIL = "ada@example.test";
+const SEEDED_PASSWORD = "local-dev-password";
+const SEEDED_PROJECT_ID = "project_alpha";
+
+const children = [];
+let cleanupStarted = false;
+let cliHomeDir;
+
+function stage(message) {
+  process.stdout.write(`[smoke] ${message}\n`);
+}
+
+function redactOutput(value) {
+  return value.replace(/Bearer\s+[A-Za-z0-9._-]+/gu, "Bearer [redacted]").replace(/local-dev-password/gu, "[redacted-password]");
+}
+
+function sleep(ms) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+async function withDeadline(work) {
+  let timeout;
+  try {
+    return await Promise.race([
+      work(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`Smoke timed out after ${DEFAULT_TIMEOUT_MS}ms.`)), DEFAULT_TIMEOUT_MS);

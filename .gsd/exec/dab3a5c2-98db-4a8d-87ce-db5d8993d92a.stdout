@@ -1,0 +1,423 @@
+ROOT_FILES
+README.md
+apps/api/package.json
+apps/api/tsconfig.json
+apps/cli/package.json
+apps/cli/tsconfig.json
+apps/web/index.html
+apps/web/package.json
+apps/web/tsconfig.json
+apps/web/vite.config.ts
+node_modules/abstract-logging/package.json
+node_modules/agent-base/README.md
+node_modules/agent-base/package.json
+node_modules/ajv-formats/README.md
+node_modules/ajv-formats/package.json
+node_modules/ajv/README.md
+node_modules/ajv/package.json
+node_modules/ansi-regex/package.json
+node_modules/ansi-styles/package.json
+node_modules/aria-query/README.md
+node_modules/aria-query/package.json
+node_modules/assertion-error/README.md
+node_modules/assertion-error/package.json
+node_modules/asynckit/README.md
+node_modules/asynckit/package.json
+node_modules/atomic-sleep/package.json
+node_modules/avvio/README.md
+node_modules/avvio/package.json
+node_modules/baseline-browser-mapping/README.md
+node_modules/baseline-browser-mapping/package.json
+node_modules/browserslist/README.md
+node_modules/browserslist/package.json
+node_modules/cac/README.md
+node_modules/cac/package.json
+node_modules/call-bind-apply-helpers/README.md
+node_modules/call-bind-apply-helpers/package.json
+node_modules/caniuse-lite/README.md
+node_modules/caniuse-lite/package.json
+node_modules/chai/README.md
+node_modules/chai/package.json
+node_modules/check-error/README.md
+node_modules/check-error/package.json
+node_modules/combined-stream/package.json
+node_modules/convert-source-map/README.md
+node_modules/convert-source-map/package.json
+node_modules/cookie/README.md
+node_modules/cookie/package.json
+node_modules/css.escape/README.md
+node_modules/css.escape/package.json
+node_modules/cssstyle/README.md
+node_modules/cssstyle/package.json
+node_modules/csstype/README.md
+node_modules/csstype/package.json
+node_modules/data-urls/README.md
+node_modules/data-urls/package.json
+node_modules/debug/README.md
+node_modules/debug/package.json
+node_modules/decimal.js/README.md
+node_modules/decimal.js/package.json
+node_modules/deep-eql/README.md
+node_modules/deep-eql/package.json
+node_modules/delayed-stream/package.json
+node_modules/dequal/package.json
+node_modules/dom-accessibility-api/README.md
+node_modules/dom-accessibility-api/package.json
+node_modules/dunder-proto/README.md
+node_modules/dunder-proto/package.json
+node_modules/electron-to-chromium/README.md
+node_modules/electron-to-chromium/package.json
+node_modules/entities/package.json
+node_modules/es-define-property/README.md
+node_modules/es-define-property/package.json
+node_modules/es-errors/README.md
+node_modules/es-errors/package.json
+node_modules/es-module-lexer/README.md
+node_modules/es-module-lexer/package.json
+node_modules/es-object-atoms/README.md
+node_modules/es-object-atoms/package.json
+node_modules/es-set-tostringtag/README.md
+node_modules/es-set-tostringtag/package.json
+node_modules/esbuild/README.md
+node_modules/esbuild/package.json
+node_modules/escalade/package.json
+node_modules/estree-walker/README.md
+node_modules/estree-walker/package.json
+node_modules/expect-type/README.md
+node_modules/expect-type/package.json
+node_modules/fast-content-type-parse/README.md
+node_modules/fast-content-type-parse/package.json
+node_modules/fast-decode-uri-component/README.md
+node_modules/fast-decode-uri-component/package.json
+node_modules/fast-deep-equal/README.md
+node_modules/fast-deep-equal/package.json
+node_modules/fast-json-stringify/README.md
+node_modules/fast-json-stringify/package.json
+node_modules/fast-querystring/README.md
+node_modules/fast-querystring/package.json
+node_modules/fast-uri/README.md
+node_modules/fast-uri/package.json
+node_modules/fastify-plugin/README.md
+node_modules/fastify-plugin/package.json
+node_modules/fastify/README.md
+node_modules/fastify/package.json
+node_modules/fastq/README.md
+node_modules/fastq/package.json
+node_modules/find-my-way/README.md
+node_modules/find-my-way/package.json
+node_modules/form-data/README.md
+node_modules/form-data/package.json
+node_modules/forwarded/README.md
+node_modules/forwarded/package.json
+node_modules/function-bind/README.md
+node_modules/function-bind/package.json
+node_modules/gensync/README.md
+node_modules/gensync/package.json
+node_modules/get-intrinsic/README.md
+node_modules/get-intrinsic/package.json
+node_modules/get-proto/README.md
+node_modules/get-proto/package.json
+node_modules/get-tsconfig/README.md
+node_modules/get-tsconfig/package.json
+node_modules/gopd/README.md
+node_modules/gopd/package.json
+node_modules/has-symbols/README.md
+node_modules/has-symbols/package.json
+node_modules/has-tostringtag/README.md
+node_modules/has-tostringtag/package.json
+node_modules/hasown/README.md
+node_modules/hasown/package.json
+node_modules/html-encoding-sniffer/README.md
+node_modules/html-encoding-sniffer/package.json
+node_modules/http-proxy-agent/README.md
+node_modules/http-proxy-agent/package.json
+node_modules/https-proxy-agent/README.md
+node_modules/https-proxy-agent/package.json
+node_modules/iconv-lite/README.md
+node_modules/iconv-lite/package.json
+node_modules/indent-string/package.json
+node_modules/ipaddr.js/README.md
+node_modules/ipaddr.js/package.json
+node_modules/is-potential-custom-element-name/README.md
+node_modules/is-potential-custom-element-name/package.json
+node_modules/js-tokens/README.md
+node_modules/js-tokens/package.json
+node_modules/jsdom/README.md
+node_modules/jsdom/package.json
+node_modules/jsesc/README.md
+node_modules/jsesc/package.json
+node_modules/json-schema-ref-resolver/README.md
+node_modules/json-schema-ref-resolver/package.json
+node_modules/json-schema-traverse/README.md
+node_modules/json-schema-traverse/package.json
+node_modules/json5/README.md
+node_modules/json5/package.json
+node_modules/light-my-request/README.md
+node_modules/light-my-request/package.json
+node_modules/loose-envify/README.md
+node_modules/loose-envify/package.json
+node_modules/loupe/README.md
+node_modules/loupe/package.json
+node_modules/lru-cache/README.md
+node_modules/lru-cache/package.json
+node_modules/lz-string/README.md
+node_modules/lz-string/package.json
+node_modules/magic-string/README.md
+node_modules/magic-string/package.json
+node_modules/math-intrinsics/README.md
+node_modules/math-intrinsics/package.json
+node_modules/mime-db/README.md
+node_modules/mime-db/package.json
+node_modules/mime-types/README.md
+node_modules/mime-types/package.json
+node_modules/min-indent/package.json
+node_modules/mnemonist/README.md
+node_modules/mnemonist/package.json
+node_modules/ms/package.json
+node_modules/nanoid/README.md
+node_modules/nanoid/package.json
+node_modules/node-releases/README.md
+node_modules/node-releases/package.json
+node_modules/nwsapi/README.md
+node_modules/nwsapi/package.json
+node_modules/obliterator/README.md
+node_modules/obliterator/package.json
+node_modules/on-exit-leak-free/README.md
+node_modules/on-exit-leak-free/package.json
+node_modules/parse5/README.md
+node_modules/parse5/package.json
+node_modules/pathe/README.md
+node_modules/pathe/package.json
+node_modules/pathval/README.md
+node_modules/pathval/package.json
+node_modules/picocolors/README.md
+node_modules/picocolors/package.json
+node_modules/pino-abstract-transport/README.md
+node_modules/pino-abstract-transport/package.json
+node_modules/pino-std-serializers/package.json
+node_modules/pino/README.md
+node_modules/pino/package.json
+node_modules/postcss/README.md
+node_modules/postcss/package.json
+
+API_MARKERS
+README.md:28:### Chat provider configuration
+README.md:30:Project chat works without any external credentials. When no provider credentials are configured, or when the provider is explicitly set to `mock`, the API uses a deterministic local mock provider. That default path is what local smoke and CI verification use.
+README.md:32:Configure a real OpenAI-compatible provider only in environments that already have provider credentials available:
+README.md:36:BUILDING_AGENT_LLM_BASE_URL=https://provider.example/v1
+README.md:37:BUILDING_AGENT_LLM_API_KEY=<provider-api-key>
+README.md:38:BUILDING_AGENT_LLM_MODEL=<provider-model>
+README.md:45:- No credentials, or `BUILDING_AGENT_LLM_PROVIDER=mock`: chat succeeds through the deterministic mock provider with `fallbackUsed: true` and `fallbackReason: "local_default"`.
+README.md:46:- Real provider configured and healthy: chat uses the configured provider with `mode: "real"` and `fallbackUsed: false`.
+README.md:47:- Real provider configured and failing: chat returns the canonical API error envelope by default.
+README.md:48:- Real provider configured and failing with `BUILDING_AGENT_LLM_ALLOW_FALLBACK=true`: chat falls back to the deterministic mock provider and includes a non-secret `fallbackReason` such as `provider_request_failed`.
+README.md:50:Do not put real keys, bearer tokens, seeded passwords, raw provider config, or provider error bodies in docs, issue comments, Web screenshots, CLI logs, smoke output, or test fixtures. API chat responses, Web notices, CLI JSON, and smoke logs may expose only redaction-safe diagnostics: `requestId`, provider `id`, `mode`, `model`, `fallbackUsed`, and provider status or fallback reason.
+README.md:58:5. Check the chat provider notice for `requestId`, provider mode/model, and fallback status without any secret values.
+README.md:75:  node apps/cli/dist/apps/cli/src/index.js registry
+README.md:77:  node apps/cli/dist/apps/cli/src/index.js management
+README.md:84:CLI output is JSON and includes backend `requestId` values where the API provides them. Chat command output also includes the redaction-safe provider diagnostics described above. Saved bearer tokens are redacted from command output and should not be copied into logs or documentation.
+README.md:86:To prove the local API, Web UI proxy, CLI, and default no-secret chat provider agree on the same seeded contracts, run:
+README.md:92:The smoke runner builds all workspaces, probes or starts the API and Web dev servers, invokes the CLI through the workspace-linked built entrypoint, performs login → session → project selection → registry → management → chat checks, and cleans up child processes and the temporary CLI config directory on success, failure, or timeout. Its logs are prefixed with `[smoke]` stage markers plus child process exit codes so startup, reachability, CLI, provider fallback, and cleanup failures are easy to localize without printing auth material.
+README.md:96:Default verification never requires provider credentials and must be run from the repository root:
+README.md:99:npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts
+README.md:109:npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts && npm run typecheck && npm run build && npm run smoke
+README.md:112:The Web tests mock `fetch` only at the network boundary so the React flow still exercises the real API client, guarded screens, error banners, selected-project chat routing, assistant replies, and provider diagnostics.
+README.md:114:If real provider env vars are already available in your shell, you may run an optional manual smoke against that provider. This is not required for CI or local default verification, and examples must use placeholders rather than real credentials.
+README.md:118:BUILDING_AGENT_LLM_BASE_URL=https://provider.example/v1 \
+README.md:119:BUILDING_AGENT_LLM_API_KEY=<provider-api-key> \
+README.md:120:BUILDING_AGENT_LLM_MODEL=<provider-model> \
+scripts/smoke-local.cjs:277:  const registry = await runCli("registry", ["registry"]);
+scripts/smoke-local.cjs:278:  assert(registry?.placeholderOnly === true && Array.isArray(registry.runtimeProviders), "Registry output was not the authenticated placeholder registry.");
+scripts/smoke-local.cjs:280:  const management = await runCli("management", ["management"]);
+scripts/smoke-local.cjs:281:  assert(management?.projectId === SEEDED_PROJECT_ID && management.placeholderOnly === true, "Management output was not scoped to the selected project.");
+scripts/smoke-local.cjs:289:  assert(chat?.provider?.id === "deterministic-mock", "Chat command did not report the deterministic mock provider id.");
+scripts/smoke-local.cjs:290:  assert(chat?.provider?.mode === "mock", "Chat command did not report mock provider mode.");
+scripts/smoke-local.cjs:291:  assert(chat?.provider?.model === "deterministic-local-mock", "Chat command did not report deterministic mock provider model.");
+scripts/smoke-local.cjs:292:  assert(chat?.provider?.fallbackUsed === true && chat.provider.fallbackReason === "local_default", "Chat command did not report local fallback metadata.");
+scripts/smoke-local.cjs:293:  assert(!/Bearer\s+[A-Za-z0-9._-]+|local-dev-password|sk-[A-Za-z0-9_-]+/u.test(JSON.stringify(chat)), "Chat command output leaked secret-looking provider or auth material.");
+apps/api/src/server.ts:7:  requirePermission,
+apps/api/src/server.ts:23:} from "./providers.js";
+apps/api/src/server.ts:90:function providerDiagnostics(provider: ProviderMetadata, fallbackUsed: boolean): ProviderMetadata & { fallbackUsed: boolean } {
+apps/api/src/server.ts:92:    id: provider.id,
+apps/api/src/server.ts:93:    mode: provider.mode,
+apps/api/src/server.ts:94:    model: provider.model,
+apps/api/src/server.ts:95:    ...(provider.fallbackReason ? { fallbackReason: provider.fallbackReason } : {}),
+apps/api/src/server.ts:96:    ...(provider.status ? { status: provider.status } : {}),
+apps/api/src/server.ts:108:  const providerResolver =
+apps/api/src/server.ts:110:    ((providerEnv: ProviderEnv) => resolveChatProvider(providerEnv, options.fetch ? { fetch: options.fetch } : {}));
+apps/api/src/server.ts:114:  const provider = options.chatProvider ?? providerResolver(env);
+apps/api/src/server.ts:150:    store.sessionsByToken[token] = store.sessionsByToken[token] ?? { userId: user.id, selectedProjectId: null };
+apps/api/src/server.ts:190:  app.get("/api/registry", async (request, reply) => {
+apps/api/src/server.ts:197:      runtimeProviders: boundedPlaceholderList(store.runtimeProviders, store),
+apps/api/src/server.ts:198:      tools: boundedPlaceholderList(store.tools, store),
+apps/api/src/server.ts:199:      skills: boundedPlaceholderList(store.skills, store),
+apps/api/src/server.ts:200:      gateways: boundedPlaceholderList(store.gateways, store),
+apps/api/src/server.ts:203:      placeholderOnly: true,
+apps/api/src/server.ts:208:  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/management", async (request, reply) => {
+apps/api/src/server.ts:224:    const readable = requirePermission(request, reply, membership, "chat:read");
+apps/api/src/server.ts:229:    const management = store.managementByProject[request.params.projectId] ?? {
+apps/api/src/server.ts:230:      gateways: [],
+apps/api/src/server.ts:232:      tools: []
+apps/api/src/server.ts:237:      gateways: boundedPlaceholderList(management.gateways, store),
+apps/api/src/server.ts:238:      capabilities: boundedPlaceholderList(management.capabilities, store),
+apps/api/src/server.ts:239:      tools: boundedPlaceholderList(management.tools, store),
+apps/api/src/server.ts:241:      placeholderOnly: true,
+apps/api/src/server.ts:259:      selectedProjectId: request.params.projectId
+apps/api/src/server.ts:289:    const readable = requirePermission(request, reply, membership, "chat:read");
+apps/api/src/server.ts:317:    const writable = requirePermission(request, reply, membership, "chat:write");
+apps/api/src/server.ts:341:      completion = await provider.complete({
+apps/api/src/server.ts:350:        return sendError(request, reply, 502, "provider_error", "Chat provider failed before producing a safe response.");
+apps/api/src/server.ts:354:        { requestId: requestIdFor(request), providerError: redactedProviderError(error) },
+apps/api/src/server.ts:355:        "Chat provider failed; using deterministic fallback"
+apps/api/src/server.ts:358:        error instanceof ProviderError ? error.code : "provider_unknown_error"
+apps/api/src/server.ts:382:      provider: providerDiagnostics(completion.provider, completion.fallbackUsed),
+apps/api/src/providers.ts:26:  provider: ProviderMetadata;
+apps/api/src/providers.ts:38:  provider?: ProviderMetadata;
+apps/api/src/providers.ts:45:  readonly provider?: ProviderMetadata;
+apps/api/src/providers.ts:54:    if (options.provider !== undefined) {
+apps/api/src/providers.ts:55:      this.provider = options.provider;
+apps/api/src/providers.ts:87:function normalizeProviderText(value: unknown, provider: ProviderMetadata): string {
+apps/api/src/providers.ts:90:      code: "provider_malformed_response",
+apps/api/src/providers.ts:91:      provider
+apps/api/src/providers.ts:98:      code: "provider_invalid_text",
+apps/api/src/providers.ts:99:      provider
+apps/api/src/providers.ts:130:        provider: metadata,
+apps/api/src/providers.ts:156:    throw new ProviderError("No fetch implementation is available for provider requests.", {
+apps/api/src/providers.ts:157:      code: "provider_fetch_unavailable",
+apps/api/src/providers.ts:158:      provider: metadata
+apps/api/src/providers.ts:181:        throw new ProviderError("Chat provider request failed.", {
+apps/api/src/providers.ts:182:          code: "provider_request_failed",
+apps/api/src/providers.ts:183:          provider: metadata,
+apps/api/src/providers.ts:189:        throw new ProviderError("Chat provider returned an unsuccessful status.", {
+apps/api/src/providers.ts:190:          code: "provider_http_error",
+apps/api/src/providers.ts:192:          provider: { ...metadata, status: String(response.status) }
+apps/api/src/providers.ts:200:        throw new ProviderError("Chat provider returned malformed JSON.", {
+apps/api/src/providers.ts:201:          code: "provider_malformed_response",
+apps/api/src/providers.ts:202:          provider: metadata,
+apps/api/src/providers.ts:214:        provider: metadata,
+apps/api/src/providers.ts:222:  const provider = nonEmpty(env.BUILDING_AGENT_LLM_PROVIDER);
+apps/api/src/providers.ts:227:  if (provider && provider !== "mock" && provider !== "openai-compatible") {
+apps/api/src/providers.ts:228:    throw new ProviderError("Unsupported chat provider configured.", {
+apps/api/src/providers.ts:229:      code: "provider_unsupported",
+apps/api/src/providers.ts:230:      provider: { id: provider, mode: "real", model, status: "unsupported" }
+apps/api/src/providers.ts:234:  if (provider === "mock" || !apiKey) {
+apps/api/src/providers.ts:245:export function redactedProviderError(error: unknown): { code: string; status?: number; provider?: ProviderMetadata } {
+apps/api/src/providers.ts:250:      ...(error.provider ? { provider: error.provider } : {})
+apps/api/src/providers.ts:254:  return { code: "provider_unknown_error" };
+apps/api/src/seed.ts:23:  domain: "building" | "project" | "runtime";
+apps/api/src/seed.ts:39:  domain: "energy" | "safety" | "maintenance" | "planning";
+apps/api/src/seed.ts:45:  gateways: PlaceholderGateway[];
+apps/api/src/seed.ts:47:  tools: PlaceholderTool[];
+apps/api/src/seed.ts:78:  selectedProjectId: string | null;
+apps/api/src/seed.ts:87:  runtimeProviders: PlaceholderRuntimeProvider[];
+apps/api/src/seed.ts:88:  tools: PlaceholderTool[];
+apps/api/src/seed.ts:89:  skills: PlaceholderSkill[];
+apps/api/src/seed.ts:90:  gateways: PlaceholderGateway[];
+apps/api/src/seed.ts:92:  managementByProject: Record<string, ProjectManagementFixtures>;
+apps/api/src/seed.ts:105:  const runtimeProviders: PlaceholderRuntimeProvider[] = [
+apps/api/src/seed.ts:107:      id: "runtime_provider_local_llm",
+apps/api/src/seed.ts:111:      description: "Synthetic local runtime provider slot for future model routing diagnostics."
+apps/api/src/seed.ts:114:      id: "runtime_provider_embeddings",
+apps/api/src/seed.ts:118:      description: "Synthetic embedding provider slot with no external key or live index configured."
+apps/api/src/seed.ts:121:      id: "runtime_provider_workflow",
+apps/api/src/seed.ts:125:      description: "Mock workflow provider entry used only to exercise registry listings."
+apps/api/src/seed.ts:129:  const tools: PlaceholderTool[] = [
+apps/api/src/seed.ts:131:      id: "tool_space_summary",
+apps/api/src/seed.ts:135:      description: "Synthetic tool definition for summarizing sample space metadata."
+apps/api/src/seed.ts:138:      id: "tool_document_lookup",
+apps/api/src/seed.ts:142:      description: "Synthetic retrieval tool slot with no live document connector."
+apps/api/src/seed.ts:145:      id: "tool_energy_snapshot",
+apps/api/src/seed.ts:149:      description: "Mock analysis tool entry backed only by placeholder fixtures."
+apps/api/src/seed.ts:153:  const skills: PlaceholderSkill[] = [
+apps/api/src/seed.ts:155:      id: "skill_building_triage",
+apps/api/src/seed.ts:159:      description: "Synthetic skill card for routing future building diagnostics."
+apps/api/src/seed.ts:162:      id: "skill_project_readiness",
+apps/api/src/seed.ts:166:      description: "Mock skill card for project-management workflow inspection."
+apps/api/src/seed.ts:169:      id: "skill_runtime_health",
+apps/api/src/seed.ts:171:      domain: "runtime",
+apps/api/src/seed.ts:173:      description: "Synthetic runtime health skill with no external observability backend."
+apps/api/src/seed.ts:177:  const gateways: PlaceholderGateway[] = [
+apps/api/src/seed.ts:179:      id: "gateway_bms_placeholder",
+apps/api/src/seed.ts:183:      description: "Synthetic building-management gateway; no live BMS endpoint is configured."
+apps/api/src/seed.ts:186:      id: "gateway_mcp_placeholder",
+apps/api/src/seed.ts:190:      description: "Placeholder MCP gateway definition for future external tool bridging."
+apps/api/src/seed.ts:193:      id: "gateway_local_fixture",
+apps/api/src/seed.ts:197:      description: "Mock local gateway backed by in-memory synthetic fixtures only."
+apps/api/src/seed.ts:221:      description: "Synthetic maintenance planning capability with no live CMMS integration."
+apps/api/src/seed.ts:226:      domain: "planning",
+apps/api/src/seed.ts:228:      description: "Placeholder project phasing capability for management page diagnostics."
+apps/api/src/seed.ts:232:  const managementByProject: Record<string, ProjectManagementFixtures> = Object.fromEntries(
+apps/api/src/seed.ts:236:        gateways: gateways.slice(index % gateways.length, (index % gateways.length) + 1),
+apps/api/src/seed.ts:238:        tools: tools.slice(0, 2)
+apps/api/src/seed.ts:259:    runtimeProviders,
+apps/api/src/seed.ts:260:    tools,
+apps/api/src/seed.ts:261:    skills,
+apps/api/src/seed.ts:262:    gateways,
+apps/api/src/seed.ts:264:    managementByProject,
+apps/api/src/seed.ts:283:    runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),
+apps/api/src/seed.ts:284:    tools: store.tools.map((tool) => ({ ...tool })),
+apps/api/src/seed.ts:285:    skills: store.skills.map((skill) => ({ ...skill })),
+apps/api/src/seed.ts:286:    gateways: store.gateways.map((gateway) => ({ ...gateway })),
+apps/api/src/seed.ts:288:    managementByProject: Object.fromEntries(
+apps/api/src/seed.ts:289:      Object.entries(store.managementByProject).map(([projectId, management]) => [
+apps/api/src/seed.ts:292:          gateways: management.gateways.map((gateway) => ({ ...gateway })),
+apps/api/src/seed.ts:293:          capabilities: management.capabilities.map((capability) => ({ ...capability })),
+apps/api/src/seed.ts:294:          tools: management.tools.map((tool) => ({ ...tool }))
+apps/api/src/providers.test.ts:8:} from "./providers.js";
+apps/api/src/providers.test.ts:19:  for (const forbidden of ["provider-test-key", "bearer", "authorization", "api_key", "apikey", "password"]) {
+apps/api/src/providers.test.ts:24:describe("chat provider resolution and adapters", () => {
+apps/api/src/providers.test.ts:25:  it("uses deterministic mock fallback when no real provider credentials are configured", async () => {
+apps/api/src/providers.test.ts:26:    const provider = resolveChatProvider({});
+apps/api/src/providers.test.ts:27:    const result = await provider.complete({
+apps/api/src/providers.test.ts:36:      provider: {
+apps/api/src/providers.test.ts:49:    const provider = resolveChatProvider(
+apps/api/src/providers.test.ts:52:        BUILDING_AGENT_LLM_API_KEY: "provider-test-key",
+apps/api/src/providers.test.ts:53:        BUILDING_AGENT_LLM_BASE_URL: "https://provider.example/v1",
+apps/api/src/providers.test.ts:60:          return jsonResponse({ choices: [{ message: { content: " Env provider answer " } }] });
+apps/api/src/providers.test.ts:65:    const result = await provider.complete({
+apps/api/src/providers.test.ts:72:    expect(String(calls[0]?.input)).toBe("https://provider.example/v1/chat/completions");
+apps/api/src/providers.test.ts:74:    expect(result.provider).toEqual({ id: "openai-compatible", mode: "real", model: "model-from-env", status: "configured" });
+apps/api/src/providers.test.ts:76:    const mock = resolveChatProvider({ BUILDING_AGENT_LLM_PROVIDER: "mock", BUILDING_AGENT_LLM_API_KEY: "provider-test-key" });
+apps/api/src/providers.test.ts:80:  it("prefers a configured OpenAI-compatible provider and sends only chat messages to fetch", async () => {
+apps/api/src/providers.test.ts:82:    const provider = createOpenAICompatibleProvider({
+apps/api/src/providers.test.ts:83:      apiKey: "provider-test-key",
+apps/api/src/providers.test.ts:84:      baseUrl: "https://provider.example/v1/",
+apps/api/src/providers.test.ts:92:    const result = await provider.complete({
+apps/api/src/providers.test.ts:99:    expect(String(calls[0]?.input)).toBe("https://provider.example/v1/chat/completions");
+apps/api/src/providers.test.ts:107:      provider: { id: "openai-compatible", mode: "real", model: "model-a", status: "configured" },
+apps/api/src/providers.test.ts:112:  it("normalizes HTTP and malformed response failures without exposing provider secrets", async () => {
+apps/api/src/providers.test.ts:114:      apiKey: "provider-test-key",
+apps/api/src/providers.test.ts:125:    ).rejects.toMatchObject({ code: "provider_http_error", status: 429 });
+apps/api/src/providers.test.ts:136:      expect(redacted).toMatchObject({ code: "provider_http_error", status: 429 });
+apps/api/src/providers.test.ts:141:      apiKey: "provider-test-key",
+apps/api/src/providers.test.ts:154:  it("allows explicit deterministic fallback provider construction for configured failure paths", async () => {
+apps/api/src/providers.test.ts:155:    const fallback = createDeterministicMockProvider("provider_error");
+apps/api/src/providers.test.ts:164:    expect(result.provider).toMatchObject({ fallbackReason: "provider_error", mode: "mock" });
+apps/api/src/chat.test.ts:2:import { ProviderError, type ChatProvider } from "./providers.js";
+apps/api/src/chat.test.ts:15:  const provider: ChatProvider = {
+apps/api/src/chat.test.ts:21:        provider: provider.metadata,
+apps/api/src/chat.test.ts:28:  return { provider, calls };
+apps/api/src/chat.test.ts:55:  it("stores a bounded user/assistant turn and returns provider diagnostics for the selected project", async () => {
+apps/api/src/chat.test.ts:58:    const { provider, calls } = fakeProvider();
+apps/api/src/chat.test.ts:59:    const app = buildServer({ store, chatProvider: provider });
+apps/api/src/chat.test.ts:85:      provider: {
+apps/api/src/chat.test.ts:122:  it("falls back deterministically when no provider credentials are configured", async () => {
+apps/api/src/chat.test.ts:136:      provider: {
+apps/api/src/chat.test.ts:149:  it("does not invoke the provider before auth, project, selection, permission, or body denial paths", async () => {
+apps/api/src/chat.test.ts:150:    const { provider, calls } = fakeProvider();
+apps/api/src/chat.test.ts:151:    const app = buildServer({ chatProvider: provider });
+apps/api/src/chat.test.ts:194:  it("preserves canonical provider error envelopes and avoids storing unsafe assistant content", async () => {
+apps/api/src/chat.test.ts:196:    const { provider } = fakeProvider({
+apps/api/src/chat.test.ts:199:          code: "provider_http_error",
+apps/api/src/chat.test.ts:201:          provider: { id: "fake-real", mode: "real", model: "fake-model", status: "503" }
+apps/api/src/chat.test.ts:205:    const app = buildServer({ store, chatProvider: provider, allowProviderFallback: false });
+apps/api/src/chat.test.ts:218:        code: "provider_error",
+apps/api/src/chat.test.ts:219:        message: "Chat provider failed before producing a safe response.",
+apps/api/src/chat.test.ts:227:  it("uses explicit fallback metadata when configured provider failure fallback is allowed", async () => {
+apps/api/src/chat.test.ts:228:    const { provider } = fakeProvider({
+apps/api/src/chat.test.ts:231:          code: "provider_request_failed",
+apps/api/src/chat.test.ts:232:          provider: { id: "fake-real", mode: "real", model: "fake-model" }
+apps/api/src/chat.test.ts:236:    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+apps/api/src/chat.test.ts:249:      provider: {
+apps/api/src/chat.test.ts:253:        fallbackReason: "provider_request_failed",
+apps/api/src/registry.test.ts:29:describe("placeholder registry and management API contracts", () => {

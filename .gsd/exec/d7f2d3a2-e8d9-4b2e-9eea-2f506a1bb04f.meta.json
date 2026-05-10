@@ -1,0 +1,18 @@
+{
+  "id": "d7f2d3a2-e8d9-4b2e-9eea-2f506a1bb04f",
+  "runtime": "bash",
+  "purpose": "S04 UAT full artifact-driven verification: tests typecheck build smoke redaction",
+  "script_chars": 3387,
+  "started_at": "2026-05-10T16:09:46.885Z",
+  "finished_at": "2026-05-10T16:12:30.006Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 163121,
+  "stdout_bytes": 5142,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/d7f2d3a2-e8d9-4b2e-9eea-2f506a1bb04f.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/d7f2d3a2-e8d9-4b2e-9eea-2f506a1bb04f.stderr"
+}

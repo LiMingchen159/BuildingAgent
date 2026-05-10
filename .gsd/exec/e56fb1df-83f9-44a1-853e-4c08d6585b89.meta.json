@@ -1,0 +1,18 @@
+{
+  "id": "e56fb1df-83f9-44a1-853e-4c08d6585b89",
+  "runtime": "bash",
+  "purpose": "S05 scout inspect package test/build scripts concise",
+  "script_chars": 570,
+  "started_at": "2026-05-10T16:17:23.663Z",
+  "finished_at": "2026-05-10T16:17:23.761Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 98,
+  "stdout_bytes": 4648,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/e56fb1df-83f9-44a1-853e-4c08d6585b89.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/e56fb1df-83f9-44a1-853e-4c08d6585b89.stderr"
+}

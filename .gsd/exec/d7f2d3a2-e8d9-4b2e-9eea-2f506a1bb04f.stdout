@@ -1,0 +1,154 @@
+__S04_UAT_START=2026-05-11T00:09:46+08:00
+\n## targeted_tests
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/api
+
+ ✓ src/providers.test.ts (5 tests) 11ms
+ ✓ src/chat.test.ts (7 tests) 232ms
+
+ Test Files  2 passed (2)
+      Tests  12 passed (12)
+   Start at  00:09:50
+   Duration  12.00s (transform 358ms, setup 0ms, collect 8.90s, tests 243ms, environment 0ms, prepare 3.71s)
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/cli
+
+ ✓ src/commands.test.ts (5 tests) 219ms
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  00:10:05
+   Duration  11.95s (transform 378ms, setup 0ms, collect 8.52s, tests 219ms, environment 0ms, prepare 1.98s)
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ✓ src/App.test.tsx (12 tests) 1365ms
+   ✓ BuildingAgent Web flow > logs in, selects a project, loads chat, management panels, and sends project-scoped messages 389ms
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  00:10:20
+   Duration  56.00s (transform 342ms, setup 6.00s, collect 6.92s, tests 1.37s, environment 38.28s, prepare 2.21s)
+
+__targeted_tests_EXIT_CODE=0
+__targeted_tests_DURATION_MS=89836
+\n## typecheck
+
+> building-agent@0.1.0 typecheck
+> npm --workspaces --if-present run typecheck
+
+
+> @building-agent/api@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> @building-agent/cli@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> @building-agent/web@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+__typecheck_EXIT_CODE=0
+__typecheck_DURATION_MS=18063
+\n## build
+
+> building-agent@0.1.0 build
+> npm --workspaces --if-present run build
+
+
+> @building-agent/api@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @building-agent/cli@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @building-agent/web@0.1.0 build
+> tsc -p tsconfig.json && vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 32 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.40 kB │ gzip:  0.27 kB
+dist/assets/index-yQupnIK-.css    5.53 kB │ gzip:  1.80 kB
+dist/assets/index-XGVKA46a.js   164.64 kB │ gzip: 51.73 kB
+✓ built in 912ms
+__build_EXIT_CODE=0
+__build_DURATION_MS=20297
+\n## smoke_no_secret
+
+> building-agent@0.1.0 smoke
+> node scripts/smoke-local.cjs
+
+[smoke] temp CLI home /tmp/building-agent-cli-smoke-GRfu2K
+[smoke] build workspaces
+[smoke] run npm run build
+[smoke] npm run build exit code=0 signal=null
+[smoke] api not reachable yet: {"ok":false,"label":"api","error":"fetch failed"}
+[smoke] starting api
+[smoke:api:stdout] > building-agent@0.1.0 dev:api
+[smoke:api:stdout] > npm --workspace @building-agent/api run dev
+[smoke:api:stdout] > @building-agent/api@0.1.0 dev
+[smoke:api:stdout] > tsx watch src/index.ts
+[smoke] api probe ok status=200 requestId=req_000001
+[smoke] web not reachable yet: {"ok":false,"label":"web","error":"fetch failed"}
+[smoke] starting web
+[smoke:web:stdout] > @building-agent/web@0.1.0 dev
+[smoke:web:stdout] > vite --host 127.0.0.1 --port 5174
+[smoke:web:stdout]   VITE v5.4.21  ready in 757 ms
+[smoke:web:stdout]   ➜  Local:   http://127.0.0.1:5174/
+[smoke] web probe ok status=200 requestId=req_000038
+[smoke] cli login and project flow
+[smoke] run cli login
+[smoke] cli login exit code=0 signal=null
+[smoke] cli login ok requestId=req_000002
+[smoke] run cli session
+[smoke] cli session exit code=0 signal=null
+[smoke] cli session ok requestId=req_000003
+[smoke] run cli projects
+[smoke] cli projects exit code=0 signal=null
+[smoke] cli projects ok requestId=req_000004
+[smoke] run cli use
+[smoke] cli use exit code=0 signal=null
+[smoke] cli use ok requestId=req_000005
+[smoke] run cli registry
+[smoke] cli registry exit code=0 signal=null
+[smoke] cli registry ok requestId=req_000006
+[smoke] run cli management
+[smoke] cli management exit code=0 signal=null
+[smoke] cli management ok requestId=req_000007
+[smoke] run cli chat
+[smoke] cli chat exit code=0 signal=null
+[smoke] cli chat ok requestId=req_000008
+[smoke] run cli chat:list
+[smoke] cli chat:list exit code=0 signal=null
+[smoke] cli chat:list ok requestId=req_000009
+[smoke] smoke passed
+[smoke] cleanup start
+[smoke] stopping api pid=263057
+[smoke] stopping web pid=263108
+[smoke] api child exit code=null signal=SIGTERM
+[smoke] web child exit code=null signal=SIGTERM
+[smoke] removed temp CLI home /tmp/building-agent-cli-smoke-GRfu2K
+[smoke] cleanup complete
+__smoke_no_secret_EXIT_CODE=0
+__smoke_no_secret_DURATION_MS=34845
+\n## artifact_contract_scan
+apps/api/src/providers.ts: contains BUILDING_AGENT_LLM_API_KEY, fallbackUsed, mock, openai
+apps/api/src/server.ts: contains chat:write, provider, assistant, requestId
+apps/web/src/App.tsx: contains assistant, fallbackUsed, provider
+apps/cli/src/commands.ts: MISSING provider, fallbackUsed
+scripts/smoke-local.cjs: contains fallbackUsed, chat:list, registry
+README.md: contains BUILDING_AGENT_LLM_API_KEY, fallback, npm run smoke
+__artifact_contract_scan_EXIT_CODE=1
+__artifact_contract_scan_DURATION_MS=54
