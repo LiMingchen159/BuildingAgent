@@ -1,0 +1,19 @@
+{
+  "name": "building-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm --workspace @building-agent/api run dev",
+    "build": "npm --workspace @building-agent/api run build",
+    "test": "node scripts/run-api-tests.cjs",
+    "typecheck": "npm --workspace @building-agent/api run typecheck"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

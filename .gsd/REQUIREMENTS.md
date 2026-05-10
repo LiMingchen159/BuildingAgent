@@ -81,16 +81,16 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: mapped
 - Notes: Building-domain skills remain placeholders in v1 but should follow a Hermes-inspired registry/execution pattern where useful.
 
-### R008 — The platform includes a model/provider configuration skeleton that can list and represent configured model providers without requiring production model integration.
+### R008 — The platform includes an extensible model/provider configuration skeleton and M001 chat prefers a real configured LLM provider/API when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials.
 - Class: integration
 - Status: active
-- Description: The platform includes a model/provider configuration skeleton that can list and represent configured model providers without requiring production model integration.
+- Description: The platform includes an extensible model/provider configuration skeleton and M001 chat prefers a real configured LLM provider/API when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials.
 - Why it matters: Provider abstraction is required for a Hermes-like agent foundation and future model flexibility.
 - Source: user
 - Primary owning slice: M001/none yet
 - Supporting slices: none
 - Validation: mapped
-- Notes: Use Hermes model/provider abstraction patterns where useful, adapted to BuildingAgent's own structure.
+- Notes: Do not hard-code one provider too deeply. README must explain local provider configuration through environment variables or ignored local config files. Secrets must never be committed.
 
 ### R009 — The Web UI provides a coherent modern React/Next.js-style shell for login, project selection, chat workspace, and navigable placeholder management pages.
 - Class: primary-user-loop
@@ -114,49 +114,49 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: mapped
 - Notes: Use Hermes CLI interaction patterns where useful, adapted to BuildingAgent naming and backend contract.
 
-### R011 — Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path.
+### R011 — Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path, and may remain minimal in M001 if needed to preserve the core working vertical slice.
 - Class: integration
 - Status: active
-- Description: Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path.
+- Description: Email and WhatsApp gateways exist as authenticated placeholders only, with no anonymous interaction path, and may remain minimal in M001 if needed to preserve the core working vertical slice.
 - Why it matters: External channel boundaries must be safe from the start even before real integrations are built.
 - Source: user
 - Primary owning slice: M001/none yet
 - Supporting slices: none
 - Validation: mapped
-- Notes: They do not need real channel integration in v1, but the placeholder boundary must make auth expectations explicit.
+- Notes: They do not need real channel integration in v1. The placeholder boundary must make auth expectations explicit, but gateway breadth is lower priority than authenticated backend, real-provider-first chat, Web/CLI chat/project flows, project isolation, skeleton registries, smoke checks, and README.
 
-### R012 — The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis.
+### R012 — The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis, kept minimal if needed to preserve the core working vertical slice.
 - Class: differentiator
 - Status: active
-- Description: The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis.
+- Description: The platform includes registered placeholder building-domain tools and skills for BIM/IFC, Brick/RDF/SPARQL, time-series, cross-source linking, visualization, and HHW-style analysis, kept minimal if needed to preserve the core working vertical slice.
 - Why it matters: The platform should visibly point toward BuildingAgent's building-operations direction while keeping v1 executable.
 - Source: user
 - Primary owning slice: M001/none yet
 - Supporting slices: none
 - Validation: mapped
-- Notes: Placeholders only in v1; no real building analytics or real building data should be included.
+- Notes: Placeholders only in v1; no real building analytics or real building data should be included. Small clearly marked synthetic/demo Brick-like and time-series data is acceptable for local testing of workflows, permissions, and project isolation. Placeholder gateways and building-domain demo data are lower priority than authenticated backend, real-provider-first chat, Web/CLI chat/project flows, project isolation, skeleton registries, smoke checks, and README.
 
-### R013 — The local backend, Web UI, and CLI can start or run their skeleton flows, and basic tests or smoke checks prove the foundation works.
+### R013 — The local backend, Web UI, and CLI can start or run their skeleton flows, and basic tests or smoke checks prove the foundation works, including the real-provider path when configured and mock fallback when credentials are absent.
 - Class: launchability
 - Status: active
-- Description: The local backend, Web UI, and CLI can start or run their skeleton flows, and basic tests or smoke checks prove the foundation works.
+- Description: The local backend, Web UI, and CLI can start or run their skeleton flows, and basic tests or smoke checks prove the foundation works, including the real-provider path when configured and mock fallback when credentials are absent.
 - Why it matters: A foundation skeleton is only useful if it can be run and verified locally.
 - Source: user
 - Primary owning slice: M001/none yet
 - Supporting slices: none
 - Validation: mapped
-- Notes: Smoke checks should cover the authenticated happy path and key permission/project-isolation boundaries where practical.
+- Notes: Smoke checks should cover authenticated happy path, key permission/project-isolation boundaries where practical, provider fallback behavior, and CLI/Web access through backend auth checks.
 
-### R014 — The README explains how to run the local backend, Web UI, CLI, seeded auth flow, and smoke checks concisely.
+### R014 — The README explains how to run the local backend, Web UI, CLI, seeded auth flow, model/provider configuration, fallback behavior, and smoke checks concisely.
 - Class: operability
 - Status: active
-- Description: The README explains how to run the local backend, Web UI, CLI, seeded auth flow, and smoke checks concisely.
+- Description: The README explains how to run the local backend, Web UI, CLI, seeded auth flow, model/provider configuration, fallback behavior, and smoke checks concisely.
 - Why it matters: The builder/operator and local evaluator need a clear path to run the platform without tribal knowledge.
 - Source: user
 - Primary owning slice: M001/none yet
 - Supporting slices: none
 - Validation: mapped
-- Notes: Documentation should be implementation-oriented and not excessive.
+- Notes: Documentation should be implementation-oriented. It must explain using environment variables or ignored local config files for provider credentials and must warn against committing secrets or private building data.
 
 ### R015 — The platform can represent project-scoped external data source configuration surfaces for future BIM, Brick/RDF/SPARQL, time-series, and mapping sources.
 - Class: integration

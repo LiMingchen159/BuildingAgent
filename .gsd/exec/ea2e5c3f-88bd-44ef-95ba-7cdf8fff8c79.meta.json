@@ -1,0 +1,18 @@
+{
+  "id": "ea2e5c3f-88bd-44ef-95ba-7cdf8fff8c79",
+  "runtime": "bash",
+  "purpose": "Run API contract tests with root script path adaptation",
+  "script_chars": 69,
+  "started_at": "2026-05-10T09:44:06.175Z",
+  "finished_at": "2026-05-10T09:44:06.309Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 134,
+  "stdout_bytes": 434,
+  "stderr_bytes": 639,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/ea2e5c3f-88bd-44ef-95ba-7cdf8fff8c79.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/ea2e5c3f-88bd-44ef-95ba-7cdf8fff8c79.stderr"
+}

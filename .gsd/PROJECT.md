@@ -37,13 +37,15 @@ BuildingAgent should use Hermes Agent as the engineering baseline/reference for 
 - permission, approval, audit, and safety patterns
 - tests and smoke-check patterns
 
-The first working version should establish a practical Hermes-like platform skeleton before later milestones specialize it for BIM, Brick/RDF/SPARQL, time-series, HHW, and building-operations workflows.
+The first working version should establish a practical Hermes-like platform skeleton before later milestones specialize it for BIM, Brick/RDF/SPARQL, time-series, HHW, and building-operations workflows. M001 should prioritize a working vertical slice over broad placeholder coverage: preserve the authenticated backend, real-provider-first chat path with mock fallback, login → project selection → chat workspace, CLI authenticated chat/project commands, project isolation and backend-side permission checks, Hermes-inspired runtime/tool/skill/model-provider skeleton, smoke checks, and README before expanding placeholder breadth.
+
+Chat/model behavior in M001 should prefer a real configured LLM provider/API from day one. Chat should flow through the real runtime → model/provider path when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials. The provider abstraction should remain extensible and should not hard-code one provider too deeply. Provider credentials must be configured through environment variables or ignored local config files and must never be committed.
 
 The Web UI should use a modern React/Next.js-style product interface, not Streamlit. The first user flow is login → project selection → chat workspace. The UI should also include coherent navigable placeholder pages for project dashboard, model/provider settings, skills manager, tools manager, data source settings, user and permission settings, and audit logs.
 
 The CLI should require authentication and provide a minimal working skeleton for login, project list, project use, chat, model list, skill list, and tool list.
 
-Authentication in v1 should be pragmatic local auth with seeded users and tokens. It must include clear backend-side auth checks and project-scoped permissions, but it does not need SSO, invite flow, password reset, enterprise identity, or production-grade deployment.
+Authentication in v1 should be pragmatic local auth with seeded username/password login returning bearer/session tokens for Web UI and CLI. The CLI should support login, store/use the returned local token, and require authentication for all commands that access projects, chat, tools, skills, or models. Roles, users, and project memberships can be local seed data. It must include clear backend-side auth checks and project-scoped permissions, but it does not need SSO, invite flow, password reset, enterprise identity, API-key-style auth as the primary path, or production-grade deployment.
 
 Project data and project memory must be isolated by project. Tool calls must go through backend-side permission checks. Code/platform permissions and project/data permissions should remain conceptually separate.
 
@@ -65,7 +67,7 @@ Building-domain skills should only be placeholders in v1:
 - cross-source equipment analysis
 - HHW reset analysis
 
-Do not add real building data to the repository. Real BIM, Brick, time-series, and mapping data should later be configured as project-scoped external data sources.
+Do not add real building data to the repository. Real BIM, Brick, time-series, and mapping data should later be configured as project-scoped external data sources. Small fake/sample Brick-like and time-series data is acceptable in M001 only when clearly marked as synthetic/demo data and used to test agent workflows, tool/skill placeholders, permissions, and project isolation. Real BIM/IFC, Brick/RDF/SPARQL, time-series analytics, visualization, and HHW logic remain out of scope for M001.
 
 Development style:
 

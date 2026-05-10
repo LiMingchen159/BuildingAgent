@@ -1,0 +1,18 @@
+{
+  "id": "aa1c4db5-9d26-49b2-84f1-62477097d5da",
+  "runtime": "bash",
+  "purpose": "Run final API contract tests for T01",
+  "script_chars": 69,
+  "started_at": "2026-05-10T09:45:16.090Z",
+  "finished_at": "2026-05-10T09:45:27.905Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 11815,
+  "stdout_bytes": 440,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/aa1c4db5-9d26-49b2-84f1-62477097d5da.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/aa1c4db5-9d26-49b2-84f1-62477097d5da.stderr"
+}

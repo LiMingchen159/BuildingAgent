@@ -1,0 +1,47 @@
+--- pyproject.toml ---
+name = "hermes-agent"
+requires-python = ">=3.11"
+authors = [{ name = "Nous Research" }]
+license = { text = "MIT" }
+dependencies = [
+  "rich>=14.3.3,<15",
+[project.optional-dependencies]
+--- package.json ---
+  "name": "hermes-agent",
+  "scripts": {
+  "license": "MIT",
+  "dependencies": {
+--- LICENSE ---
+MIT License
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+--- dirs max2 ---
+.git
+.github
+.plans
+acp_adapter
+acp_registry
+agent
+assets
+cron
+datagen-config-examples
+docker
+docs
+environments
+gateway
+hermes_cli
+locales
+nix
+optional-skills
+packaging
+plans
+plugins
+providers
+scripts
+skills
+tests
+tinker-atropos
+tools
+tui_gateway
+ui-tui
+web
+website

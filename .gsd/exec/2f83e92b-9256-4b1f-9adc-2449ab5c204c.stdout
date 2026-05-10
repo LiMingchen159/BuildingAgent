@@ -1,0 +1,11 @@
+
+> building-agent@0.1.0 test
+> npm --workspace @building-agent/api run test --run apps/api/src/auth.test.ts apps/api/src/chat.test.ts
+
+
+> @building-agent/api@0.1.0 test
+> vitest apps/api/src/auth.test.ts apps/api/src/chat.test.ts
+
+
+ DEV  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/api
+
