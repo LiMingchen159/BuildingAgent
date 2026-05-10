@@ -1,0 +1,18 @@
+{
+  "id": "8ecb0fca-9002-4e30-bceb-8c64dcc1114c",
+  "runtime": "bash",
+  "purpose": "verify cli config tests",
+  "script_chars": 142,
+  "started_at": "2026-05-10T11:34:48.655Z",
+  "finished_at": "2026-05-10T11:34:56.032Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 7377,
+  "stdout_bytes": 389,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/8ecb0fca-9002-4e30-bceb-8c64dcc1114c.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/8ecb0fca-9002-4e30-bceb-8c64dcc1114c.stderr"
+}

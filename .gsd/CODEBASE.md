@@ -1,7 +1,7 @@
 # Codebase Map
 
-Generated: 2026-05-10T10:43:15Z | Files: 25 | Described: 0/25
-<!-- gsd:codebase-meta {"generatedAt":"2026-05-10T10:43:15Z","fingerprint":"ad5801c43a56ac238f4e6db28b128c7bfaebcdfe","fileCount":25,"truncated":false} -->
+Generated: 2026-05-10T14:37:49Z | Files: 37 | Described: 0/37
+<!-- gsd:codebase-meta {"generatedAt":"2026-05-10T14:37:49Z","fingerprint":"cc9062a5bb29f13a08385cc7057711be5fe48a05","fileCount":37,"truncated":false} -->
 
 ### (root)/
 - `.gitignore`
@@ -19,8 +19,23 @@ Generated: 2026-05-10T10:43:15Z | Files: 25 | Described: 0/25
 - `apps/api/src/auth.ts`
 - `apps/api/src/chat.test.ts`
 - `apps/api/src/index.ts`
+- `apps/api/src/registry.test.ts`
 - `apps/api/src/seed.ts`
 - `apps/api/src/server.ts`
+
+### apps/cli/
+- `apps/cli/package.json`
+- `apps/cli/tsconfig.json`
+
+### apps/cli/src/
+- `apps/cli/src/api.ts`
+- `apps/cli/src/commands.test.ts`
+- `apps/cli/src/commands.ts`
+- `apps/cli/src/config.test.ts`
+- `apps/cli/src/config.ts`
+- `apps/cli/src/index.ts`
+- `apps/cli/src/registry.test.ts`
+- `apps/cli/src/registry.ts`
 
 ### apps/web/
 - `apps/web/index.html`
@@ -41,3 +56,4 @@ Generated: 2026-05-10T10:43:15Z | Files: 25 | Described: 0/25
 ### scripts/
 - `scripts/run-api-tests.cjs`
 - `scripts/run-tests.cjs`
+- `scripts/smoke-local.cjs`

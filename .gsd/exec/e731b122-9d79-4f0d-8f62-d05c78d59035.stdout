@@ -1,0 +1,58 @@
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/api/src/registry.test.ts apps/web/src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/api
+
+ ✓ src/registry.test.ts (6 tests) 204ms
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  19:15:12
+   Duration  11.83s (transform 342ms, setup 0ms, collect 8.33s, tests 204ms, environment 0ms, prepare 2.13s)
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ✓ src/App.test.tsx (9 tests) 1068ms
+   ✓ BuildingAgent Web flow > logs in, selects a project, loads chat, management panels, and sends project-scoped messages 393ms
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  19:15:28
+   Duration  57.47s (transform 518ms, setup 7.53s, collect 7.82s, tests 1.07s, environment 37.70s, prepare 2.15s)
+
+
+> building-agent@0.1.0 typecheck
+> npm --workspaces --if-present run typecheck
+
+
+> @building-agent/api@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> @building-agent/web@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> building-agent@0.1.0 build
+> npm --workspaces --if-present run build
+
+
+> @building-agent/api@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @building-agent/web@0.1.0 build
+> tsc -p tsconfig.json && vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 32 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.40 kB │ gzip:  0.26 kB
+dist/assets/index-D3hi8vCs.css    5.14 kB │ gzip:  1.72 kB
+dist/assets/index-Dpxg60ib.js   163.07 kB │ gzip: 51.29 kB
+✓ built in 934ms

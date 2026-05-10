@@ -1,0 +1,930 @@
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/web/src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ❯ src/App.test.tsx (7 tests | 4 failed) 4466ms
+   × BuildingAgent Web flow > logs in, selects a project, loads chat, and sends project-scoped messages 1183ms
+     → Unable to find role="heading" and name `/alpha build workspace/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mUnexpected test URL[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mnot_found[0m
+          [36m</span>[39m
+          [36m<span>[39m
+            [0mRequest: [0m
+            [0mreq_error[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mAlpha Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_alpha[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read · chat:write[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mBeta Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_beta[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mUnexpected test URL[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mnot_found[0m
+          [36m</span>[39m
+          [36m<span>[39m
+            [0mRequest: [0m
+            [0mreq_error[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mAlpha Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_alpha[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read · chat:write[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mBeta Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_beta[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+   × BuildingAgent Web flow > keeps current chat state on chat failure and shows the backend diagnostic 1037ms
+     → Unable to find role="heading" and name `/alpha build workspace/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mUnexpected test URL[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mnot_found[0m
+          [36m</span>[39m
+          [36m<span>[39m
+            [0mRequest: [0m
+            [0mreq_error[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mAlpha Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_alpha[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read · chat:write[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mUnexpected test URL[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mnot_found[0m
+          [36m</span>[39m
+          [36m<span>[39m
+            [0mRequest: [0m
+            [0mreq_error[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mAlpha Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_alpha[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read · chat:write[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+   × BuildingAgent Web flow > validates empty login fields, blank chat messages, malformed JSON, and local API outages 1123ms
+     → Unable to find role="heading" and name `/alpha build workspace/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mLocal API is unavailable. Check that the API dev server is running, then retry.[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mapi_unavailable[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mAlpha Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_alpha[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read · chat:write[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mLocal API is unavailable. Check that the API dev server is running, then retry.[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mapi_unavailable[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mAlpha Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_alpha[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read · chat:write[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+   × BuildingAgent Web flow > renders read-only selected projects without usable chat compose controls 1035ms
+     → Unable to find role="heading" and name `/beta build workspace/i`
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mUnexpected test URL[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mnot_found[0m
+          [36m</span>[39m
+          [36m<span>[39m
+            [0mRequest: [0m
+            [0mreq_error[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mBeta Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_beta[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"app-shell"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"topbar"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<span[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"brand-mark"[39m
+          [36m>[39m
+            [0mBA[0m
+          [36m</span>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"brand-name"[39m
+          [36m>[39m
+            [0mBuildingAgent[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"secondary"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mSign out[0m
+        [36m</button>[39m
+      [36m</header>[39m
+      [36m<section[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"banner banner-error"[39m
+        [33mrole[39m=[32m"alert"[39m
+      [36m>[39m
+        [36m<strong>[39m
+          [0mProject selection failed[0m
+        [36m</strong>[39m
+        [36m<p>[39m
+          [0mUnexpected test URL[0m
+        [36m</p>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"diagnostic-line"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mCode: [0m
+            [0mnot_found[0m
+          [36m</span>[39m
+          [36m<span>[39m
+            [0mRequest: [0m
+            [0mreq_error[0m
+          [36m</span>[39m
+        [36m</p>[39m
+      [36m</section>[39m
+      [36m<main[39m
+        [33maria-labelledby[39m=[32m"projects-title"[39m
+        [33mclass[39m=[32m"workspace-card"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"eyebrow"[39m
+        [36m>[39m
+          [0mProject boundary[0m
+        [36m</p>[39m
+        [36m<h1[39m
+          [33mid[39m=[32m"projects-title"[39m
+        [36m>[39m
+          [0mChoose an authorized project[0m
+        [36m</h1>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"muted"[39m
+        [36m>[39m
+          [0mOnly projects returned by the API for this seeded session are selectable.[0m
+        [36m</p>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"project-grid"[39m
+        [36m>[39m
+          [36m<article[39m
+            [33mclass[39m=[32m"project-card"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<h2>[39m
+                [0mBeta Build[0m
+              [36m</h2>[39m
+              [36m<p>[39m
+                [0mproject_beta[0m
+              [36m</p>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"permissions"[39m
+              [36m>[39m
+                [0mchat:read[0m
+              [36m</p>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mSelect project[0m
+            [36m</button>[39m
+          [36m</article>[39m
+        [36m</div>[39m
+      [36m</main>[39m
+      [36m<footer[39m
+        [33mclass[39m=[32m"diagnostic-footer"[39m
+      [36m>[39m
+        [0mSession project: [0m
+        [0mnone selected[0m
+      [36m</footer>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 3 passed (7)
+   Start at  18:58:49
+   Duration  57.41s (transform 312ms, setup 5.78s, collect 6.54s, tests 4.47s, environment 37.09s, prepare 2.38s)
+

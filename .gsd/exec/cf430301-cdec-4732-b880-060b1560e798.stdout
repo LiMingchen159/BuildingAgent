@@ -1,0 +1,3 @@
+login 200 {"token":"seed-token-ada","user":{"id":"user_ada","name":"Ada Lovelace"},"requestId":"req_000012"}
+projects 200 {"projects":[{"id":"project_alpha","name":"Alpha Build","permissions":["chat:read","chat:write"]},{"id":"project_beta","name":"Beta Build","permissions":["chat:read"]}],"limit":50,"requestId":"req_000013"}
+select 500 {"error":{"code":"internal_error","message":"Unexpected API error.","requestId":"req_000014"}}

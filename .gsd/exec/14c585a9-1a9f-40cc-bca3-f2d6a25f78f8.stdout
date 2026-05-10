@@ -1,0 +1,10 @@
+PASS smoke uses mkdtemp isolated CLI home
+PASS smoke removes temp CLI home
+PASS smoke runs real built CLI entrypoint
+PASS smoke asserts login output has no token
+PASS smoke asserts selected project used for chat
+PASS smoke asserts placeholder registry
+PASS smoke asserts management scoped to selected project
+PASS forbidden project preserves canonical code/request id
+PASS malformed placeholder fails api_malformed
+PASS session output redacts token

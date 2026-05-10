@@ -1,0 +1,18 @@
+{
+  "id": "6f21d730-5f52-46df-8367-94c2ee063407",
+  "runtime": "bash",
+  "purpose": "run chat and provider tests after API provider wiring",
+  "script_chars": 74,
+  "started_at": "2026-05-10T14:46:44.886Z",
+  "finished_at": "2026-05-10T14:47:00.403Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 15517,
+  "stdout_bytes": 446,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/6f21d730-5f52-46df-8367-94c2ee063407.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/6f21d730-5f52-46df-8367-94c2ee063407.stderr"
+}

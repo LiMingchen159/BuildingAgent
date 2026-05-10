@@ -1,0 +1,18 @@
+{
+  "id": "83e57109-75f5-49cf-8eb8-b44338ec8624",
+  "runtime": "bash",
+  "purpose": "verify fresh API dev login/select after killing stale process",
+  "script_chars": 1090,
+  "started_at": "2026-05-10T12:37:34.108Z",
+  "finished_at": "2026-05-10T12:39:34.117Z",
+  "exit_code": null,
+  "signal": "SIGKILL",
+  "timed_out": true,
+  "duration_ms": 120009,
+  "stdout_bytes": 215,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/83e57109-75f5-49cf-8eb8-b44338ec8624.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/83e57109-75f5-49cf-8eb8-b44338ec8624.stderr"
+}

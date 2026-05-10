@@ -1,0 +1,18 @@
+{
+  "id": "6496ebab-297e-4614-a49b-4bb27d550c2f",
+  "runtime": "bash",
+  "purpose": "find existing processes on ports 3000 and 5173",
+  "script_chars": 362,
+  "started_at": "2026-05-10T12:36:52.253Z",
+  "finished_at": "2026-05-10T12:36:52.367Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 114,
+  "stdout_bytes": 208,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/6496ebab-297e-4614-a49b-4bb27d550c2f.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/6496ebab-297e-4614-a49b-4bb27d550c2f.stderr"
+}

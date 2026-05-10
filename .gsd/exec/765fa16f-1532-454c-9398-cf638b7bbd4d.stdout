@@ -1,0 +1,36 @@
+
+> @building-agent/api@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+src/chat.test.ts(161,12): error TS18048: 'missingAuth' is possibly 'undefined'.
+src/chat.test.ts(162,12): error TS18048: 'missingAuth' is possibly 'undefined'.
+src/chat.test.ts(163,12): error TS18048: 'invalidAuth' is possibly 'undefined'.
+src/chat.test.ts(164,12): error TS18048: 'invalidAuth' is possibly 'undefined'.
+src/chat.test.ts(165,12): error TS18048: 'forbidden' is possibly 'undefined'.
+src/chat.test.ts(166,12): error TS18048: 'forbidden' is possibly 'undefined'.
+src/chat.test.ts(167,12): error TS18048: 'notSelected' is possibly 'undefined'.
+src/chat.test.ts(168,12): error TS18048: 'notSelected' is possibly 'undefined'.
+src/providers.test.ts(54,20): error TS2379: Argument of type '{ input: string | URL | Request; init: RequestInit | undefined; }' is not assignable to parameter of type '{ input: string | URL | Request; init?: RequestInit; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'init' are incompatible.
+    Type 'RequestInit | undefined' is not assignable to type 'RequestInit'.
+      Type 'undefined' is not assignable to type 'RequestInit'.
+src/providers.ts(51,5): error TS2412: Type 'number | undefined' is not assignable to type 'number' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.
+  Type 'undefined' is not assignable to type 'number'.
+src/providers.ts(52,5): error TS2412: Type 'ProviderMetadata | undefined' is not assignable to type 'ProviderMetadata' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.
+  Type 'undefined' is not assignable to type 'ProviderMetadata'.
+src/providers.ts(163,67): error TS2379: Argument of type '{ method: string; headers: { authorization: string; "content-type": string; }; body: string; signal: AbortSignal | undefined; }' is not assignable to parameter of type 'RequestInit' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'signal' are incompatible.
+    Type 'AbortSignal | undefined' is not assignable to type 'AbortSignal | null'.
+      Type 'undefined' is not assignable to type 'AbortSignal | null'.
+src/providers.ts(226,41): error TS2379: Argument of type '{ apiKey: string; model: string; baseUrl: string; fetch: FetchLike | undefined; }' is not assignable to parameter of type 'OpenAICompatibleProviderOptions' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'fetch' are incompatible.
+    Type 'FetchLike | undefined' is not assignable to type 'FetchLike'.
+      Type 'undefined' is not assignable to type 'FetchLike'.
+src/providers.ts(235,5): error TS2375: Type '{ code: string; status: number | undefined; provider: ProviderMetadata | undefined; }' is not assignable to type '{ code: string; status?: number; provider?: ProviderMetadata; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'status' are incompatible.
+    Type 'number | undefined' is not assignable to type 'number'.
+      Type 'undefined' is not assignable to type 'number'.
+src/server.ts(108,123): error TS2379: Argument of type '{ fetch: FetchLike | undefined; }' is not assignable to parameter of type 'ResolveChatProviderOptions' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'fetch' are incompatible.
+    Type 'FetchLike | undefined' is not assignable to type 'FetchLike'.
+      Type 'undefined' is not assignable to type 'FetchLike'.

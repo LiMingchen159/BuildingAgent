@@ -1,0 +1,18 @@
+{
+  "id": "510a6348-19b7-4232-914c-05f78ebd273d",
+  "runtime": "bash",
+  "purpose": "run web tests after api request header fix",
+  "script_chars": 66,
+  "started_at": "2026-05-10T12:40:26.220Z",
+  "finished_at": "2026-05-10T12:41:26.315Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 60095,
+  "stdout_bytes": 4088,
+  "stderr_bytes": 4928,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/510a6348-19b7-4232-914c-05f78ebd273d.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/510a6348-19b7-4232-914c-05f78ebd273d.stderr"
+}

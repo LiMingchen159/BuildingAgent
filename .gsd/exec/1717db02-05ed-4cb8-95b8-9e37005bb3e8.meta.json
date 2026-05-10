@@ -1,0 +1,18 @@
+{
+  "id": "1717db02-05ed-4cb8-95b8-9e37005bb3e8",
+  "runtime": "node",
+  "purpose": "S02 UAT targeted artifact coverage scan",
+  "script_chars": 1856,
+  "started_at": "2026-05-10T11:22:15.699Z",
+  "finished_at": "2026-05-10T11:22:15.752Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 53,
+  "stdout_bytes": 335,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/1717db02-05ed-4cb8-95b8-9e37005bb3e8.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/1717db02-05ed-4cb8-95b8-9e37005bb3e8.stderr"
+}

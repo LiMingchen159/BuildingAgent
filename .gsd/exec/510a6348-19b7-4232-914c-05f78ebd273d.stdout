@@ -1,0 +1,164 @@
+
+> @building-agent/web@0.1.0 test
+> vitest run --run src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ❯ src/App.test.tsx (9 tests | 2 failed) 1094ms
+   × BuildingAgent Web flow > logs in, selects a project, loads chat, management panels, and sends project-scoped messages 408ms
+     → expected "spy" to be called with arguments: [ …(2) ]
+
+Received: 
+
+  1st spy call:
+
+  Array [
+-   "/api/projects/project_alpha/chat",
+-   ObjectContaining {
+-     "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
++   "/api/login",
++   Object {
++     "body": "{\"email\":\"ada@example.test\",\"password\":\"local-dev-password\"}",
++     "headers": Headers {},
+      "method": "POST",
++     "signal": AbortSignal {},
+    },
+  ]
+
+  2nd spy call:
+
+  Array [
+-   "/api/projects/project_alpha/chat",
+-   ObjectContaining {
+-     "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
+-     "method": "POST",
++   "/api/session",
++   Object {
++     "headers": Headers {},
++     "signal": AbortSignal {},
+    },
+  ]
+
+  3rd spy call:
+
+  Array [
+-   "/api/projects/project_alpha/chat",
+-   ObjectContaining {
+-     "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
+-     "method": "POST",
++   "/api/projects",
++   Object {
++     "headers": Headers {},
++     "signal": AbortSignal {},
+    },
+  ]
+
+  4th spy call:
+
+  Array [
+-   "/api/projects/project_alpha/chat",
+-   ObjectContaining {
+-     "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
++   "/api/projects/project_alpha/select",
++   Object {
++     "headers": Headers {},
+      "method": "POST",
++     "signal": AbortSignal {},
+    },
+  ]
+
+  5th spy call:
+
+  Array [
+    "/api/projects/project_alpha/chat",
+-   ObjectContaining {
+-     "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
+-     "method": "POST",
++   Object {
++     "headers": Headers {},
++     "signal": AbortSignal {},
+    },
+  ]
+
+  6th spy call:
+
+  Array [
+-   "/api/projects/project_alpha/chat",
+-   ObjectContaining {
+-     "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
+-     "method": "POST",
++   "/api/registry",
++   Object {
++     "headers": Headers {},
++     "signal": AbortSignal {},
+    },
+  ]
+
+  7th spy call:
+
+  Array [
+-   "/api/projects/project_alpha/chat",
+-   ObjectContaining {
+-     "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
+-     "method": "POST",
++   "/api/projects/project_alpha/management",
++   Object {
++     "headers": Headers {},
++     "signal": AbortSignal {},
+    },
+  ]
+
+  8th spy call:
+
+  Array [
+    "/api/projects/project_alpha/chat",
+-   ObjectContaining {
++   Object {
+      "body": "{\"message\":\"What should we build first?\"}",
+-     "headers": ObjectContaining {
+-       "authorization": "Bearer seed-token-ada",
+-     },
++     "headers": Headers {},
+      "method": "POST",
++     "signal": AbortSignal {},
+    },
+  ]
+
+
+Number of calls: 8
+
+   × BuildingAgent Web flow > displays forbidden API errors with request ids without mutating the selected project 47ms
+     → expect(element).toHaveTextContent()
+
+Expected element to have text content:
+  project_forbidden
+Received:
+  Project selection failedLocal API is unavailable. Check that the API dev server is running, then retry.Code: api_unavailable
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 7 passed (9)
+   Start at  20:40:30
+   Duration  55.04s (transform 336ms, setup 6.00s, collect 7.16s, tests 1.09s, environment 37.38s, prepare 2.16s)
+

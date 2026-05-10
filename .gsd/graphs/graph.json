@@ -9,8 +9,8 @@
       "sourceFile": "STATE.md"
     },
     {
-      "id": "concept:phase:planning",
-      "label": "Phase: planning",
+      "id": "concept:phase:validating-milestone",
+      "label": "Phase: validating-milestone",
       "type": "concept",
       "confidence": "EXTRACTED",
       "sourceFile": "STATE.md"
@@ -31,6 +31,56 @@
     {
       "id": "task:M001:S01:T02",
       "label": "T02: Wire React Web login, project selection, and chat workspace to the API",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "slice:M001:S02",
+      "label": "S02: Registry skeletons, placeholder gateways, and management pages",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S02/S02-PLAN.md"
+    },
+    {
+      "id": "task:M001:S02:T01",
+      "label": "T01: Add authenticated placeholder registry and management API contracts",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S02:T02",
+      "label": "T02: Build Web management panels from the registry contracts",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "slice:M001:S03",
+      "label": "S03: Authenticated CLI shell and local smoke checks",
+      "type": "slice",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/slices/S03/S03-PLAN.md"
+    },
+    {
+      "id": "task:M001:S03:T01",
+      "label": "T01: Scaffold the CLI workspace and isolated config store",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S03:T02",
+      "label": "T02: Wire seeded login, session, project, and chat commands to the API",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S03:T03",
+      "label": "T03: Add registry and management inspection commands",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M001:S03:T04",
+      "label": "T04: Wire smoke script, root scripts, and README run path",
       "type": "task",
       "confidence": "EXTRACTED"
     },
@@ -67,7 +117,55 @@
       "to": "task:M001:S01:T02",
       "type": "contains",
       "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S02",
+      "to": "task:M001:S02:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S02",
+      "to": "task:M001:S02:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "slice:M001:S03",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S03",
+      "to": "task:M001:S03:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S03",
+      "to": "task:M001:S03:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S03",
+      "to": "task:M001:S03:T03",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M001:S03",
+      "to": "task:M001:S03:T04",
+      "type": "contains",
+      "confidence": "EXTRACTED"
     }
   ],
-  "builtAt": "2026-05-10T10:14:48.629Z"
+  "builtAt": "2026-05-10T12:09:33.455Z"
 }

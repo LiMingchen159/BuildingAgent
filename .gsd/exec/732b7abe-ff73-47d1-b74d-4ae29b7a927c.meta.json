@@ -1,0 +1,18 @@
+{
+  "id": "732b7abe-ff73-47d1-b74d-4ae29b7a927c",
+  "runtime": "bash",
+  "purpose": "Typecheck CLI workspace after command wiring",
+  "script_chars": 49,
+  "started_at": "2026-05-10T11:40:55.021Z",
+  "finished_at": "2026-05-10T11:41:01.914Z",
+  "exit_code": 2,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 6893,
+  "stdout_bytes": 4454,
+  "stderr_bytes": 318,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/732b7abe-ff73-47d1-b74d-4ae29b7a927c.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/732b7abe-ff73-47d1-b74d-4ae29b7a927c.stderr"
+}

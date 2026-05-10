@@ -10,9 +10,25 @@ import {
   sendError
 } from "./auth.js";
 import { createSeedStore, type ChatMessage, type SeedStore } from "./seed.js";
+import {
+  ProviderError,
+  createDeterministicMockProvider,
+  redactedProviderError,
+  resolveChatProvider,
+  shouldAllowProviderFallback,
+  type ChatProvider,
+  type FetchLike,
+  type ProviderEnv,
+  type ProviderMetadata
+} from "./providers.js";
 
 interface BuildServerOptions {
   store?: SeedStore;
+  chatProvider?: ChatProvider;
+  resolveChatProvider?: (env: ProviderEnv) => ChatProvider;
+  env?: ProviderEnv;
+  fetch?: FetchLike;
+  allowProviderFallback?: boolean;
 }
 
 interface ProjectParams {
@@ -65,10 +81,37 @@ function validateChatMessage(body: unknown): string | null {
   return trimmed;
 }
 
+function trimChatMessages(messages: ChatMessage[], limit: number): void {
+  if (messages.length > limit) {
+    messages.splice(0, messages.length - limit);
+  }
+}
+
+function providerDiagnostics(provider: ProviderMetadata, fallbackUsed: boolean): ProviderMetadata & { fallbackUsed: boolean } {
+  return {
+    id: provider.id,
+    mode: provider.mode,
+    model: provider.model,
+    ...(provider.fallbackReason ? { fallbackReason: provider.fallbackReason } : {}),
+    ...(provider.status ? { status: provider.status } : {}),
+    fallbackUsed
+  };
+}
+
+function chatHistoryForProvider(messages: ChatMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return messages.map((message) => ({ role: message.role, content: message.content }));
+}
+
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? createSeedStore();
+  const env = options.env ?? process.env;
+  const providerResolver =
+    options.resolveChatProvider ??
+    ((providerEnv: ProviderEnv) => resolveChatProvider(providerEnv, options.fetch ? { fetch: options.fetch } : {}));
+  const allowProviderFallback = shouldAllowProviderFallback(env, options.allowProviderFallback);
   messageSequence = 0;
 
+  const provider = options.chatProvider ?? providerResolver(env);
   const app = Fastify({
     logger: false,
     genReqId: (() => {
@@ -290,12 +333,56 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       content
     };
     messages.push(message);
-    if (messages.length > store.maxChatMessages) {
-      messages.splice(0, messages.length - store.maxChatMessages);
-    }
+    trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[request.params.projectId] = messages;
 
-    return reply.status(201).send({ message, requestId: requestIdFor(request) });
+    let completion;
+    try {
+      completion = await provider.complete({
+        projectId: request.params.projectId,
+        userId: session.userId,
+        requestId: requestIdFor(request),
+        messages: chatHistoryForProvider(messages)
+      });
+    } catch (error) {
+      if (!allowProviderFallback) {
+        messages.pop();
+        return sendError(request, reply, 502, "provider_error", "Chat provider failed before producing a safe response.");
+      }
+
+      request.log.warn(
+        { requestId: requestIdFor(request), providerError: redactedProviderError(error) },
+        "Chat provider failed; using deterministic fallback"
+      );
+      const fallbackProvider = createDeterministicMockProvider(
+        error instanceof ProviderError ? error.code : "provider_unknown_error"
+      );
+      completion = await fallbackProvider.complete({
+        projectId: request.params.projectId,
+        userId: session.userId,
+        requestId: requestIdFor(request),
+        messages: chatHistoryForProvider(messages)
+      });
+    }
+
+    const assistantMessage: ChatMessage = {
+      id: nextMessageId(),
+      projectId: request.params.projectId,
+      userId: session.userId,
+      role: "assistant",
+      content: completion.text
+    };
+    messages.push(assistantMessage);
+    trimChatMessages(messages, store.maxChatMessages);
+    store.messagesByProject[request.params.projectId] = messages;
+
+    return reply.status(201).send({
+      message,
+      assistantMessage,
+      provider: providerDiagnostics(completion.provider, completion.fallbackUsed),
+      fallbackUsed: completion.fallbackUsed,
+      requestId: requestIdFor(request)
+    });
   });
 
   app.setErrorHandler((error, request, reply) => {

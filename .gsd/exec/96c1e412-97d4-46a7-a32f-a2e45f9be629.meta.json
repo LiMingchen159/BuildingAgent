@@ -1,0 +1,18 @@
+{
+  "id": "96c1e412-97d4-46a7-a32f-a2e45f9be629",
+  "runtime": "bash",
+  "purpose": "slice S03 final token leak scan",
+  "script_chars": 416,
+  "started_at": "2026-05-10T12:03:16.343Z",
+  "finished_at": "2026-05-10T12:03:16.393Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 50,
+  "stdout_bytes": 174,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/96c1e412-97d4-46a7-a32f-a2e45f9be629.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/96c1e412-97d4-46a7-a32f-a2e45f9be629.stderr"
+}

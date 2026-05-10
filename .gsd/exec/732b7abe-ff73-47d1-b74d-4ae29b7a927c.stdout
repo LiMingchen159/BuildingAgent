@@ -1,0 +1,37 @@
+
+> @building-agent/cli@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+../api/src/auth.ts(2,74): error TS6059: File '/mnt/d/Git_Project/BuildingAgent/apps/api/src/seed.ts' is not under 'rootDir' '/mnt/d/Git_Project/BuildingAgent/apps/cli/src'. 'rootDir' is expected to contain all source files.
+  The file is in the program because:
+    Imported via "./seed.js" from file '/mnt/d/Git_Project/BuildingAgent/apps/api/src/auth.ts'
+    Imported via "./seed.js" from file '/mnt/d/Git_Project/BuildingAgent/apps/api/src/server.ts'
+  File is ECMAScript module because '/mnt/d/Git_Project/BuildingAgent/apps/api/package.json' has field "type" with value "module"
+../api/src/server.ts(11,8): error TS6059: File '/mnt/d/Git_Project/BuildingAgent/apps/api/src/auth.ts' is not under 'rootDir' '/mnt/d/Git_Project/BuildingAgent/apps/cli/src'. 'rootDir' is expected to contain all source files.
+  File is ECMAScript module because '/mnt/d/Git_Project/BuildingAgent/apps/api/package.json' has field "type" with value "module"
+src/api.ts(25,5): error TS2412: Type 'string | undefined' is not assignable to type 'string' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.
+  Type 'undefined' is not assignable to type 'string'.
+src/api.ts(47,5): error TS2412: Type 'string | undefined' is not assignable to type 'string' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.
+  Type 'undefined' is not assignable to type 'string'.
+src/api.ts(102,68): error TS2379: Argument of type '{ method: "POST" | "GET"; headers: Record<string, string>; body: string | undefined; }' is not assignable to parameter of type 'RequestInit' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'body' are incompatible.
+    Type 'string | undefined' is not assignable to type 'BodyInit'.
+      Type 'undefined' is not assignable to type 'BodyInit'.
+src/commands.test.ts(5,29): error TS6059: File '/mnt/d/Git_Project/BuildingAgent/apps/api/src/server.ts' is not under 'rootDir' '/mnt/d/Git_Project/BuildingAgent/apps/cli/src'. 'rootDir' is expected to contain all source files.
+  File is ECMAScript module because '/mnt/d/Git_Project/BuildingAgent/apps/api/package.json' has field "type" with value "module"
+src/commands.ts(36,5): error TS2412: Type 'string | undefined' is not assignable to type 'string' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.
+  Type 'undefined' is not assignable to type 'string'.
+src/commands.ts(37,5): error TS2412: Type 'number | undefined' is not assignable to type 'number' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.
+  Type 'undefined' is not assignable to type 'number'.
+src/commands.ts(91,31): error TS2379: Argument of type '{ apiUrl: string; fetchImpl: ((input: string | URL | Request, init?: RequestInit) => Promise<Response>) | undefined; }' is not assignable to parameter of type 'ApiClientOptions' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'fetchImpl' are incompatible.
+    Type '((input: string | URL | Request, init?: RequestInit | undefined) => Promise<Response>) | undefined' is not assignable to type '(input: string | URL | Request, init?: RequestInit | undefined) => Promise<Response>'.
+      Type 'undefined' is not assignable to type '(input: string | URL | Request, init?: RequestInit | undefined) => Promise<Response>'.
+src/commands.ts(165,10): error TS18048: 'arg' is possibly 'undefined'.
+src/commands.ts(168,35): error TS18048: 'arg' is possibly 'undefined'.
+src/commands.ts(174,17): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/commands.ts(186,24): error TS2379: Argument of type '{ apiUrl: string; token: string | undefined; fetchImpl: ((input: string | URL | Request, init?: RequestInit) => Promise<Response>) | undefined; }' is not assignable to parameter of type 'ApiClientOptions' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'token' are incompatible.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.

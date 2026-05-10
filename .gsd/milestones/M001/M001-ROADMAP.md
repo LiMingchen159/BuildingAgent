@@ -15,11 +15,17 @@
 - [x] **S01: S01** `risk:Highest-risk boundary: auth, session shape, and project isolation must be correct before any other surface can trust them.` `depends:[]`
   > After this: After this, a seeded local user can log in through the real Web UI, choose a project, and reach a protected project-scoped chat workspace; unauthorized access is blocked by the backend.
 
-- [ ] **S02: S02** `risk:Placeholder boundaries can easily drift into accidental real integrations or undocumented privilege paths.` `depends:[]`
+- [x] **S02: S02** `risk:Placeholder boundaries can easily drift into accidental real integrations or undocumented privilege paths.` `depends:[]`
   > After this: After this, an authenticated user can inspect real placeholder pages and backend listings for runtime providers, skills, tools, gateways, and building-domain capabilities without exposing real external integrations.
 
-- [ ] **S03: Authenticated CLI shell and local smoke checks** `risk:Multi-entrypoint coherence is the last major proof that the skeleton is truly platform-wide instead of only a web demo.` `depends:[S01,S02]`
+- [x] **S03: S03** `risk:Multi-entrypoint coherence is the last major proof that the skeleton is truly platform-wide instead of only a web demo.` `depends:[]`
   > After this: After this, the CLI can authenticate, select a project, and exercise the same local platform contracts; startup smoke checks confirm the backend, Web UI, and CLI all run coherently.
+
+- [ ] **S04: S04** `risk:Medium: provider seams must prove real-provider-first behavior while staying safe for local no-secret smoke runs.` `depends:[]`
+  > After this: After this, chat has explicit provider-selection behavior: it prefers a configured real provider when credentials/configuration exist, retains a deterministic local/mock fallback for smoke and no-credential runs, and Web/CLI/API tests prove both paths without leaking secrets.
+
+- [ ] **S05: Requirement coverage reconciliation remediation** `risk:Low-medium: mostly documentation and targeted tests, but must avoid overstating placeholder surfaces as real integrations.` `depends:[S01,S02,S03,S04]`
+  > After this: After this, M001 artifacts explicitly reconcile requirement coverage: active in-scope requirements are proven, later-milestone/deferred and anti-feature/constraint requirements are marked as intentionally out of scope where applicable, and placeholder gateway/building-domain negative boundaries are evidenced for validation.
 
 ## Boundary Map
 

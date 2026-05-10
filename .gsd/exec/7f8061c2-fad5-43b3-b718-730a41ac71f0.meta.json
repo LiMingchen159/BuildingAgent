@@ -1,0 +1,18 @@
+{
+  "id": "7f8061c2-fad5-43b3-b718-730a41ac71f0",
+  "runtime": "bash",
+  "purpose": "Find registry/management response shapes and tests without dumping files",
+  "script_chars": 185,
+  "started_at": "2026-05-10T11:46:10.297Z",
+  "finished_at": "2026-05-10T11:46:10.375Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 78,
+  "stdout_bytes": 17166,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/7f8061c2-fad5-43b3-b718-730a41ac71f0.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/7f8061c2-fad5-43b3-b718-730a41ac71f0.stderr"
+}

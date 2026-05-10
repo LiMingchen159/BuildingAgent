@@ -1,0 +1,2 @@
+scripts/smoke-local.cjs: no obvious token fixture leaks
+README.md: no obvious token fixture leaks

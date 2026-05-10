@@ -1,0 +1,18 @@
+{
+  "id": "a1959d66-8dc1-4fde-8c24-028a991fa588",
+  "runtime": "bash",
+  "purpose": "Run focused CLI commands test after import path fix",
+  "script_chars": 47,
+  "started_at": "2026-05-10T11:40:30.669Z",
+  "finished_at": "2026-05-10T11:40:47.944Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 17275,
+  "stdout_bytes": 379,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/a1959d66-8dc1-4fde-8c24-028a991fa588.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/a1959d66-8dc1-4fde-8c24-028a991fa588.stderr"
+}

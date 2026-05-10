@@ -17,9 +17,13 @@ The one thing that must work even if everything else is cut is a clean, authenti
 
 ## Current State
 
-M001 is in progress. S01 is complete: the repository now contains a local npm workspace with a Fastify API and React/Vite Web UI that prove seeded local authentication, project membership, selected-project state, permission checks, and project-scoped chat. A seeded user can log into the Web UI, list authorized projects, select a project, and send chat messages scoped to that project; backend tests verify unauthorized/forbidden access and project isolation failure modes.
+M001 implementation is complete and ready for milestone validation. S01, S02, and S03 are complete.
 
-Remaining M001 work is still substantial: S02 must add authenticated runtime/provider/tool/skill/gateway/building-domain placeholder registry surfaces, and S03 must add the authenticated CLI plus full local smoke checks and final README verification.
+S01 delivered the local authenticated foundation: the repository contains an npm workspace with a Fastify API and React/Vite Web UI that prove seeded local authentication, project membership, selected-project state, permission checks, and project-scoped chat. A seeded user can log into the Web UI, list authorized projects, select a project, and send chat messages scoped to that project; backend tests verify unauthorized/forbidden access and project isolation failure modes.
+
+S02 extended that foundation with authenticated placeholder registry and management surfaces. The API now exposes read-only synthetic listings for runtime providers, tools, skills, gateway placeholders, and building-domain capabilities. Platform registry inspection requires bearer auth; project management inspection additionally requires project membership, matching selected-project state, and `chat:read`. The Web workspace now preserves S01 chat while adding tabs for Platform Registry, Gateways, and Building Domain, with placeholder-only labels, request-id diagnostics, empty states, and strict malformed-payload handling.
+
+S03 added the authenticated CLI shell and local smoke path. The `@building-agent/cli` workspace can log in against the seeded API, persist a redaction-safe local config in an isolated CLI home, reuse saved auth and selected-project state across fresh invocations, inspect session/projects/chat plus the S02 registry and management placeholders, and preserve backend error codes/request ids on denial paths. The root `npm run smoke` command now builds the workspaces, starts or probes API/Web services, runs the built CLI through login → project selection → registry/management/chat, emits agent-readable stage markers and child process exit codes, and cleans up temporary CLI state without printing bearer tokens.
 
 Hermes Agent is available locally as a read-only architectural and engineering reference at `/mnt/d/Git_project/references/hermes-agent`. Do not modify that repository. Do not blindly vendor the full Hermes codebase. Selected Hermes components may be reused, copied, and adapted when doing so materially speeds up development and preserves BuildingAgent’s own project structure, naming, permission model, and building-domain roadmap. Preserve license notices and attribution for any Hermes-derived code.
 
@@ -49,23 +53,41 @@ S01 established these concrete foundation patterns:
 - Browser session state is intentionally minimal for local development: seeded bearer token plus minimal user/project identifiers, with guarded rehydration through `/api/session` and `/api/projects`.
 - Workspace-aware test forwarding is handled by `scripts/run-tests.cjs` so root verification commands can target API or Web test files.
 
-The S01 auth model is local-development only. Seeded credentials/tokens are public fixtures, the API defaults to loopback (`127.0.0.1`), and this must not be treated as production authentication. Before any shared demo or non-loopback run, add a guard that refuses seeded auth outside an explicit local/dev mode and restrict CORS to known local Web origins.
+S02 established these additional placeholder-surface patterns:
 
-The first working version should establish a practical Hermes-like platform skeleton before later milestones specialize it for BIM, Brick/RDF/SPARQL, time-series, HHW, and building-operations workflows. M001 should prioritize a working vertical slice over broad placeholder coverage: preserve the authenticated backend, real-provider-first chat path with mock fallback, login → project selection → chat workspace, CLI authenticated chat/project commands, project isolation and backend-side permission checks, Hermes-inspired runtime/tool/skill/model-provider skeleton, smoke checks, and README before expanding placeholder breadth.
+- Global platform registry listings are authenticated but not project-selected: `GET /api/registry` returns bounded synthetic runtime provider, tool, skill, gateway, and building-capability fixtures.
+- Project management listings are selected-project scoped: `GET /api/projects/:projectId/management` requires bearer auth, project membership, matching selected project, and `chat:read` before returning synthetic gateways, capabilities, and tools.
+- Successful registry/management responses include `limit`, `placeholderOnly`, and `requestId`; failures reuse the S01 canonical error envelope.
+- Web management tabs consume these contracts through `apps/web/src/api.ts` and fail closed with `api_malformed` when placeholder metadata or item shapes are unexpected.
+- All S02 data is synthetic/demo metadata. No live provider keys, gateway connection strings, bearer tokens, private customer building data, or execution/mutation integrations were introduced.
 
-Chat/model behavior in M001 should prefer a real configured LLM provider/API from day one. Chat should flow through the real runtime → model/provider path when credentials are available, with mock responses only as fallback for smoke tests, CI, or local development without credentials. Provider credentials must be configured through environment variables or ignored local config files and must never be committed.
+S03 established these CLI and smoke patterns:
 
-The Web UI should use a modern React/Next.js-style product interface, not Streamlit. The first user flow is login → project selection → chat workspace. The UI should also include coherent navigable placeholder pages for project dashboard, model/provider settings, skills manager, tools manager, data source settings, user and permission settings, and audit logs.
+- `apps/cli` is a strict TypeScript workspace that shares root test/typecheck routing with API and Web.
+- CLI config persistence is isolated through `BUILDING_AGENT_CLI_HOME` or explicit home-dir options, stores `.building-agent/config.json`, and redacts bearer tokens in diagnostics and rendered session output.
+- CLI API failures preserve canonical backend error codes and request ids; `building-agent session` persists last command/error/request-id diagnostics so auth, project-selection, chat-validation, and startup failures can be localized later.
+- CLI registry and management commands strictly parse placeholder payloads before rendering JSON and fail closed with `api_malformed` on malformed responses.
+- `npm run smoke` is the authoritative local coherence check: it builds workspaces, starts/probes API and Web, invokes the built CLI against the live API, prints `[smoke]` stage markers plus request ids and child process exit codes, and cleans up child processes and temporary CLI home.
 
-The CLI should require authentication and provide a minimal working skeleton for login, project list, project use, chat, model list, skill list, and tool list.
+Known hardening follow-ups before real integrations: add Web validation that project-management payload `projectId` exactly matches the requested project id, add API regression tests proving non-GET registry/management methods do not expose placeholder data or execution paths, consider making management-surface fetch failures non-blocking after chat/project selection succeeds, and fix CLI package/bin emission so the declared package bin and emitted build path align for future packaging.
 
-Authentication in v1 should be pragmatic local auth with seeded username/password login returning bearer/session tokens for Web UI and CLI. The CLI should support login, store/use the returned local token, and require authentication for all commands that access projects, chat, tools, skills, or models. Roles, users, and project memberships can be local seed data. It must include clear backend-side auth checks and project-scoped permissions, but it does not need SSO, invite flow, password reset, enterprise identity, API-key-style auth as the primary path, or production-grade deployment.
+The S01/S02/S03 auth model is local-development only. Seeded credentials/tokens are public fixtures, the API defaults to loopback (`127.0.0.1`), and this must not be treated as production authentication. Before any shared demo or non-loopback run, add a guard that refuses seeded auth outside an explicit local/dev mode and restrict CORS to known local Web origins. S02 security review also noted that localStorage bearer-token persistence is acceptable only for this local skeleton; use HttpOnly/Secure/SameSite cookies or in-memory tokens before any non-local browser deployment.
+
+The first working version should establish a practical Hermes-like platform skeleton before later milestones specialize it for BIM, Brick/RDF/SPARQL, time-series, HHW, and building-operations workflows. M001 prioritizes a working vertical slice over broad placeholder coverage: authenticated backend, login → project selection → chat workspace, CLI authenticated chat/project/registry/management commands, project isolation and backend-side permission checks, Hermes-inspired runtime/tool/skill/model-provider placeholders, smoke checks, and README are now present.
+
+Chat/model behavior in M001 should prefer a real configured LLM provider/API from day one in future milestones. Current M001 chat remains a local skeleton/mock path suitable for smoke tests, CI, and local development without credentials. Provider credentials must be configured through environment variables or ignored local config files and must never be committed.
+
+The Web UI should use a modern React/Next.js-style product interface, not Streamlit. The first user flow is login → project selection → chat workspace. The UI now includes coherent navigable placeholder tabs for platform registry, gateway placeholders, and building-domain capabilities; later slices/milestones can expand those into project dashboard, model/provider settings, skills manager, tools manager, data source settings, user and permission settings, and audit logs.
+
+The CLI requires authentication and provides a minimal working skeleton for login, session inspection, project list/use, chat send/list, registry inspection, and project management inspection. It reuses the S01/S02 API contracts rather than introducing separate CLI-only auth, registry, or management paths.
+
+Authentication in v1 is pragmatic local auth with seeded username/password login returning bearer/session tokens for Web UI and CLI. The CLI supports login, stores/uses the returned local token, and requires authentication for commands that access projects, chat, tools, skills, models, registry, or management placeholders. Roles, users, and project memberships are local seed data. It includes clear backend-side auth checks and project-scoped permissions, but it does not include SSO, invite flow, password reset, enterprise identity, API-key-style auth as the primary path, or production-grade deployment.
 
 Project data and project memory must be isolated by project. Tool calls must go through backend-side permission checks. Code/platform permissions and project/data permissions should remain conceptually separate.
 
-Email and WhatsApp gateways should exist only as authenticated placeholders. They must not allow anonymous interaction.
+Email and WhatsApp gateways exist only as authenticated placeholders. They must not allow anonymous interaction.
 
-Building-domain tools should only be placeholders in v1:
+Building-domain tools are placeholders in v1:
 
 - BIM/IFC tools
 - Brick/RDF/SPARQL tools
@@ -73,7 +95,7 @@ Building-domain tools should only be placeholders in v1:
 - cross-source linking tools
 - visualization tools
 
-Building-domain skills should only be placeholders in v1:
+Building-domain skills are placeholders in v1:
 
 - BIM object exploration
 - Brick SPARQL query
@@ -102,6 +124,6 @@ See `.gsd/REQUIREMENTS.md` for the explicit capability contract, requirement sta
 
 ## Milestone Sequence
 
-- [ ] M001: Local Hermes-Like Foundation Skeleton — Build the smallest authenticated local platform where backend, Web UI, CLI, login, project selection, chat workspace, runtime/memory/tool/skill/provider skeletons, placeholder gateways, placeholder building tools and skills, smoke checks, and README all work coherently. S01 is complete; S02 and S03 remain.
+- [ ] M001: Local Hermes-Like Foundation Skeleton — Build the smallest authenticated local platform where backend, Web UI, CLI, login, project selection, chat workspace, runtime/memory/tool/skill/provider skeletons, placeholder gateways, placeholder building tools and skills, smoke checks, and README all work coherently. Implementation is complete across S01/S02/S03 and ready for final milestone validation.
 - [ ] M002: Building-Domain Data Source Stubs — Add project-scoped external data source configuration surfaces and safe placeholder contracts for BIM, Brick/RDF/SPARQL, time-series, and mapping sources without storing real building data in the repository.
 - [ ] M003: Building Operations Workflow Prototypes — Introduce first non-placeholder building-operations workflows, likely around equipment exploration, semantic query scaffolding, trend inspection, and HHW reset analysis once the foundation boundaries are proven.

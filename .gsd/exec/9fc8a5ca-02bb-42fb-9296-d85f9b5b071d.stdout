@@ -1,0 +1,22 @@
+
+> @building-agent/web@0.1.0 test
+> vitest run --run src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ❯ src/App.test.tsx (9 tests | 1 failed) 1079ms
+   ✓ BuildingAgent Web flow > logs in, selects a project, loads chat, management panels, and sends project-scoped messages 373ms
+   × BuildingAgent Web flow > displays forbidden API errors with request ids without mutating the selected project 77ms
+     → expect(element).toHaveTextContent()
+
+Expected element to have text content:
+  project_forbidden
+Received:
+  Project selection failedLocal API is unavailable. Check that the API dev server is running, then retry.Code: api_unavailable
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 8 passed (9)
+   Start at  20:42:18
+   Duration  55.17s (transform 336ms, setup 5.94s, collect 6.72s, tests 1.08s, environment 37.99s, prepare 2.27s)
+

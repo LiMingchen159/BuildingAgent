@@ -1,0 +1,18 @@
+{
+  "id": "14c585a9-1a9f-40cc-bca3-f2d6a25f78f8",
+  "runtime": "bash",
+  "purpose": "S03 UAT inspect CLI source assertions for required contracts",
+  "script_chars": 1801,
+  "started_at": "2026-05-10T12:17:30.885Z",
+  "finished_at": "2026-05-10T12:17:30.976Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 91,
+  "stdout_bytes": 449,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/14c585a9-1a9f-40cc-bca3-f2d6a25f78f8.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/14c585a9-1a9f-40cc-bca3-f2d6a25f78f8.stderr"
+}

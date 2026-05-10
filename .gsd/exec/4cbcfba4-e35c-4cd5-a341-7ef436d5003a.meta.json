@@ -1,0 +1,18 @@
+{
+  "id": "4cbcfba4-e35c-4cd5-a341-7ef436d5003a",
+  "runtime": "bash",
+  "purpose": "S04 provider fallback research scan",
+  "script_chars": 282,
+  "started_at": "2026-05-10T14:34:11.359Z",
+  "finished_at": "2026-05-10T14:34:11.469Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 110,
+  "stdout_bytes": 23283,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/4cbcfba4-e35c-4cd5-a341-7ef436d5003a.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/4cbcfba4-e35c-4cd5-a341-7ef436d5003a.stderr"
+}

@@ -1,0 +1,37 @@
+
+> building-agent@0.1.0 smoke
+> node scripts/smoke-local.cjs
+
+[smoke] temp CLI home /tmp/building-agent-cli-smoke-KgiiNk
+[smoke] build workspaces
+[smoke] run npm run build
+[smoke] npm run build exit code=0 signal=null
+[smoke] api not reachable yet: {"ok":false,"label":"api","error":"fetch failed"}
+[smoke] starting api
+[smoke:api:stdout] > building-agent@0.1.0 dev:api
+[smoke:api:stdout] > npm --workspace @building-agent/api run dev
+[smoke:api:stdout] > @building-agent/api@0.1.0 dev
+[smoke:api:stdout] > tsx watch src/index.ts
+[smoke] api probe ok status=200 requestId=req_000001
+[smoke] web not reachable yet: {"ok":false,"label":"web","error":"fetch failed"}
+[smoke] starting web
+[smoke:web:stdout] > building-agent@0.1.0 dev:web
+[smoke:web:stdout] > npm --workspace @building-agent/web run dev
+[smoke:web:stdout] > @building-agent/web@0.1.0 dev
+[smoke:web:stdout] > vite --host 127.0.0.1
+[smoke:web:stdout]   VITE v5.4.21  ready in 983 ms
+[smoke:web:stdout]   ➜  Local:   http://127.0.0.1:5173/
+[smoke] web probe ok status=200 requestId=req_000002
+[smoke] cli login and project flow
+[smoke] run cli login
+[smoke] cli login exit code=127 signal=null
+[smoke] cli login stderr=sh: 1: building-agent: not found
+[smoke] smoke failed: cli login failed with exit code 127.
+[smoke] failure stderr=sh: 1: building-agent: not found
+[smoke] cleanup start
+[smoke] stopping api pid=234324
+[smoke] stopping web pid=234382
+[smoke] api child exit code=null signal=SIGTERM
+[smoke] web child exit code=null signal=SIGTERM
+[smoke] removed temp CLI home /tmp/building-agent-cli-smoke-KgiiNk
+[smoke] cleanup complete

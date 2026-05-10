@@ -1,0 +1,26 @@
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/App.test.tsx > BuildingAgent Web flow > displays forbidden API errors with request ids without mutating the selected project
+Error: expect(element).toHaveTextContent()
+
+Expected element to have text content:
+  project_forbidden
+Received:
+  Project selection failedLocal API is unavailable. Check that the API dev server is running, then retry.Code: api_unavailable
+ ❯ src/App.test.tsx:230:19
+    228| 
+    229|     const alert = await screen.findByRole("alert");
+    230|     expect(alert).toHaveTextContent("project_forbidden");
+       |                   ^
+    231|     expect(alert).toHaveTextContent("req_forbidden");
+    232|     expect(screen.getByRole("heading", { name: /choose an authorized p…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /mnt/d/Git_Project/BuildingAgent/apps/web
+npm error workspace @building-agent/web@0.1.0
+npm error location /mnt/d/Git_Project/BuildingAgent/apps/web
+npm error command failed
+npm error command sh -c vitest run --run src/App.test.tsx

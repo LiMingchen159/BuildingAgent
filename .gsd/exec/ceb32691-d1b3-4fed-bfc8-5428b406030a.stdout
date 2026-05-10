@@ -1,0 +1,2 @@
+login 200 {"token":"seed-token-ada","user":{"id":"user_ada","name":"Ada Lovelace"},"requestId":"req_000018"}
+select 500 {"error":{"code":"internal_error","message":"Unexpected API error.","requestId":"req_000019"}}

@@ -152,12 +152,14 @@ async function requestJson(path: string, options: RequestInit = {}): Promise<unk
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
+    const headers = new Headers(options.headers);
+    if (options.body !== undefined && !headers.has("content-type")) {
+      headers.set("content-type", "application/json");
+    }
+
     const response = await fetch(apiUrl(path), {
       ...options,
-      headers: {
-        "content-type": "application/json",
-        ...options.headers
-      },
+      headers,
       signal: controller.signal
     });
     const payload = await readJson(response);
@@ -177,7 +179,9 @@ async function requestJson(path: string, options: RequestInit = {}): Promise<unk
 }
 
 function authHeaders(token: string): HeadersInit {
-  return { authorization: `Bearer ${token}` };
+  const headers = new Headers();
+  headers.set("authorization", `Bearer ${token}`);
+  return headers;
 }
 
 function hasPlaceholderBase(value: Record<string, unknown>): value is Record<string, unknown> & PlaceholderBase {

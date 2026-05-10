@@ -1,0 +1,15 @@
+
+> @building-agent/web@0.1.0 test
+> vitest run --run src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ✓ src/App.test.tsx (9 tests) 1077ms
+   ✓ BuildingAgent Web flow > logs in, selects a project, loads chat, management panels, and sends project-scoped messages 396ms
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  20:45:04
+   Duration  53.58s (transform 319ms, setup 5.87s, collect 6.55s, tests 1.08s, environment 36.86s, prepare 2.18s)
+

@@ -42,7 +42,7 @@ Upstream surfaces consumed: `apps/api/src/auth.ts` authentication/project helper
   - Files: ``apps/api/src/seed.ts``, ``apps/api/src/server.ts``, ``apps/api/src/auth.ts``, ``apps/api/src/auth.test.ts``, ``apps/api/src/chat.test.ts``, ``apps/api/src/registry.test.ts``
   - Verify: `npm test -- --run apps/api/src/registry.test.ts apps/api/src/auth.test.ts apps/api/src/chat.test.ts`
 
-- [ ] **T02: Build Web management panels from the registry contracts** `est:2h`
+- [x] **T02: Build Web management panels from the registry contracts** `est:2h`
   Wire the S02 backend contracts into the React/Vite Web app as real authenticated management pages. The UI should extend the selected-project workspace rather than replacing S01 chat: users should be able to inspect runtime/provider/tool/skill placeholders, project gateway placeholders, and synthetic building-domain capabilities while still seeing and using the project-scoped chat shell.
   - Files: ``apps/web/src/api.ts``, ``apps/web/src/App.tsx``, ``apps/web/src/styles.css``, ``apps/web/src/App.test.tsx``, ``apps/api/src/registry.test.ts``
   - Verify: `npm test -- --run apps/api/src/registry.test.ts apps/web/src/App.test.tsx && npm run typecheck && npm run build`

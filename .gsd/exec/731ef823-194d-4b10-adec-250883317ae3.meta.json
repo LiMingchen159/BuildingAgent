@@ -1,0 +1,18 @@
+{
+  "id": "731ef823-194d-4b10-adec-250883317ae3",
+  "runtime": "bash",
+  "purpose": "rerun npm smoke verification after built CLI path fix",
+  "script_chars": 13,
+  "started_at": "2026-05-10T11:57:59.365Z",
+  "finished_at": "2026-05-10T11:58:39.307Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 39942,
+  "stdout_bytes": 1540,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/731ef823-194d-4b10-adec-250883317ae3.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/731ef823-194d-4b10-adec-250883317ae3.stderr"
+}

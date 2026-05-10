@@ -1,0 +1,18 @@
+{
+  "id": "d84de08b-c908-4c14-9aff-8fe7ddc29bd2",
+  "runtime": "bash",
+  "purpose": "Locate CLI and smoke-check related files",
+  "script_chars": 98,
+  "started_at": "2026-05-10T11:25:30.846Z",
+  "finished_at": "2026-05-10T11:25:32.031Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 1185,
+  "stdout_bytes": 5834,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/d84de08b-c908-4c14-9aff-8fe7ddc29bd2.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/d84de08b-c908-4c14-9aff-8fe7ddc29bd2.stderr"
+}

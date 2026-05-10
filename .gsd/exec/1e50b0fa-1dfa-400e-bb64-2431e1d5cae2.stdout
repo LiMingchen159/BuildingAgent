@@ -1,0 +1,32 @@
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/cli/src/config.test.ts apps/cli/src/commands.test.ts apps/cli/src/registry.test.ts
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/cli
+
+ ✓ src/config.test.ts (2 tests) 16ms
+ ✓ src/registry.test.ts (2 tests) 118ms
+ ✓ src/commands.test.ts (4 tests) 169ms
+
+ Test Files  3 passed (3)
+      Tests  8 passed (8)
+   Start at  20:02:33
+   Duration  10.08s (transform 866ms, setup 0ms, collect 14.27s, tests 303ms, environment 1ms, prepare 4.67s)
+
+
+> building-agent@0.1.0 typecheck
+> npm --workspaces --if-present run typecheck
+
+
+> @building-agent/api@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> @building-agent/cli@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> @building-agent/web@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+

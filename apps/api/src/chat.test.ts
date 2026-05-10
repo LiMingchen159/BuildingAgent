@@ -1,11 +1,38 @@
 import { describe, expect, it } from "vitest";
+import { ProviderError, type ChatProvider } from "./providers.js";
 import { buildServer } from "./server.js";
+import { createSeedStore } from "./seed.js";
 
 const adaToken = "seed-token-ada";
 const graceToken = "seed-token-grace";
 
 function bearer(value: string) {
   return { authorization: `Bearer ${value}` };
+}
+
+function fakeProvider(overrides: Partial<ChatProvider> = {}) {
+  const calls: Parameters<ChatProvider["complete"]>[0][] = [];
+  const provider: ChatProvider = {
+    metadata: { id: "fake-real", mode: "real", model: "fake-model", status: "configured" },
+    async complete(request) {
+      calls.push(request);
+      return {
+        text: `Assistant: ${request.messages.at(-1)?.content ?? ""}`,
+        provider: provider.metadata,
+        fallbackUsed: false
+      };
+    },
+    ...overrides
+  };
+
+  return { provider, calls };
+}
+
+function assertNoSecrets(value: unknown) {
+  const serialized = JSON.stringify(value).toLowerCase();
+  for (const forbidden of ["secret", "apikey", "api_key", "bearer", "password", "client_secret", "private_key", "authorization"]) {
+    expect(serialized).not.toContain(forbidden);
+  }
 }
 
 describe("project-scoped chat contract", () => {
@@ -25,8 +52,11 @@ describe("project-scoped chat contract", () => {
     expect(notSelected.json().error).toMatchObject({ code: "project_not_selected" });
   });
 
-  it("stores and returns chat messages only for the selected project", async () => {
-    const app = buildServer();
+  it("stores a bounded user/assistant turn and returns provider diagnostics for the selected project", async () => {
+    const store = createSeedStore();
+    store.maxChatMessages = 2;
+    const { provider, calls } = fakeProvider();
+    const app = buildServer({ store, chatProvider: provider });
 
     await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
     const posted = await app.inject({
@@ -45,8 +75,27 @@ describe("project-scoped chat contract", () => {
         role: "user",
         content: "What should we build first?"
       },
+      assistantMessage: {
+        id: "msg_000002",
+        projectId: "project_alpha",
+        userId: "user_ada",
+        role: "assistant",
+        content: "Assistant: What should we build first?"
+      },
+      provider: {
+        id: "fake-real",
+        mode: "real",
+        model: "fake-model",
+        status: "configured",
+        fallbackUsed: false
+      },
+      fallbackUsed: false,
       requestId: expect.stringMatching(/^req_/)
     });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ projectId: "project_alpha", userId: "user_ada", requestId: expect.stringMatching(/^req_/) });
+    expect(calls[0]?.messages).toEqual([{ role: "user", content: "What should we build first?" }]);
+    assertNoSecrets(posted.json());
 
     const alphaChat = await app.inject({
       method: "GET",
@@ -55,7 +104,7 @@ describe("project-scoped chat contract", () => {
     });
     expect(alphaChat.statusCode).toBe(200);
     expect(alphaChat.json()).toEqual({
-      messages: [posted.json().message],
+      messages: [posted.json().message, posted.json().assistantMessage],
       limit: 50,
       requestId: expect.stringMatching(/^req_/)
     });
@@ -70,17 +119,53 @@ describe("project-scoped chat contract", () => {
     expect(betaChat.json().messages).toEqual([]);
   });
 
-  it("rejects chat writes without selected project, write permission, or valid body", async () => {
-    const app = buildServer();
+  it("falls back deterministically when no provider credentials are configured", async () => {
+    const app = buildServer({ env: {} });
 
-    const notSelected = await app.inject({
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const posted = await app.inject({
       method: "POST",
       url: "/api/projects/project_alpha/chat",
       headers: bearer(adaToken),
-      payload: { message: "Hello" }
+      payload: { message: "Local smoke" }
     });
-    expect(notSelected.statusCode).toBe(403);
-    expect(notSelected.json().error).toMatchObject({ code: "project_not_selected" });
+
+    expect(posted.statusCode).toBe(201);
+    expect(posted.json()).toMatchObject({
+      assistantMessage: { role: "assistant", content: "Mock assistant response for project_alpha: Local smoke" },
+      provider: {
+        id: "deterministic-mock",
+        mode: "mock",
+        model: "deterministic-local-mock",
+        fallbackReason: "local_default",
+        status: "fallback",
+        fallbackUsed: true
+      },
+      fallbackUsed: true,
+      requestId: expect.stringMatching(/^req_/)
+    });
+  });
+
+  it("does not invoke the provider before auth, project, selection, permission, or body denial paths", async () => {
+    const { provider, calls } = fakeProvider();
+    const app = buildServer({ chatProvider: provider });
+
+    const checks = [
+      app.inject({ method: "POST", url: "/api/projects/project_alpha/chat", payload: { message: "Hello" } }),
+      app.inject({ method: "POST", url: "/api/projects/project_alpha/chat", headers: bearer("missing-token"), payload: { message: "Hello" } }),
+      app.inject({ method: "POST", url: "/api/projects/project_gamma/chat", headers: bearer(adaToken), payload: { message: "Hello" } }),
+      app.inject({ method: "POST", url: "/api/projects/project_alpha/chat", headers: bearer(adaToken), payload: { message: "Hello" } })
+    ];
+
+    const [missingAuth, invalidAuth, forbidden, notSelected] = await Promise.all(checks);
+    expect(missingAuth?.statusCode).toBe(401);
+    expect(missingAuth?.json().error).toMatchObject({ code: "auth_missing" });
+    expect(invalidAuth?.statusCode).toBe(401);
+    expect(invalidAuth?.json().error).toMatchObject({ code: "auth_invalid" });
+    expect(forbidden?.statusCode).toBe(403);
+    expect(forbidden?.json().error).toMatchObject({ code: "project_forbidden" });
+    expect(notSelected?.statusCode).toBe(403);
+    expect(notSelected?.json().error).toMatchObject({ code: "project_not_selected" });
 
     await app.inject({ method: "POST", url: "/api/projects/project_beta/select", headers: bearer(adaToken) });
     const noWrite = await app.inject({
@@ -93,7 +178,7 @@ describe("project-scoped chat contract", () => {
     expect(noWrite.json().error).toMatchObject({ code: "project_forbidden" });
 
     await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
-    for (const payload of [{}, { message: "" }, { message: "   " }, { message: "x".repeat(1001) }, { text: "wrong shape" }]) {
+    for (const payload of [{}, { message: "" }, { message: "   " }, { message: "x".repeat(1001) }, { text: "wrong shape" }, { message: 42 }]) {
       const invalid = await app.inject({
         method: "POST",
         url: "/api/projects/project_alpha/chat",
@@ -103,6 +188,75 @@ describe("project-scoped chat contract", () => {
       expect(invalid.statusCode).toBe(422);
       expect(invalid.json().error).toMatchObject({ code: "chat_invalid" });
     }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("preserves canonical provider error envelopes and avoids storing unsafe assistant content", async () => {
+    const store = createSeedStore();
+    const { provider } = fakeProvider({
+      async complete() {
+        throw new ProviderError("upstream failed with sk-test-secret", {
+          code: "provider_http_error",
+          status: 503,
+          provider: { id: "fake-real", mode: "real", model: "fake-model", status: "503" }
+        });
+      }
+    });
+    const app = buildServer({ store, chatProvider: provider, allowProviderFallback: false });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const failed = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Do not store on failure" }
+    });
+
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toEqual({
+      error: {
+        code: "provider_error",
+        message: "Chat provider failed before producing a safe response.",
+        requestId: expect.stringMatching(/^req_/)
+      }
+    });
+    assertNoSecrets(failed.json());
+    expect(store.messagesByProject.project_alpha).toEqual([]);
+  });
+
+  it("uses explicit fallback metadata when configured provider failure fallback is allowed", async () => {
+    const { provider } = fakeProvider({
+      async complete() {
+        throw new ProviderError("timeout", {
+          code: "provider_request_failed",
+          provider: { id: "fake-real", mode: "real", model: "fake-model" }
+        });
+      }
+    });
+    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Recover locally" }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      assistantMessage: { role: "assistant", content: "Mock assistant response for project_alpha: Recover locally" },
+      provider: {
+        id: "deterministic-mock",
+        mode: "mock",
+        model: "deterministic-local-mock",
+        fallbackReason: "provider_request_failed",
+        status: "fallback",
+        fallbackUsed: true
+      },
+      fallbackUsed: true
+    });
+    assertNoSecrets(response.json());
   });
 
   it("rechecks membership on every operation and isolates projects between users", async () => {

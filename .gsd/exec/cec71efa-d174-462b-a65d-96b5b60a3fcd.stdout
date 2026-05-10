@@ -1,0 +1,60 @@
+## Node TypeScript CLI
+
+[38;5;250m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗[0m
+[38;5;248m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝[0m
+[38;5;245m███████╗█████╔╝ ██║██║     ██║     ███████╗[0m
+[38;5;243m╚════██║██╔═██╗ ██║██║     ██║     ╚════██║[0m
+[38;5;240m███████║██║  ██╗██║███████╗███████╗███████║[0m
+[38;5;238m╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝[0m
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mmcollina/skills@node[0m [36m1.2K installs[0m
+[38;5;102m└ https://skills.sh/mcollina/skills/node[0m
+
+[38;5;145msiviter-xyz/dot-agent@typescript[0m [36m106 installs[0m
+[38;5;102m└ https://skills.sh/siviter-xyz/dot-agent/typescript[0m
+
+[38;5;145msickn33/antigravity-awesome-skills@azure-postgres-ts[0m [36m66 installs[0m
+[38;5;102m└ https://skills.sh/sickn33/antigravity-awesome-skills/azure-postgres-ts[0m
+
+[38;5;145mjulianobarbosa/claude-code-skills@writing-typescript[0m [36m50 installs[0m
+[38;5;102m└ https://skills.sh/julianobarbosa/claude-code-skills/writing-typescript[0m
+
+[38;5;145mdralgorhythm/claude-agentic-framework@typescript[0m [36m37 installs[0m
+[38;5;102m└ https://skills.sh/dralgorhythm/claude-agentic-framework/typescript[0m
+
+[38;5;145mserkan-ozal/browser-devtools-skills@node-devtools-cli[0m [36m26 installs[0m
+[38;5;102m└ https://skills.sh/serkan-ozal/browser-devtools-skills/node-devtools-cli[0m
+
+
+## local smoke testing
+
+[38;5;250m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗[0m
+[38;5;248m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝[0m
+[38;5;245m███████╗█████╔╝ ██║██║     ██║     ███████╗[0m
+[38;5;243m╚════██║██╔═██╗ ██║██║     ██║     ╚════██║[0m
+[38;5;240m███████║██║  ██╗██║███████╗███████╗███████║[0m
+[38;5;238m╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝[0m
+
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mcinience/alicloud-skills@alicloud-network-alb-test[0m [36m184 installs[0m
+[38;5;102m└ https://skills.sh/cinience/alicloud-skills/alicloud-network-alb-test[0m
+
+[38;5;145mcinience/alicloud-skills@alicloud-ai-entry-modelstudio-test-test[0m [36m157 installs[0m
+[38;5;102m└ https://skills.sh/cinience/alicloud-skills/alicloud-ai-entry-modelstudio-test-test[0m
+
+[38;5;145mcursor/plugins@run-smoke-tests[0m [36m30 installs[0m
+[38;5;102m└ https://skills.sh/cursor/plugins/run-smoke-tests[0m
+
+[38;5;145mgarrytan/gbrain@smoke-test[0m [36m29 installs[0m
+[38;5;102m└ https://skills.sh/garrytan/gbrain/smoke-test[0m
+
+[38;5;145mwojons/skills@testing-smoke[0m [36m25 installs[0m
+[38;5;102m└ https://skills.sh/wojons/skills/testing-smoke[0m
+
+[38;5;145mtobihagemann/turbo@smoke-test[0m [36m22 installs[0m
+[38;5;102m└ https://skills.sh/tobihagemann/turbo/smoke-test[0m
+
+

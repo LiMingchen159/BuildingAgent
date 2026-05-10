@@ -1,0 +1,18 @@
+{
+  "id": "c8871d7f-abfe-41c2-ba05-97e5e9d395db",
+  "runtime": "bash",
+  "purpose": "S02 UAT smoke verification",
+  "script_chars": 111,
+  "started_at": "2026-05-10T11:19:53.244Z",
+  "finished_at": "2026-05-10T11:21:39.164Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 105920,
+  "stdout_bytes": 1581,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/c8871d7f-abfe-41c2-ba05-97e5e9d395db.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/c8871d7f-abfe-41c2-ba05-97e5e9d395db.stderr"
+}

@@ -1,0 +1,15 @@
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/web/src/App.test.tsx
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/web
+
+ ✓ src/App.test.tsx (9 tests) 1113ms
+   ✓ BuildingAgent Web flow > logs in, selects a project, loads chat, management panels, and sends project-scoped messages 429ms
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  19:05:30
+   Duration  56.46s (transform 391ms, setup 6.00s, collect 6.92s, tests 1.11s, environment 38.56s, prepare 2.52s)
+

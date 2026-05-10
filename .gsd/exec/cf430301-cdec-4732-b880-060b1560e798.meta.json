@@ -1,0 +1,18 @@
+{
+  "id": "cf430301-cdec-4732-b880-060b1560e798",
+  "runtime": "bash",
+  "purpose": "reproduce user web login/select flow via API direct smoke",
+  "script_chars": 1558,
+  "started_at": "2026-05-10T12:33:52.041Z",
+  "finished_at": "2026-05-10T12:33:58.421Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 6380,
+  "stdout_bytes": 434,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/cf430301-cdec-4732-b880-060b1560e798.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/cf430301-cdec-4732-b880-060b1560e798.stderr"
+}

@@ -99,6 +99,8 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
       return jsonResponse({ projects: [project], limit: 50, requestId: "req_projects" });
     }
     if (url === `/api/projects/${project.id}/select`) {
+      expect(init?.headers).toBeInstanceOf(Headers);
+      expect((init?.headers as Headers).has("content-type")).toBe(false);
       return jsonResponse({ session: { userId: "user_ada", projectId: project.id, permissions: project.permissions }, requestId: "req_select" });
     }
     if (url === `/api/projects/${project.id}/chat` && init?.method !== "POST") {
@@ -168,14 +170,14 @@ describe("BuildingAgent Web flow", () => {
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
     expect(await screen.findByText("What should we build first?")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/projects/project_alpha/chat",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ message: "What should we build first?" }),
-        headers: expect.objectContaining({ authorization: "Bearer seed-token-ada" })
-      })
-    );
+    const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "POST");
+    expect(chatPostCall).toBeTruthy();
+    expect(chatPostCall?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ message: "What should we build first?" })
+    });
+    expect(chatPostCall?.[1]?.headers).toBeInstanceOf(Headers);
+    expect((chatPostCall?.[1]?.headers as Headers).get("authorization")).toBe("Bearer seed-token-ada");
   });
 
   it("guards the workspace when unauthenticated and clears invalid stored tokens", async () => {
@@ -199,7 +201,7 @@ describe("BuildingAgent Web flow", () => {
   });
 
   it("displays forbidden API errors with request ids without mutating the selected project", async () => {
-    installFetch((url) => {
+    installFetch((url, init) => {
       if (url === "/api/login") {
         return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
       }
@@ -210,6 +212,8 @@ describe("BuildingAgent Web flow", () => {
         return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
       }
       if (url === "/api/projects/project_alpha/select") {
+        expect(init?.headers).toBeInstanceOf(Headers);
+        expect((init?.headers as Headers).has("content-type")).toBe(false);
         return apiError("project_forbidden", "Project is not available for this session.", 403, "req_forbidden");
       }
       return apiError("not_found", "Unexpected test URL", 404);

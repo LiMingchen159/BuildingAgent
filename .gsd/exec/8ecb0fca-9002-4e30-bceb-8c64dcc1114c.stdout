@@ -1,0 +1,15 @@
+
+> building-agent@0.1.0 test
+> node scripts/run-tests.cjs --run apps/cli/src/config.test.ts
+
+
+ RUN  v2.1.9 /mnt/d/Git_Project/BuildingAgent/apps/cli
+
+ ✓ src/config.test.ts (2 tests) 15ms
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  19:34:52
+   Duration  3.41s (transform 235ms, setup 0ms, collect 380ms, tests 15ms, environment 0ms, prepare 1.92s)
+
+duration_ms=7356

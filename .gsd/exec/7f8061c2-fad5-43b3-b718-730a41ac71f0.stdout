@@ -1,0 +1,162 @@
+apps/api/src/registry.test.ts:29:describe("placeholder registry and management API contracts", () => {
+apps/api/src/registry.test.ts:30:  it("lists bounded synthetic registry data for an authenticated user", async () => {
+apps/api/src/registry.test.ts:32:    const response = await app.inject({ method: "GET", url: "/api/registry", headers: bearer(adaToken) });
+apps/api/src/registry.test.ts:36:      runtimeProviders: expect.arrayContaining([
+apps/api/src/registry.test.ts:42:      buildingCapabilities: expect.arrayContaining([expect.objectContaining({ id: "capability_energy_baseline", status: "mock" })]),
+apps/api/src/registry.test.ts:44:      placeholderOnly: true,
+apps/api/src/registry.test.ts:47:    expect(response.json().runtimeProviders).toHaveLength(3);
+apps/api/src/registry.test.ts:51:  it("rejects missing, malformed, and unknown auth for registry with canonical envelopes", async () => {
+apps/api/src/registry.test.ts:54:    const missing = await app.inject({ method: "GET", url: "/api/registry" });
+apps/api/src/registry.test.ts:60:      url: "/api/registry",
+apps/api/src/registry.test.ts:66:    const unknown = await app.inject({ method: "GET", url: "/api/registry", headers: bearer("missing-token") });
+apps/api/src/registry.test.ts:71:  it("requires project membership and matching selected project before management listing", async () => {
+apps/api/src/registry.test.ts:76:      url: "/api/projects/project_alpha/management",
+apps/api/src/registry.test.ts:85:      url: "/api/projects/project_alpha/management",
+apps/api/src/registry.test.ts:93:      url: "/api/projects/project_gamma/management",
+apps/api/src/registry.test.ts:100:  it("lists bounded synthetic management data for the selected authorized project", async () => {
+apps/api/src/registry.test.ts:106:      url: "/api/projects/project_alpha/management",
+apps/api/src/registry.test.ts:119:      placeholderOnly: true,
+apps/api/src/registry.test.ts:125:  it("enforces read permission for project management listings", async () => {
+apps/api/src/registry.test.ts:133:      url: "/api/projects/project_gamma/management",
+apps/api/src/registry.test.ts:141:  it("bounds registry and management arrays by maxListSize", async () => {
+apps/api/src/registry.test.ts:146:    const registry = await app.inject({ method: "GET", url: "/api/registry", headers: bearer(graceToken) });
+apps/api/src/registry.test.ts:147:    expect(registry.statusCode).toBe(200);
+apps/api/src/registry.test.ts:148:    expect(registry.json()).toMatchObject({ limit: 1, placeholderOnly: true });
+apps/api/src/registry.test.ts:149:    expect(registry.json().runtimeProviders).toHaveLength(1);
+apps/api/src/registry.test.ts:150:    expect(registry.json().tools).toHaveLength(1);
+apps/api/src/registry.test.ts:151:    expect(registry.json().skills).toHaveLength(1);
+apps/api/src/registry.test.ts:152:    expect(registry.json().gateways).toHaveLength(1);
+apps/api/src/registry.test.ts:153:    expect(registry.json().buildingCapabilities).toHaveLength(1);
+apps/api/src/registry.test.ts:156:    const management = await app.inject({
+apps/api/src/registry.test.ts:158:      url: "/api/projects/project_gamma/management",
+apps/api/src/registry.test.ts:161:    expect(management.statusCode).toBe(200);
+apps/api/src/registry.test.ts:162:    expect(management.json()).toMatchObject({ limit: 1, placeholderOnly: true, projectId: "project_gamma" });
+apps/api/src/registry.test.ts:163:    expect(management.json().gateways).toHaveLength(1);
+apps/api/src/registry.test.ts:164:    expect(management.json().capabilities).toHaveLength(1);
+apps/api/src/registry.test.ts:165:    expect(management.json().tools).toHaveLength(1);
+apps/web/src/styles.css:237:.workspace-management {
+apps/web/src/styles.css:283:.management-panel {
+apps/web/src/styles.css:292:.management-meta {
+apps/web/src/styles.css:303:.management-grid {
+apps/web/src/styles.css:309:.management-item {
+apps/web/src/styles.css:316:.management-item h3,
+apps/web/src/styles.css:317:.management-panel h3 {
+apps/web/src/styles.css:342:.management-empty {
+apps/web/src/styles.css:410:  .management-meta {
+apps/web/src/App.tsx:26:type WorkspaceTab = "chat" | "registry" | "gateways" | "building";
+apps/web/src/App.tsx:163:    <p className="management-meta">
+apps/web/src/App.tsx:172:  return <p className="empty-state management-empty">{children}</p>;
+apps/web/src/App.tsx:188:    <div className="management-grid">
+apps/web/src/App.tsx:190:        <article className="management-item" key={item.id}>
+apps/web/src/App.tsx:243:function RegistryPanel({ registry }: { registry: RegistryResponse | null }) {
+apps/web/src/App.tsx:245:    <section className="management-panel" aria-labelledby="registry-title">
+apps/web/src/App.tsx:248:          <p className="eyebrow">Platform registry</p>
+apps/web/src/App.tsx:249:          <h2 id="registry-title">Runtime providers, tools, and skills</h2>
+apps/web/src/App.tsx:251:        <MetaBar limit={registry?.limit} requestId={registry?.requestId} />
+apps/web/src/App.tsx:253:      {!registry ? <EmptyState>Registry data is unavailable. Check the diagnostic banner and retry.</EmptyState> : null}
+apps/web/src/App.tsx:254:      {registry ? (
+apps/web/src/App.tsx:257:          <ItemList<RuntimeProviderSummary> items={registry.runtimeProviders} getMeta={(item) => item.kind} emptyText="No runtime provider placeholders returned." />
+apps/web/src/App.tsx:259:          <ItemList<ToolSummary> items={registry.tools} getMeta={(item) => item.category} emptyText="No tool placeholders returned." />
+apps/web/src/App.tsx:261:          <ItemList<SkillSummary> items={registry.skills} getMeta={(item) => item.domain} emptyText="No skill placeholders returned." />
+apps/web/src/App.tsx:268:function GatewayPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
+apps/web/src/App.tsx:270:    <section className="management-panel" aria-labelledby="gateways-title">
+apps/web/src/App.tsx:276:        <MetaBar limit={management?.limit ?? registry?.limit} requestId={management?.requestId ?? registry?.requestId} />
+apps/web/src/App.tsx:280:      {management ? <ItemList<GatewaySummary> items={management.gateways} getMeta={(item) => item.protocol} emptyText="No project gateway placeholders returned." /> : <EmptyState>Project management data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:282:      {registry ? <ItemList<GatewaySummary> items={registry.gateways} getMeta={(item) => item.protocol} emptyText="No registry gateway placeholders returned." /> : <EmptyState>Registry gateway data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:287:function BuildingDomainPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
+apps/web/src/App.tsx:289:    <section className="management-panel" aria-labelledby="building-title">
+apps/web/src/App.tsx:295:        <MetaBar limit={management?.limit ?? registry?.limit} requestId={management?.requestId ?? registry?.requestId} />
+apps/web/src/App.tsx:299:      {management ? <ItemList<BuildingCapabilitySummary> items={management.capabilities} getMeta={(item) => item.domain} emptyText="No project building capabilities returned." /> : <EmptyState>Project capability data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:301:      {management ? <ItemList<ToolSummary> items={management.tools} getMeta={(item) => item.category} emptyText="No project tool placeholders returned." /> : <EmptyState>Project tool data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:303:      {registry ? <ItemList<BuildingCapabilitySummary> items={registry.buildingCapabilities} getMeta={(item) => item.domain} emptyText="No registry building capabilities returned." /> : <EmptyState>Registry capability data is unavailable.</EmptyState>}
+apps/web/src/App.tsx:311:  registry,
+apps/web/src/App.tsx:312:  management,
+apps/web/src/App.tsx:320:  registry: RegistryResponse | null;
+apps/web/src/App.tsx:321:  management: ProjectManagementResponse | null;
+apps/web/src/App.tsx:329:    { id: "registry", label: "Platform Registry" },
+apps/web/src/App.tsx:335:    <main className="workspace-card workspace-management" aria-labelledby="workspace-title">
+apps/web/src/App.tsx:352:      {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
+apps/web/src/App.tsx:353:      {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
+apps/web/src/App.tsx:354:      {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
+apps/web/src/App.tsx:367:  const [registry, setRegistry] = useState<RegistryResponse | null>(null);
+apps/web/src/App.tsx:368:  const [management, setManagement] = useState<ProjectManagementResponse | null>(null);
+apps/web/src/App.tsx:389:    const [registryResponse, managementResponse] = await Promise.all([getRegistry(currentToken), getProjectManagement(currentToken, projectId)]);
+apps/web/src/App.tsx:390:    setRegistry(registryResponse);
+apps/web/src/App.tsx:391:    setManagement(managementResponse);
+apps/web/src/App.tsx:392:    return { registryResponse, managementResponse };
+apps/web/src/App.tsx:414:          const [chatResponse, registryResponse, managementResponse] = await Promise.all([
+apps/web/src/App.tsx:421:            setRegistry(registryResponse);
+apps/web/src/App.tsx:422:            setManagement(managementResponse);
+apps/web/src/App.tsx:478:      setBanner({ tone: "success", title: "Project selected", message: `${project.name} is now active. Placeholder registry and management surfaces loaded.`, requestId: selected.requestId });
+apps/web/src/App.tsx:530:      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
+apps/web/src/App.test.tsx:16:const registryTool = {
+apps/web/src/App.test.tsx:23:const registrySkill = {
+apps/web/src/App.test.tsx:35:  description: "Synthetic building-management gateway."
+apps/web/src/App.test.tsx:45:function registryBody(overrides: Record<string, unknown> = {}) {
+apps/web/src/App.test.tsx:47:    runtimeProviders: [runtimeProvider],
+apps/web/src/App.test.tsx:48:    tools: [registryTool],
+apps/web/src/App.test.tsx:49:    skills: [registrySkill],
+apps/web/src/App.test.tsx:51:    buildingCapabilities: [capability],
+apps/web/src/App.test.tsx:53:    placeholderOnly: true,
+apps/web/src/App.test.tsx:54:    requestId: "req_registry",
+apps/web/src/App.test.tsx:59:function managementBody(overrides: Record<string, unknown> = {}) {
+apps/web/src/App.test.tsx:64:    tools: [registryTool],
+apps/web/src/App.test.tsx:66:    placeholderOnly: true,
+apps/web/src/App.test.tsx:67:    requestId: "req_management",
+apps/web/src/App.test.tsx:89:function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[] } = {}) {
+apps/web/src/App.test.tsx:110:    if (url === "/api/registry") {
+apps/web/src/App.test.tsx:111:      return options.registry ?? jsonResponse(registryBody());
+apps/web/src/App.test.tsx:113:    if (url === `/api/projects/${project.id}/management`) {
+apps/web/src/App.test.tsx:114:      return options.management ?? jsonResponse(managementBody({ projectId: project.id }));
+apps/web/src/App.test.tsx:137:  it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
+apps/web/src/App.test.tsx:151:    await user.click(screen.getByRole("button", { name: /platform registry/i }));
+apps/web/src/App.test.tsx:155:    expect(screen.getByText(/request: req_registry/i)).toBeInTheDocument();
+apps/web/src/App.test.tsx:251:      if (url === "/api/registry") {
+apps/web/src/App.test.tsx:252:        return jsonResponse(registryBody());
+apps/web/src/App.test.tsx:254:      if (url === "/api/projects/project_alpha/management") {
+apps/web/src/App.test.tsx:255:        return jsonResponse(managementBody());
+apps/web/src/App.test.tsx:293:      if (url === "/api/registry") {
+apps/web/src/App.test.tsx:294:        return jsonResponse(registryBody());
+apps/web/src/App.test.tsx:296:      if (url === "/api/projects/project_alpha/management") {
+apps/web/src/App.test.tsx:297:        return jsonResponse(managementBody());
+apps/web/src/App.test.tsx:343:  it("renders read-only selected projects with management inspection while chat compose remains disabled", async () => {
+apps/web/src/App.test.tsx:344:    installBaseFetch({ project: betaProject, management: jsonResponse(managementBody({ projectId: "project_beta" })) });
+apps/web/src/App.test.tsx:362:  it("shows requestId-aware registry and management diagnostics without clearing the selected project", async () => {
+apps/web/src/App.test.tsx:363:    installBaseFetch({ registry: apiError("registry_unavailable", "Registry exploded.", 500, "req_registry_fail") });
+apps/web/src/App.test.tsx:372:    expect(alert).toHaveTextContent("registry_unavailable");
+apps/web/src/App.test.tsx:373:    expect(alert).toHaveTextContent("req_registry_fail");
+apps/web/src/App.test.tsx:376:    installBaseFetch({ management: apiError("project_forbidden", "Project management denied.", 403, "req_management_fail") });
+apps/web/src/App.test.tsx:380:    expect(secondAlert).toHaveTextContent("req_management_fail");
+apps/web/src/App.test.tsx:385:  it("surfaces malformed registry and management payloads as api_malformed and supports empty placeholder lists", async () => {
+apps/web/src/App.test.tsx:386:    installBaseFetch({ registry: jsonResponse(registryBody({ placeholderOnly: undefined })) });
+apps/web/src/App.test.tsx:397:    installBaseFetch({ management: jsonResponse(managementBody({ gateways: [{ ...gateway, protocol: "smtp" }] })) });
+apps/web/src/App.test.tsx:405:    installBaseFetch({ registry: jsonResponse(registryBody({ runtimeProviders: [], tools: [], skills: [], gateways: [], buildingCapabilities: [] })), management: jsonResponse(managementBody({ gateways: [], capabilities: [], tools: [] })) });
+apps/web/src/App.test.tsx:408:    await user.click(screen.getByRole("button", { name: /platform registry/i }));
+apps/web/src/api.ts:82:  runtimeProviders: RuntimeProviderSummary[];
+apps/web/src/api.ts:86:  buildingCapabilities: BuildingCapabilitySummary[];
+apps/web/src/api.ts:88:  placeholderOnly: true;
+apps/web/src/api.ts:98:  placeholderOnly: true;
+apps/web/src/api.ts:236:  if (typeof payload.limit !== "number" || payload.placeholderOnly !== true || typeof payload.requestId !== "string") {
+apps/web/src/api.ts:319:  const payload = await requestJson("/api/registry", { headers: authHeaders(token) });
+apps/web/src/api.ts:325:    runtimeProviders: parseArray(payload.runtimeProviders, parseRuntimeProvider, "Registry returned unexpected runtime providers."),
+apps/web/src/api.ts:329:    buildingCapabilities: parseArray(payload.buildingCapabilities, parseCapability, "Registry returned unexpected building capabilities."),
+apps/web/src/api.ts:331:    placeholderOnly: true,
+apps/web/src/api.ts:337:  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/management`, { headers: authHeaders(token) });
+apps/web/src/api.ts:339:    throw malformed("Project management returned an unexpected response.");
+apps/web/src/api.ts:341:  const meta = assertPlaceholderMeta(payload, "Project management returned an unexpected response.");
+apps/web/src/api.ts:344:    gateways: parseArray(payload.gateways, parseGateway, "Project management returned unexpected gateways."),
+apps/web/src/api.ts:345:    capabilities: parseArray(payload.capabilities, parseCapability, "Project management returned unexpected capabilities."),
+apps/web/src/api.ts:346:    tools: parseArray(payload.tools, parseTool, "Project management returned unexpected tools."),
+apps/web/src/api.ts:348:    placeholderOnly: true,
+apps/cli/src/api.ts:71:  async registry(): Promise<unknown> {
+apps/cli/src/api.ts:72:    return this.request("/api/registry", { method: "GET" });
+apps/cli/src/api.ts:75:  async management(projectId: string): Promise<unknown> {
+apps/cli/src/api.ts:76:    return this.request(`/api/projects/${encodeURIComponent(projectId)}/management`, { method: "GET" });
+apps/cli/src/commands.test.ts:132:  it("surfaces registry and management placeholder state through the saved session", async () => {
+apps/cli/src/commands.test.ts:139:    const registryIo = createIo();
+apps/cli/src/commands.test.ts:140:    await expect(runCommand(["registry"], { homeDir, io: registryIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/commands.test.ts:141:    expect(parseOutput(registryIo)).toMatchObject({ placeholderOnly: true, requestId: expect.stringMatching(/^req_/u) });
+apps/cli/src/commands.test.ts:143:    const managementIo = createIo();
+apps/cli/src/commands.test.ts:144:    await expect(runCommand(["management"], { homeDir, io: managementIo })).resolves.toEqual({ exitCode: 0 });
+apps/cli/src/commands.test.ts:145:    expect(parseOutput(managementIo)).toMatchObject({
+apps/cli/src/commands.test.ts:147:      placeholderOnly: true,

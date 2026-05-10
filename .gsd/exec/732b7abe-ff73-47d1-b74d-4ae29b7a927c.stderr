@@ -1,0 +1,7 @@
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /mnt/d/Git_Project/BuildingAgent/apps/cli
+npm error workspace @building-agent/cli@0.1.0
+npm error location /mnt/d/Git_Project/BuildingAgent/apps/cli
+npm error command failed
+npm error command sh -c tsc -p tsconfig.json --noEmit

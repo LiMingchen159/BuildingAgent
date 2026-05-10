@@ -69,7 +69,7 @@ export interface ChatMessage {
   id: string;
   projectId: string;
   userId: string;
-  role: "user";
+  role: "user" | "assistant";
   content: string;
 }
 

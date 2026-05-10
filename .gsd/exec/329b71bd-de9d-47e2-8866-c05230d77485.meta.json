@@ -1,0 +1,18 @@
+{
+  "id": "329b71bd-de9d-47e2-8866-c05230d77485",
+  "runtime": "bash",
+  "purpose": "kill stale dev API and Web processes on 3000/5173 before retest",
+  "script_chars": 403,
+  "started_at": "2026-05-10T12:37:23.317Z",
+  "finished_at": "2026-05-10T12:37:26.134Z",
+  "exit_code": 0,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 2817,
+  "stdout_bytes": 98,
+  "stderr_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/329b71bd-de9d-47e2-8866-c05230d77485.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/329b71bd-de9d-47e2-8866-c05230d77485.stderr"
+}

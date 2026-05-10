@@ -1,0 +1,18 @@
+{
+  "id": "073568e7-1142-4876-912b-9ce076fa1558",
+  "runtime": "bash",
+  "purpose": "inspect source route order maybe compiled differs",
+  "script_chars": 237,
+  "started_at": "2026-05-10T12:39:42.033Z",
+  "finished_at": "2026-05-10T12:39:42.087Z",
+  "exit_code": 1,
+  "signal": null,
+  "timed_out": false,
+  "duration_ms": 54,
+  "stdout_bytes": 0,
+  "stderr_bytes": 911,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/073568e7-1142-4876-912b-9ce076fa1558.stdout",
+  "stderr_path": "/mnt/d/Git_Project/BuildingAgent/.gsd/exec/073568e7-1142-4876-912b-9ce076fa1558.stderr"
+}
