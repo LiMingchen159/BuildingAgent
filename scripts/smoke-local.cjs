@@ -5,8 +5,8 @@ const { join, resolve } = require("node:path");
 const { spawn } = require("node:child_process");
 
 const ROOT = resolve(__dirname, "..");
-const API_URL = process.env.SMOKE_API_URL ?? "http://127.0.0.1:3000";
-const WEB_URL = process.env.SMOKE_WEB_URL ?? "http://127.0.0.1:5173";
+const API_URL = process.env.SMOKE_API_URL ?? "http://127.0.0.1:3130";
+const WEB_URL = process.env.SMOKE_WEB_URL ?? "http://127.0.0.1:5174";
 const API_HEALTH_URL = `${API_URL.replace(/\/+$/u, "")}/health`;
 const WEB_HEALTH_URL = `${WEB_URL.replace(/\/+$/u, "")}/health`;
 const DEFAULT_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 90000);
@@ -251,12 +251,12 @@ async function main() {
   await runProcess("npm run build", "npm", ["run", "build"]);
 
   if (!(await isReachable(API_HEALTH_URL, "api"))) {
-    spawnManaged("api", "npm", ["run", "dev:api"], { env: { HOST: "127.0.0.1", PORT: "3000" } });
+    spawnManaged("api", "npm", ["run", "dev:api"], { env: { HOST: "127.0.0.1", PORT: new URL(API_URL).port || "3130" } });
     await waitForProbe(API_HEALTH_URL, "api");
   }
 
   if (!(await isReachable(WEB_HEALTH_URL, "web"))) {
-    spawnManaged("web", "npm", ["run", "dev:web"], { env: { VITE_API_BASE_URL: API_URL } });
+    spawnManaged("web", "npm", ["--workspace", "@building-agent/web", "run", "dev", "--", "--port", new URL(WEB_URL).port || "5174"], { env: { VITE_API_BASE_URL: API_URL } });
     await waitForProbe(WEB_HEALTH_URL, "web");
   }
 
@@ -282,9 +282,19 @@ async function main() {
 
   const chat = await runCli("chat", ["chat", "Smoke check from CLI"]);
   assert(chat?.message?.projectId === SEEDED_PROJECT_ID, "Chat command did not write to the selected project.");
+  assert(chat?.message?.role === "user" && chat.message.content === "Smoke check from CLI", "Chat command did not echo the smoke user message.");
+  assert(chat?.assistantMessage?.role === "assistant" && typeof chat.assistantMessage.content === "string" && chat.assistantMessage.content.includes("Smoke check from CLI"), "Chat command did not include the assistant response.");
+  assert(chat?.requestId && typeof chat.requestId === "string", "Chat command did not include requestId diagnostics.");
+  assert(chat?.fallbackUsed === true, "Chat command did not report default fallback usage.");
+  assert(chat?.provider?.id === "deterministic-mock", "Chat command did not report the deterministic mock provider id.");
+  assert(chat?.provider?.mode === "mock", "Chat command did not report mock provider mode.");
+  assert(chat?.provider?.model === "deterministic-local-mock", "Chat command did not report deterministic mock provider model.");
+  assert(chat?.provider?.fallbackUsed === true && chat.provider.fallbackReason === "local_default", "Chat command did not report local fallback metadata.");
+  assert(!/Bearer\s+[A-Za-z0-9._-]+|local-dev-password|sk-[A-Za-z0-9_-]+/u.test(JSON.stringify(chat)), "Chat command output leaked secret-looking provider or auth material.");
 
   const chatList = await runCli("chat:list", ["chat:list"]);
-  assert(Array.isArray(chatList?.messages) && chatList.messages.some((message) => message.content === "Smoke check from CLI"), "Chat list did not include the smoke message.");
+  assert(Array.isArray(chatList?.messages) && chatList.messages.some((message) => message.role === "user" && message.content === "Smoke check from CLI"), "Chat list did not include the smoke user message.");
+  assert(Array.isArray(chatList?.messages) && chatList.messages.some((message) => message.role === "assistant" && typeof message.content === "string" && message.content.includes("Smoke check from CLI")), "Chat list did not include the smoke assistant response.");
 
   stage("smoke passed");
 }

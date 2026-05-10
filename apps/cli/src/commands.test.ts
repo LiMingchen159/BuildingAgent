@@ -73,14 +73,31 @@ describe("authenticated cli commands", () => {
       exitCode: 0
     });
     expect(parseOutput(chatIo)).toMatchObject({
-      message: { projectId: "project_alpha", content: "hello from the cli" },
+      message: { projectId: "project_alpha", role: "user", content: "hello from the cli" },
+      assistantMessage: {
+        projectId: "project_alpha",
+        role: "assistant",
+        content: "Mock assistant response for project_alpha: hello from the cli"
+      },
+      provider: {
+        id: "deterministic-mock",
+        mode: "mock",
+        model: "deterministic-local-mock",
+        fallbackUsed: true,
+        fallbackReason: "local_default"
+      },
+      fallbackUsed: true,
       requestId: expect.stringMatching(/^req_/u)
     });
+    expect(chatIo.stdoutText()).not.toMatch(/seed-token-ada|Bearer\s+[A-Za-z0-9._-]+|local-dev-password|sk-[A-Za-z0-9_-]+/u);
 
     const listIo = createIo();
     await expect(runCommand(["chat:list"], { homeDir, io: listIo })).resolves.toEqual({ exitCode: 0 });
     expect(parseOutput(listIo)).toMatchObject({
-      messages: [expect.objectContaining({ content: "hello from the cli" })],
+      messages: [
+        expect.objectContaining({ role: "user", content: "hello from the cli" }),
+        expect.objectContaining({ role: "assistant", content: "Mock assistant response for project_alpha: hello from the cli" })
+      ],
       requestId: expect.stringMatching(/^req_/u)
     });
 
@@ -127,6 +144,46 @@ describe("authenticated cli commands", () => {
     await expect(runCommand(["chat", "   "], { homeDir, io: chatIo })).resolves.toEqual({ exitCode: 1 });
     expect(parseError(chatIo).error).toMatchObject({ code: "chat_invalid" });
     expect(chatIo.stderrText()).not.toContain("seed-token-ada");
+  });
+
+  it("fails closed for malformed chat post payloads while preserving canonical provider errors", async () => {
+    await runCommand(
+      ["login", "--email", "ada@example.test", "--password", "local-dev-password", "--api-url", apiUrl],
+      { homeDir, io: createIo() }
+    );
+    await runCommand(["use", "project_alpha"], { homeDir, io: createIo() });
+
+    const malformedIo = createIo();
+    const malformedResponse = new Response(
+      JSON.stringify({
+        message: { id: "msg_1", projectId: "project_alpha", userId: "user_ada", role: "user", content: "hi" },
+        provider: {
+          id: "deterministic-mock",
+          mode: "mock",
+          model: "deterministic-local-mock",
+          fallbackUsed: true,
+          apiKey: "sk-should-not-print"
+        },
+        fallbackUsed: true,
+        requestId: "req_bad"
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+    await expect(runCommand(["chat", "hi"], { homeDir, io: malformedIo, fetchImpl: async () => malformedResponse })).resolves.toEqual({
+      exitCode: 1
+    });
+    expect(parseError(malformedIo).error).toMatchObject({ code: "api_malformed" });
+    expect(malformedIo.stderrText()).not.toMatch(/sk-should-not-print|seed-token-ada|Bearer\s+[A-Za-z0-9._-]+|local-dev-password/u);
+
+    const providerErrorIo = createIo();
+    const providerErrorResponse = new Response(
+      JSON.stringify({ error: { code: "provider_error", message: "Chat provider failed before producing a safe response.", requestId: "req_provider" } }),
+      { status: 502, headers: { "content-type": "application/json" } }
+    );
+    await expect(runCommand(["chat", "hi"], { homeDir, io: providerErrorIo, fetchImpl: async () => providerErrorResponse })).resolves.toEqual({
+      exitCode: 1
+    });
+    expect(parseError(providerErrorIo).error).toMatchObject({ code: "provider_error", requestId: "req_provider" });
   });
 
   it("surfaces registry and management placeholder state through the saved session", async () => {
