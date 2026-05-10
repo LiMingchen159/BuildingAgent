@@ -576,3 +576,80 @@ h2 {
     padding: 1.25rem;
   }
 }
+
+
+.visually-hidden {
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.surface-card,
+.primitive-card {
+  box-shadow: 0 18px 52px rgba(23, 32, 51, 0.08);
+}
+
+.mock-badge {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.mock-badge-mock {
+  background: #eaf7ef;
+  color: #1f6b34;
+}
+
+.mock-badge-stub {
+  background: #eef5ff;
+  color: #1746b7;
+}
+
+.mock-badge-inspection {
+  background: #172033;
+  color: #fff7db;
+}
+
+.loading-skeleton {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.loading-skeleton-line {
+  background: linear-gradient(90deg, #e8eef7, #f8fafc, #e8eef7);
+  background-size: 220% 100%;
+  border-radius: 999px;
+  display: block;
+  height: 0.85rem;
+}
+
+.loading-skeleton-line:nth-of-type(2) {
+  width: 82%;
+}
+
+.loading-skeleton-line:nth-of-type(3) {
+  width: 58%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .loading-skeleton-line {
+    animation: fallback-shimmer 1.8s ease-in-out infinite;
+  }
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { AppShell, Banner, Card, EmptyState, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import {
   ApiClientError,
   getChat,
@@ -32,13 +33,7 @@ interface StoredSession {
   projectId: string | null;
 }
 
-interface BannerState {
-  tone: "error" | "info" | "success";
-  title: string;
-  message: string;
-  code?: string | undefined;
-  requestId?: string | undefined;
-}
+type BannerState = BannerProps;
 
 function readStoredSession(): StoredSession {
   try {
@@ -75,24 +70,6 @@ function errorBanner(error: unknown, title: string): BannerState {
 
 function isAuthFailure(error: unknown): boolean {
   return error instanceof ApiClientError && (error.status === 401 || error.code === "auth_invalid" || error.code === "auth_missing");
-}
-
-function Banner({ banner }: { banner: BannerState | null }) {
-  if (!banner) {
-    return null;
-  }
-  return (
-    <section className={`banner banner-${banner.tone}`} role={banner.tone === "error" ? "alert" : "status"} aria-live="polite">
-      <strong>{banner.title}</strong>
-      <p>{banner.message}</p>
-      {(banner.code || banner.requestId) ? (
-        <p className="diagnostic-line">
-          {banner.code ? <span>Code: {banner.code}</span> : null}
-          {banner.requestId ? <span>Request: {banner.requestId}</span> : null}
-        </p>
-      ) : null}
-    </section>
-  );
 }
 
 function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: string) => Promise<void>; busy: boolean }) {
@@ -155,22 +132,14 @@ function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[
   );
 }
 
-function PlaceholderBadge({ label = "Placeholder-only" }: { label?: string }) {
-  return <span className="placeholder-badge">{label}</span>;
-}
-
 function MetaBar({ limit, requestId }: { limit?: number | undefined; requestId?: string | undefined }) {
   return (
     <p className="management-meta">
-      <PlaceholderBadge />
+      <MockOnlyBadge />
       {typeof limit === "number" ? <span>Limit: {limit}</span> : null}
       {requestId ? <span>Request: {requestId}</span> : null}
     </p>
   );
-}
-
-function EmptyState({ children }: { children: string }) {
-  return <p className="empty-state management-empty">{children}</p>;
 }
 
 function ItemList<T extends { id: string; name: string; status: string; description: string }>({
@@ -188,14 +157,14 @@ function ItemList<T extends { id: string; name: string; status: string; descript
   return (
     <div className="management-grid">
       {items.map((item) => (
-        <article className="management-item" key={item.id}>
+        <Card className="management-item" key={item.id}>
           <div className="item-heading">
             <h3>{item.name}</h3>
             <span className={`status-pill status-${item.status.replace("_", "-")}`}>{item.status.replace("_", " ")}</span>
           </div>
           <p className="item-meta">{item.id} · {getMeta(item)}</p>
           <p>{item.description}</p>
-        </article>
+        </Card>
       ))}
     </div>
   );
@@ -260,7 +229,7 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
 
 function RegistryPanel({ registry }: { registry: RegistryResponse | null }) {
   return (
-    <section className="management-panel" aria-labelledby="registry-title">
+    <Surface className="management-panel" labelledBy="registry-title">
       <div className="panel-header">
         <div>
           <p className="eyebrow">Platform registry</p>
@@ -279,13 +248,13 @@ function RegistryPanel({ registry }: { registry: RegistryResponse | null }) {
           <ItemList<SkillSummary> items={registry.skills} getMeta={(item) => item.domain} emptyText="No skill placeholders returned." />
         </>
       ) : null}
-    </section>
+    </Surface>
   );
 }
 
 function GatewayPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
   return (
-    <section className="management-panel" aria-labelledby="gateways-title">
+    <Surface className="management-panel" labelledBy="gateways-title">
       <div className="panel-header">
         <div>
           <p className="eyebrow">Gateways</p>
@@ -298,13 +267,13 @@ function GatewayPanel({ registry, management }: { registry: RegistryResponse | n
       {management ? <ItemList<GatewaySummary> items={management.gateways} getMeta={(item) => item.protocol} emptyText="No project gateway placeholders returned." /> : <EmptyState>Project management data is unavailable.</EmptyState>}
       <h3>Registry gateway catalog</h3>
       {registry ? <ItemList<GatewaySummary> items={registry.gateways} getMeta={(item) => item.protocol} emptyText="No registry gateway placeholders returned." /> : <EmptyState>Registry gateway data is unavailable.</EmptyState>}
-    </section>
+    </Surface>
   );
 }
 
 function BuildingDomainPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
   return (
-    <section className="management-panel" aria-labelledby="building-title">
+    <Surface className="management-panel" labelledBy="building-title">
       <div className="panel-header">
         <div>
           <p className="eyebrow">Building domain</p>
@@ -319,7 +288,7 @@ function BuildingDomainPanel({ registry, management }: { registry: RegistryRespo
       {management ? <ItemList<ToolSummary> items={management.tools} getMeta={(item) => item.category} emptyText="No project tool placeholders returned." /> : <EmptyState>Project tool data is unavailable.</EmptyState>}
       <h3>Registry capability catalog</h3>
       {registry ? <ItemList<BuildingCapabilitySummary> items={registry.buildingCapabilities} getMeta={(item) => item.domain} emptyText="No registry building capabilities returned." /> : <EmptyState>Registry capability data is unavailable.</EmptyState>}
-    </section>
+    </Surface>
   );
 }
 
@@ -361,7 +330,7 @@ function Workspace({
           <h1 id="workspace-title">{project.name} workspace</h1>
           <p className="muted">Project id: <strong>{project.id}</strong></p>
         </div>
-        <PlaceholderBadge label="Inspection surfaces are placeholder-only" />
+        <MockOnlyBadge kind="inspection" />
       </div>
       <nav className="workspace-tabs" aria-label="Workspace panels">
         {tabs.map((tab) => (
@@ -545,20 +514,13 @@ export default function App() {
   const authenticated = Boolean(token && user);
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <span className="brand-mark" aria-hidden="true">BA</span>
-          <span className="brand-name">BuildingAgent</span>
-        </div>
-        {authenticated ? <button className="secondary" type="button" onClick={() => clearAuth()}>Sign out</button> : null}
-      </header>
-      <Banner banner={banner} />
-      {bootstrapping ? <main className="workspace-card"><p>Checking your saved session…</p></main> : null}
+    <AppShell authenticated={authenticated} onSignOut={() => clearAuth()}>
+      {banner ? <Banner {...banner} /> : null}
+      {bootstrapping ? <main className="workspace-card"><LoadingSkeleton label="Checking your saved session…" /><p>Checking your saved session…</p></main> : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
       {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
-    </div>
+    </AppShell>
   );
 }
