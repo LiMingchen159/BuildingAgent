@@ -5,6 +5,7 @@
   "type": "module",
   "workspaces": [
     "apps/api",
+    "apps/cli",
     "apps/web"
   ],
   "scripts": {
