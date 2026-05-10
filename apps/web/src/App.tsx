@@ -2,18 +2,28 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClientError,
   getChat,
+  getProjectManagement,
+  getRegistry,
   getSession,
   listProjects,
   login,
   selectProject,
   sendChatMessage,
+  type BuildingCapabilitySummary,
   type ChatMessage,
+  type GatewaySummary,
+  type ProjectManagementResponse,
   type ProjectSummary,
+  type RegistryResponse,
+  type RuntimeProviderSummary,
   type SessionSummary,
+  type SkillSummary,
+  type ToolSummary,
   type UserSummary
 } from "./api";
 
 const STORAGE_KEY = "building-agent.session.v1";
+type WorkspaceTab = "chat" | "registry" | "gateways" | "building";
 
 interface StoredSession {
   token: string;
@@ -144,6 +154,52 @@ function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[
   );
 }
 
+function PlaceholderBadge({ label = "Placeholder-only" }: { label?: string }) {
+  return <span className="placeholder-badge">{label}</span>;
+}
+
+function MetaBar({ limit, requestId }: { limit?: number | undefined; requestId?: string | undefined }) {
+  return (
+    <p className="management-meta">
+      <PlaceholderBadge />
+      {typeof limit === "number" ? <span>Limit: {limit}</span> : null}
+      {requestId ? <span>Request: {requestId}</span> : null}
+    </p>
+  );
+}
+
+function EmptyState({ children }: { children: string }) {
+  return <p className="empty-state management-empty">{children}</p>;
+}
+
+function ItemList<T extends { id: string; name: string; status: string; description: string }>({
+  items,
+  getMeta,
+  emptyText
+}: {
+  items: T[];
+  getMeta: (item: T) => string;
+  emptyText: string;
+}) {
+  if (items.length === 0) {
+    return <EmptyState>{emptyText}</EmptyState>;
+  }
+  return (
+    <div className="management-grid">
+      {items.map((item) => (
+        <article className="management-item" key={item.id}>
+          <div className="item-heading">
+            <h3>{item.name}</h3>
+            <span className={`status-pill status-${item.status.replace("_", "-")}`}>{item.status.replace("_", " ")}</span>
+          </div>
+          <p className="item-meta">{item.id} · {getMeta(item)}</p>
+          <p>{item.description}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function ChatWorkspace({ project, messages, onSend, busy }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
@@ -159,10 +215,10 @@ function ChatWorkspace({ project, messages, onSend, busy }: { project: ProjectSu
   }
 
   return (
-    <main className="workspace-card chat-shell" aria-labelledby="chat-title">
+    <section className="chat-shell" aria-labelledby="chat-title">
       <div>
         <p className="eyebrow">Selected project</p>
-        <h1 id="chat-title">{project.name} workspace</h1>
+        <h2 id="chat-title">{project.name} chat</h2>
         <p className="muted">Project id: <strong>{project.id}</strong></p>
       </div>
       <section className="message-list" aria-label={`${project.name} messages`}>
@@ -180,6 +236,122 @@ function ChatWorkspace({ project, messages, onSend, busy }: { project: ProjectSu
         <button type="submit" disabled={!canWrite || busy || !draft.trim()}>{busy ? "Sending…" : "Send message"}</button>
       </form>
       {!canWrite ? <p className="field-error" role="status">This project does not grant chat write permission.</p> : null}
+    </section>
+  );
+}
+
+function RegistryPanel({ registry }: { registry: RegistryResponse | null }) {
+  return (
+    <section className="management-panel" aria-labelledby="registry-title">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Platform registry</p>
+          <h2 id="registry-title">Runtime providers, tools, and skills</h2>
+        </div>
+        <MetaBar limit={registry?.limit} requestId={registry?.requestId} />
+      </div>
+      {!registry ? <EmptyState>Registry data is unavailable. Check the diagnostic banner and retry.</EmptyState> : null}
+      {registry ? (
+        <>
+          <h3>Runtime providers</h3>
+          <ItemList<RuntimeProviderSummary> items={registry.runtimeProviders} getMeta={(item) => item.kind} emptyText="No runtime provider placeholders returned." />
+          <h3>Tools</h3>
+          <ItemList<ToolSummary> items={registry.tools} getMeta={(item) => item.category} emptyText="No tool placeholders returned." />
+          <h3>Skills</h3>
+          <ItemList<SkillSummary> items={registry.skills} getMeta={(item) => item.domain} emptyText="No skill placeholders returned." />
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function GatewayPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
+  return (
+    <section className="management-panel" aria-labelledby="gateways-title">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Gateways</p>
+          <h2 id="gateways-title">Project gateway placeholders</h2>
+        </div>
+        <MetaBar limit={management?.limit ?? registry?.limit} requestId={management?.requestId ?? registry?.requestId} />
+      </div>
+      <p className="muted">These entries are read-only synthetic gateway slots; no external BMS, MCP, or customer integration is live.</p>
+      <h3>Project gateways</h3>
+      {management ? <ItemList<GatewaySummary> items={management.gateways} getMeta={(item) => item.protocol} emptyText="No project gateway placeholders returned." /> : <EmptyState>Project management data is unavailable.</EmptyState>}
+      <h3>Registry gateway catalog</h3>
+      {registry ? <ItemList<GatewaySummary> items={registry.gateways} getMeta={(item) => item.protocol} emptyText="No registry gateway placeholders returned." /> : <EmptyState>Registry gateway data is unavailable.</EmptyState>}
+    </section>
+  );
+}
+
+function BuildingDomainPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
+  return (
+    <section className="management-panel" aria-labelledby="building-title">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Building domain</p>
+          <h2 id="building-title">Synthetic capabilities and tools</h2>
+        </div>
+        <MetaBar limit={management?.limit ?? registry?.limit} requestId={management?.requestId ?? registry?.requestId} />
+      </div>
+      <p className="muted">Capability cards are mock or placeholder data only and contain no customer building records.</p>
+      <h3>Project capabilities</h3>
+      {management ? <ItemList<BuildingCapabilitySummary> items={management.capabilities} getMeta={(item) => item.domain} emptyText="No project building capabilities returned." /> : <EmptyState>Project capability data is unavailable.</EmptyState>}
+      <h3>Project tools</h3>
+      {management ? <ItemList<ToolSummary> items={management.tools} getMeta={(item) => item.category} emptyText="No project tool placeholders returned." /> : <EmptyState>Project tool data is unavailable.</EmptyState>}
+      <h3>Registry capability catalog</h3>
+      {registry ? <ItemList<BuildingCapabilitySummary> items={registry.buildingCapabilities} getMeta={(item) => item.domain} emptyText="No registry building capabilities returned." /> : <EmptyState>Registry capability data is unavailable.</EmptyState>}
+    </section>
+  );
+}
+
+function Workspace({
+  project,
+  messages,
+  registry,
+  management,
+  activeTab,
+  onTabChange,
+  onSend,
+  busy
+}: {
+  project: ProjectSummary;
+  messages: ChatMessage[];
+  registry: RegistryResponse | null;
+  management: ProjectManagementResponse | null;
+  activeTab: WorkspaceTab;
+  onTabChange: (tab: WorkspaceTab) => void;
+  onSend: (message: string) => Promise<void>;
+  busy: boolean;
+}) {
+  const tabs: Array<{ id: WorkspaceTab; label: string }> = [
+    { id: "chat", label: "Chat" },
+    { id: "registry", label: "Platform Registry" },
+    { id: "gateways", label: "Gateways" },
+    { id: "building", label: "Building Domain" }
+  ];
+
+  return (
+    <main className="workspace-card workspace-management" aria-labelledby="workspace-title">
+      <div className="workspace-heading">
+        <div>
+          <p className="eyebrow">Selected project</p>
+          <h1 id="workspace-title">{project.name} workspace</h1>
+          <p className="muted">Project id: <strong>{project.id}</strong></p>
+        </div>
+        <PlaceholderBadge label="Inspection surfaces are placeholder-only" />
+      </div>
+      <nav className="workspace-tabs" aria-label="Workspace panels">
+        {tabs.map((tab) => (
+          <button key={tab.id} type="button" className={activeTab === tab.id ? "tab-active secondary" : "secondary"} aria-pressed={activeTab === tab.id} onClick={() => onTabChange(tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} /> : null}
+      {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
+      {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
+      {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
     </main>
   );
 }
@@ -192,6 +364,9 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [registry, setRegistry] = useState<RegistryResponse | null>(null);
+  const [management, setManagement] = useState<ProjectManagementResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
@@ -203,8 +378,18 @@ export default function App() {
     setProjects([]);
     setSelectedProject(null);
     setMessages([]);
+    setRegistry(null);
+    setManagement(null);
+    setActiveTab("chat");
     storeSession({ token: "", user: null, projectId: null });
     setBanner(nextBanner ?? { tone: "info", title: "Signed out", message: "Sign in again to continue." });
+  }
+
+  async function loadManagementSurfaces(currentToken: string, projectId: string) {
+    const [registryResponse, managementResponse] = await Promise.all([getRegistry(currentToken), getProjectManagement(currentToken, projectId)]);
+    setRegistry(registryResponse);
+    setManagement(managementResponse);
+    return { registryResponse, managementResponse };
   }
 
   useEffect(() => {
@@ -226,9 +411,15 @@ export default function App() {
         const restoredProject = projectResponse.projects.find((project) => project.id === sessionResponse.session.projectId) ?? null;
         setSelectedProject(restoredProject);
         if (restoredProject) {
-          const chatResponse = await getChat(token, restoredProject.id);
+          const [chatResponse, registryResponse, managementResponse] = await Promise.all([
+            getChat(token, restoredProject.id),
+            getRegistry(token),
+            getProjectManagement(token, restoredProject.id)
+          ]);
           if (!cancelled) {
             setMessages(chatResponse.messages);
+            setRegistry(registryResponse);
+            setManagement(managementResponse);
           }
         }
         setBanner(null);
@@ -260,6 +451,8 @@ export default function App() {
       setToken(response.token);
       setUser(response.user);
       storeSession({ token: response.token, user: response.user, projectId: null });
+      setRegistry(null);
+      setManagement(null);
       setBanner({ tone: "success", title: "Signed in", message: `Welcome, ${response.user.name}.`, requestId: response.requestId });
     } catch (error) {
       setBanner(errorBanner(error, "Sign in failed"));
@@ -276,12 +469,13 @@ export default function App() {
     setBusy(true);
     try {
       const selected = await selectProject(token, project.id);
-      const chat = await getChat(token, project.id);
+      const [chat] = await Promise.all([getChat(token, project.id), loadManagementSurfaces(token, project.id)]);
       setSession(selected.session);
       setSelectedProject(project);
       setMessages(chat.messages);
+      setActiveTab("chat");
       storeSession({ token, user, projectId: project.id });
-      setBanner({ tone: "success", title: "Project selected", message: `${project.name} is now active.`, requestId: selected.requestId });
+      setBanner({ tone: "success", title: "Project selected", message: `${project.name} is now active. Placeholder registry and management surfaces loaded.`, requestId: selected.requestId });
     } catch (error) {
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
@@ -333,7 +527,7 @@ export default function App() {
       {bootstrapping ? <main className="workspace-card"><p>Checking your saved session…</p></main> : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
-      {!bootstrapping && authenticated && selectedProject ? <ChatWorkspace project={selectedProject} messages={messages} onSend={handleSend} busy={busy} /> : null}
+      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </div>
   );
