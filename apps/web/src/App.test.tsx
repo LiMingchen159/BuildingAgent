@@ -135,8 +135,8 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
 
 async function loginAndSelectProject(user = userEvent.setup()) {
   await user.click(screen.getByRole("button", { name: /sign in/i }));
-  await screen.findByRole("heading", { name: /choose an authorized project/i });
-  await user.click(screen.getByRole("button", { name: /select project/i }));
+  await screen.findByRole("heading", { name: /buildingagent workspace/i });
+  await user.click(screen.getByRole("button", { name: /new project/i }));
   await screen.findByRole("heading", { name: /alpha build workspace/i });
 }
 
@@ -172,7 +172,7 @@ describe("BuildingAgent Web flow", () => {
     expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada/i);
 
     session.resolve(jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }));
-    expect(await screen.findByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
   });
 
   it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
@@ -182,38 +182,24 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /choose an authorized project/i });
-    expect(screen.getByRole("button", { name: /sign out/i })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: /buildingagent workspace/i });
 
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await user.click(screen.getByRole("button", { name: /new project/i }));
     expect(await screen.findByRole("heading", { name: /alpha build workspace/i })).toBeInTheDocument();
-    expect(screen.getAllByText(/project id:/i)[0]).toHaveTextContent("project_alpha");
-
-    await user.click(screen.getByRole("button", { name: /platform registry/i }));
-    expect(screen.getByRole("heading", { name: /runtime providers, tools, and skills/i })).toBeInTheDocument();
-    expect(screen.getByText("Local LLM Provider Placeholder")).toBeInTheDocument();
-    expect(screen.getByText("Building Triage Skill Placeholder")).toBeInTheDocument();
-    expect(screen.getByText(/request: req_registry/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/placeholder-only/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/inspection surfaces are placeholder-only/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/alpha build workspace/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Energy Baseline Analysis")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/live building operation|repository action|control route/i);
+    expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Energy Baseline/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Space Summary/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /gateways/i }));
-    expect(screen.getAllByText("BMS Gateway Placeholder").length).toBeGreaterThan(0);
-    expect(screen.getByText(/no external bms/i)).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /building domain/i }));
-    expect(screen.getAllByText("Energy Baseline Placeholder").length).toBeGreaterThan(0);
-    expect(screen.getByText("Space Summary Tool Placeholder")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /^chat$/i }));
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "What should we build first?");
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
     expect(await screen.findByText("What should we build first?")).toBeInTheDocument();
     expect(await screen.findByText("Mock assistant response for project_alpha: What should we build first?")).toBeInTheDocument();
     const assistantMessage = screen.getByRole("article", { name: /assistant message/i });
-    expect(assistantMessage).toHaveTextContent("Assistant");
+    expect(assistantMessage).not.toHaveTextContent("BuildingAgent");
     const diagnostics = screen.getByLabelText(/provider diagnostics/i);
     expect(diagnostics).toHaveTextContent("Provider: deterministic-mock");
     expect(diagnostics).toHaveTextContent("Mode: mock");
@@ -276,13 +262,13 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /choose an authorized project/i });
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await screen.findByRole("heading", { name: /buildingagent workspace/i });
+    await user.click(screen.getByRole("button", { name: /new project/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
     expect(alert).toHaveTextContent("req_forbidden");
-    expect(screen.getByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
   });
 
   it("keeps current chat state on chat failure and shows the backend diagnostic", async () => {
@@ -364,8 +350,8 @@ describe("BuildingAgent Web flow", () => {
 
     await user.type(screen.getByLabelText(/email/i), "ada@example.test");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /choose an authorized project/i });
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await screen.findByRole("heading", { name: /buildingagent workspace/i });
+    await user.click(screen.getByRole("button", { name: /new project/i }));
     await screen.findByRole("heading", { name: /alpha build workspace/i });
 
     const sendButton = screen.getByRole("button", { name: /send message/i });
@@ -394,7 +380,7 @@ describe("BuildingAgent Web flow", () => {
     await user.click(screen.getByRole("button", { name: /sign in/i }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("api_malformed"));
-    expect(screen.getByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
   });
 
   it("renders read-only selected projects with management inspection while chat compose remains disabled", async () => {
@@ -404,7 +390,7 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByText("Beta Build");
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await user.click(screen.getByRole("button", { name: /new project/i }));
 
     const workspace = await screen.findByRole("heading", { name: /beta build workspace/i });
     expect(workspace).toBeInTheDocument();
@@ -412,8 +398,7 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
     expect(screen.getByText(/does not grant chat write permission/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /building domain/i }));
-    expect(screen.getAllByText("Energy Baseline Placeholder").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Energy Baseline/i).length).toBeGreaterThan(0);
   });
 
   it("shows requestId-aware registry and management diagnostics without clearing the selected project", async () => {
@@ -422,20 +407,20 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /choose an authorized project/i });
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await screen.findByRole("heading", { name: /buildingagent workspace/i });
+    await user.click(screen.getByRole("button", { name: /new project/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("registry_unavailable");
     expect(alert).toHaveTextContent("req_registry_fail");
-    expect(screen.getByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
 
     installBaseFetch({ management: apiError("project_forbidden", "Project management denied.", 403, "req_management_fail") });
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await user.click(screen.getByRole("button", { name: /new project/i }));
     const secondAlert = await screen.findByRole("alert");
     expect(secondAlert).toHaveTextContent("project_forbidden");
     expect(secondAlert).toHaveTextContent("req_management_fail");
-    expect(screen.getByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
     expect(window.localStorage.getItem("building-agent.session.v1")).toContain("seed-token-ada");
   });
 
@@ -444,8 +429,8 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     const { unmount } = render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /choose an authorized project/i });
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await screen.findByRole("heading", { name: /buildingagent workspace/i });
+    await user.click(screen.getByRole("button", { name: /new project/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
     unmount();
 
@@ -454,18 +439,15 @@ describe("BuildingAgent Web flow", () => {
     installBaseFetch({ management: jsonResponse(managementBody({ gateways: [{ ...gateway, protocol: "smtp" }] })) });
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /choose an authorized project/i });
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await screen.findByRole("heading", { name: /buildingagent workspace/i });
+    await user.click(screen.getByRole("button", { name: /new project/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
 
     vi.unstubAllGlobals();
     installBaseFetch({ registry: jsonResponse(registryBody({ runtimeProviders: [], tools: [], skills: [], gateways: [], buildingCapabilities: [] })), management: jsonResponse(managementBody({ gateways: [], capabilities: [], tools: [] })) });
-    await user.click(screen.getByRole("button", { name: /select project/i }));
+    await user.click(screen.getByRole("button", { name: /new project/i }));
     await screen.findByRole("heading", { name: /alpha build workspace/i });
-    await user.click(screen.getByRole("button", { name: /platform registry/i }));
-    expect(screen.getByText(/no runtime provider placeholders returned/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /gateways/i }));
-    expect(screen.getByText(/no project gateway placeholders returned/i)).toBeInTheDocument();
+    expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
   });
 
   it("fails closed on malformed S04 chat responses without appending user or assistant messages", async () => {

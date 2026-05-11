@@ -90,6 +90,6 @@ describe("BuildingAgent shell and primitives via workspace-relative filter", () 
  expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada|secret/i);
 
  resolveSession(new Response(JSON.stringify({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }), { status: 200, headers: { "content-type": "application/json" } }));
- expect(await screen.findByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+ expect(await screen.findByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
  });
 });
