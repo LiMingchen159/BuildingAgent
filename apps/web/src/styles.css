@@ -2358,6 +2358,7 @@ p {
 .app-shell-workspace {
   background: #ffffff;
   min-height: 100vh;
+  overflow-x: hidden;
   padding: 0;
 }
 
@@ -2369,11 +2370,22 @@ p {
   display: flex;
   isolation: isolate;
   justify-content: center;
-  margin: -1rem auto 0;
-  min-height: calc(100vh - 7rem);
+  margin: 0 auto;
+  min-height: 100vh;
   overflow: hidden;
   position: relative;
   width: 100%;
+}
+
+.app-shell-workspace .minimal-auth-shell,
+.app-shell-workspace .minimal-project-shell {
+  border: 0;
+  max-width: none;
+  padding: 0;
+}
+
+.app-shell-workspace .diagnostic-footer {
+  display: none;
 }
 
 .minimal-auth-shell::before,
@@ -2540,6 +2552,33 @@ p {
   width: 100%;
 }
 
+.project-screen-actions {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.project-sign-out {
+  background: transparent;
+  border: 0;
+  color: #737373;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.project-sign-out:hover,
+.project-sign-out:focus-visible {
+  color: #171717;
+  outline: 0;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .minimal-project-header h1 {
   font-size: clamp(2rem, 5vw, 4rem);
   font-weight: 300;
@@ -2593,6 +2632,11 @@ p {
 .cgpt-workspace-shell .workspace-center-inner,
 .cgpt-workspace-shell .workspace-right-inner {
   padding: 1rem;
+}
+
+.cgpt-workspace-shell .workspace-sidebar-inner,
+.cgpt-workspace-shell .workspace-right-inner {
+  overflow-y: auto;
 }
 
 .cgpt-workspace-shell .workspace-heading {
@@ -2676,6 +2720,15 @@ p {
   box-shadow: none;
 }
 
+.cgpt-workspace-shell .composer-quick-actions {
+  gap: var(--space-2);
+}
+
+.cgpt-workspace-shell .composer-quick-action {
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.55rem;
+}
+
 @keyframes rotate-cube {
   from {
     transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
@@ -2691,10 +2744,59 @@ p {
     padding: 1.25rem;
   }
 
+  .project-screen-actions {
+    align-items: flex-start;
+  }
+
   .cgpt-workspace-shell.workspace-shell {
     grid-template-columns: minmax(0, 1fr);
     height: auto;
     min-height: 100vh;
+  }
+
+  .cgpt-workspace-shell .workspace-sidebar,
+  .cgpt-workspace-shell .workspace-right {
+    border-bottom: 1px solid #e5e5e5;
+    border-right: 0;
+  }
+
+  .cgpt-workspace-shell .workspace-sidebar-inner,
+  .cgpt-workspace-shell .workspace-center-inner,
+  .cgpt-workspace-shell .workspace-right-inner {
+    overflow: visible;
+  }
+
+  .cgpt-workspace-shell .message-list {
+    max-height: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .minimal-auth-panel {
+    padding-inline: 1.5rem;
+  }
+
+  .minimal-auth-heading h1 {
+    font-size: 1.35rem;
+  }
+
+  .minimal-auth-links {
+    letter-spacing: 0.12em;
+  }
+
+  .cgpt-workspace-shell .workspace-center-inner,
+  .cgpt-workspace-shell .workspace-sidebar-inner,
+  .cgpt-workspace-shell .workspace-right-inner {
+    padding: 0.875rem;
+  }
+
+  .cgpt-workspace-shell .workspace-tabs {
+    gap: var(--space-3);
+    overflow-x: auto;
+  }
+
+  .cgpt-workspace-shell .workspace-tabs button {
+    flex: 0 0 auto;
   }
 }
 

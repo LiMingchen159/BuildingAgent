@@ -169,7 +169,7 @@ function ProjectCardSkeleton() {
   );
 }
 
-function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; busy: boolean }) {
+function ProjectScreen({ projects, onSelect, onSignOut, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; onSignOut: () => void; busy: boolean }) {
   return (
     <main className="workspace-card project-screen minimal-project-shell" aria-labelledby="projects-title">
       <ParticleField className="minimal-particle-field" density={44} connectionDistance={145} opacity={0.12} />
@@ -180,7 +180,10 @@ function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[
           <h1 id="projects-title">Choose an authorized project</h1>
           <p className="muted">Only projects returned by the API for this seeded session are selectable. Metadata below is mock-only; no live customer telemetry.</p>
         </div>
-        <MockOnlyBadge kind="stub" label="Mock metrics only" />
+        <div className="project-screen-actions">
+          <MockOnlyBadge kind="stub" label="Mock metrics only" />
+          <button type="button" className="project-sign-out" onClick={onSignOut}>Sign out</button>
+        </div>
       </div>
       {busy ? (
         <p className="inline-status project-status" role="status">
@@ -333,7 +336,7 @@ function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: st
 function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; onLoadDemo: () => void; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
-  const quickActions = ["Upload PDF", "Search KB", "Open Repo", "Analyze Energy", "Inspect Tools"];
+  const quickActions = ["Upload PDF", "Search KB", "Open Repo"];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -854,14 +857,14 @@ export default function App() {
   }
 
   const authenticated = Boolean(token && user);
-  const shellVariant = authenticated && Boolean(selectedProject) ? "workspace" : "default";
+  const shellVariant = "workspace";
 
   return (
     <AppShell authenticated={authenticated} onSignOut={() => clearAuth()} variant={shellVariant}>
       {banner ? <Banner {...banner} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
+      {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} onSignOut={() => clearAuth()} busy={busy} /> : null}
       {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onLoadDemo={() => setMessages(buildDemoConversation(selectedProject.id, user?.id ?? "user_demo"))} onSwitchProject={() => setSelectedProject(null)} onSignOut={() => clearAuth()} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
