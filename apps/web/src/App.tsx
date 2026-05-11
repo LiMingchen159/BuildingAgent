@@ -326,7 +326,11 @@ function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: st
 function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; onLoadDemo: () => void; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
-  const quickActions = ["Upload PDF", "Search KB", "Open Repo"];
+  const quickActions = [
+    { label: "Upload PDF", detail: "Add to knowledge base" },
+    { label: "Search KB", detail: "Find documents" },
+    { label: "Open Repo", detail: "View outputs" }
+  ];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -340,46 +344,55 @@ function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, 
 
   return (
     <section className="chat-shell" aria-labelledby="chat-title">
-      <div className="chat-heading">
-        <p className="eyebrow">Selected project</p>
-        <h2 id="chat-title">{project.name} chat</h2>
-        <p className="muted">Project id: <strong>{project.id}</strong></p>
-        <p className="chat-scope-notice" role="note">I can only access data within this project.</p>
-      </div>
+      <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
+      <p className="chat-scope-notice" role="note">I can only access data within this project: knowledge base, repository, and approved project metadata.</p>
       {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
         {messages.length === 0 && busy ? <LoadingSkeleton label="Sending the first project-scoped message..." lines={4} /> : null}
         {messages.length === 0 && !busy ? (
           <div className="empty-state empty-state-with-action">
-            <p>No messages yet. Start with a project-scoped question, or load a building-domain demo to see the surfaces in action.</p>
+            <p>Ask about this project, its knowledge base, repository outputs, or equipment summaries.</p>
             <Button type="button" variant="secondary" size="sm" onClick={onLoadDemo}>Load demo conversation</Button>
           </div>
         ) : null}
         {messages.map((message) => (
           <article className={`message message-${message.role}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
-            <span>{message.role === "assistant" ? "Assistant" : message.userId}</span>
-            {message.role === "assistant" ? <Markdown source={message.content} /> : <p>{message.content}</p>}
-            {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
+            <div className="message-avatar" aria-hidden="true">{message.role === "assistant" ? "BA" : "You"}</div>
+              <div className="message-content">
+              <span className="message-author">
+                <span className="visually-hidden">{message.role === "assistant" ? "Assistant" : "You"}</span>
+                <span aria-hidden="true">{message.role === "assistant" ? "BuildingAgent" : message.userId}</span>
+              </span>
+              {message.role === "assistant" ? <Markdown source={message.content} /> : <p>{message.content}</p>}
+              {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
+            </div>
           </article>
         ))}
       </section>
       <form className="composer" onSubmit={handleSubmit}>
-        <label htmlFor="chat-message">Message</label>
-        <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project..." : "This project is read-only for your account."} />
-        <div className="composer-actions">
-          <ul className="composer-quick-actions" aria-label="Quick actions (placeholder)">
-            {quickActions.map((label) => (
-              <li key={label}>
-                <button type="button" className="composer-quick-action" disabled aria-disabled="true" title="Quick action placeholder">
-                  {label}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending..." : "Send message"}</button>
+        <ul className="composer-quick-actions" aria-label="Quick actions (placeholder)">
+          {quickActions.map((action) => (
+            <li key={action.label}>
+              <button type="button" className="composer-quick-action" disabled aria-disabled="true" title="Quick action placeholder">
+                <span>{action.label}</span>
+                <small>{action.detail}</small>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="composer-box">
+          <label className="visually-hidden" htmlFor="chat-message">Message</label>
+          <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project, its knowledge base, or repository files..." : "This project is read-only for your account."} />
+          <div className="composer-actions">
+            <div className="composer-tools" aria-hidden="true">
+              <span>Attach</span>
+              <span>Tools</span>
+            </div>
+            <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending..." : "Send message"}</button>
+          </div>
         </div>
+        {!canWrite ? <p className="field-error composer-readonly" role="status">This project does not grant chat write permission.</p> : null}
       </form>
-      {!canWrite ? <p className="field-error" role="status">This project does not grant chat write permission.</p> : null}
     </section>
   );
 }
@@ -474,9 +487,11 @@ function WorkspaceSidebarBlock({
 }) {
   const otherProjects = projects.filter((candidate) => candidate.id !== project.id).slice(0, 5);
   const conversationStubs: Array<{ id: string; title: string }> = [
-    { id: "stub-1", title: "Energy baseline placeholder review" },
-    { id: "stub-2", title: "Gateway provisioning checklist" },
-    { id: "stub-3", title: "Tooling audit notes" }
+    { id: "stub-1", title: "Chiller runtime summary" },
+    { id: "stub-2", title: "Readings anomaly check" },
+    { id: "stub-3", title: "Energy baseline analysis" },
+    { id: "stub-4", title: "Life safety review status" },
+    { id: "stub-5", title: "Weekly report draft" }
   ];
 
   return (
@@ -485,51 +500,57 @@ function WorkspaceSidebarBlock({
         <span className="brand-mark" aria-hidden="true">BA</span>
         <span className="brand-name">BuildingAgent</span>
       </div>
-      <Button variant="primary" size="sm" onClick={onNewChat} className="workspace-sidebar-new-chat">
-        + New chat
-      </Button>
+      <button type="button" className="workspace-sidebar-project-switcher" onClick={onSwitchProject}>
+        <span>
+          <span className="workspace-sidebar-project-icon" aria-hidden="true">BA</span>
+          <span>{project.name} workspace</span>
+        </span>
+        <span aria-hidden="true">v</span>
+      </button>
+      <button type="button" onClick={onNewChat} className="workspace-sidebar-new-chat">
+        <span aria-hidden="true">+</span>
+        <span>New chat</span>
+      </button>
       <div className="workspace-sidebar-section">
-        <p className="workspace-sidebar-eyebrow">Active project</p>
-        <div className="workspace-sidebar-current-project">
-          <strong>{project.name}</strong>
-          <span className="project-card-id">{project.id}</span>
-          {otherProjects.length > 0 ? (
-            <Button variant="secondary" size="sm" onClick={onSwitchProject} className="workspace-sidebar-switch">
-              Switch project
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      <div className="workspace-sidebar-section">
-        <p className="workspace-sidebar-eyebrow">Conversation history</p>
+        <p className="workspace-sidebar-eyebrow">Recent conversations</p>
         <ul className="workspace-sidebar-history" aria-label="Recent conversations (placeholder)">
-          {conversationStubs.map((stub) => (
+          {conversationStubs.map((stub, index) => (
             <li key={stub.id}>
-              <button type="button" className="workspace-sidebar-history-item" disabled aria-disabled="true" title="Conversation history placeholder">
+              <button type="button" className={`workspace-sidebar-history-item${index === 0 ? " is-active" : ""}`} disabled aria-disabled="true" title="Conversation history placeholder">
                 {stub.title}
               </button>
             </li>
           ))}
         </ul>
-        <MockOnlyBadge kind="placeholder" label="History is mock-only" />
       </div>
       <div className="workspace-sidebar-section">
-        <p className="workspace-sidebar-eyebrow">Shortcuts</p>
+        <p className="workspace-sidebar-eyebrow">Project assets</p>
         <ul className="workspace-sidebar-shortcuts">
           <li>
             <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenKnowledgeBase}>
-              <span>Knowledge base</span>
-              <Badge tone="primary">{kbCount}</Badge>
+              <span>
+                <strong>Knowledge Base</strong>
+                <small>PDFs, manuals, reports, drawings</small>
+              </span>
+              <small>{kbCount} files</small>
             </button>
           </li>
           <li>
             <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenRepository}>
-              <span>Repository</span>
-              <Badge tone="info">{repoCount}</Badge>
+              <span>
+                <strong>Repository</strong>
+                <small>Images, daily and weekly reports</small>
+              </span>
+              <small>{repoCount} items</small>
             </button>
           </li>
         </ul>
       </div>
+      {otherProjects.length > 0 ? (
+        <button type="button" className="workspace-sidebar-switch" onClick={onSwitchProject}>
+          Switch project
+        </button>
+      ) : null}
       <div className="workspace-sidebar-account" aria-label="Account">
         <div className="workspace-sidebar-account-row">
           <Avatar name={user?.name ?? "Local user"} size="md" />
@@ -541,10 +562,10 @@ function WorkspaceSidebarBlock({
         <details className="workspace-sidebar-account-menu">
           <summary aria-label="Account menu">Account menu</summary>
           <ul>
-            <li><button type="button" disabled aria-disabled="true">LLM API key (placeholder)</button></li>
-            <li><button type="button" disabled aria-disabled="true">Base URL (placeholder)</button></li>
-            <li><button type="button" disabled aria-disabled="true">Model (placeholder)</button></li>
-            <li><button type="button" disabled aria-disabled="true">Settings (placeholder)</button></li>
+            <li><button type="button" disabled aria-disabled="true">LLM API key</button></li>
+            <li><button type="button" disabled aria-disabled="true">Base URL</button></li>
+            <li><button type="button" disabled aria-disabled="true">Model</button></li>
+            <li><button type="button" disabled aria-disabled="true">Settings</button></li>
             <li><button type="button" onClick={onSignOut}>Switch account</button></li>
           </ul>
         </details>
@@ -561,21 +582,21 @@ function WorkspaceRightPanel({ registry, management }: { registry: RegistryRespo
       <details className="workspace-right-section" open>
         <summary>
           <span>Scheduled &amp; rule-based tasks</span>
-          <Badge tone="warning">Mock</Badge>
+          <span className="right-section-meta">3</span>
         </summary>
         <ScheduledTasks />
       </details>
       <details className="workspace-right-section" open>
         <summary>
           <span>Skills</span>
-          <Badge tone="primary">{skillCount}</Badge>
+          <span className="right-section-meta">{skillCount}</span>
         </summary>
         <Skills />
       </details>
       <details className="workspace-right-section" open>
         <summary>
           <span>Tools</span>
-          <Badge tone="info">{toolCount}</Badge>
+          <span className="right-section-meta">{toolCount}</span>
         </summary>
         <Tools />
       </details>
@@ -631,15 +652,21 @@ function Workspace({
   const center = (
     <div className="workspace-center-block" aria-labelledby="workspace-title">
       <div className="workspace-heading">
-        <div>
-          <p className="eyebrow">Selected project</p>
-          <h1 id="workspace-title">{project.name} workspace</h1>
-          <p className="muted">Project id: <strong>{project.id}</strong></p>
+        <div className="workspace-heading-title">
+          <button type="button" className="workspace-panel-toggle" aria-label="Project sidebar">|||</button>
+          <div>
+            <h1 id="workspace-title">{project.name} workspace</h1>
+            <p>Project id: <strong>{project.id}</strong></p>
+          </div>
         </div>
-        <span className="workspace-scope-label">
-          <span className="visually-hidden">Inspection surfaces are placeholder-only</span>
-          <span aria-hidden="true">Project data only</span>
-        </span>
+        <div className="workspace-heading-actions">
+          <span className="workspace-scope-label">
+            <span className="visually-hidden">Inspection surfaces are placeholder-only</span>
+            <span aria-hidden="true">Project data only</span>
+          </span>
+          <button type="button" className="workspace-icon-button" aria-label="Workspace information">i</button>
+          <button type="button" className="workspace-icon-button" aria-label="Workspace details">||</button>
+        </div>
       </div>
       <nav className="workspace-tabs" aria-label="Workspace panels">
         {tabs.map((tab) => (

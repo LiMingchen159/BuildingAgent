@@ -14,24 +14,24 @@ export interface ScheduledTask {
 const MOCK_TASKS: ReadonlyArray<ScheduledTask> = [
   {
     id: "task_chiller_close",
-    name: "Close chiller in 30 minutes",
+    name: "Close chiller",
     kind: "scheduled",
-    schedule: "One-shot · in 30 min",
+    schedule: "CH-2 - Cooling Plant",
     status: "active",
     countdownSeconds: 30 * 60
   },
   {
     id: "task_temp_rule",
-    name: "If outdoor temp < 18°C and chiller on, notify me",
+    name: "If outdoor temp < 18C, notify me when chiller is still on",
     kind: "rule",
-    schedule: "Rule · evaluated every 5 min",
+    schedule: "Rule - evaluated every 5 min",
     status: "active"
   },
   {
     id: "task_weekly_energy",
-    name: "Weekly energy report every Monday",
+    name: "Weekly energy report",
     kind: "report",
-    schedule: "Recurring · Mon 09:00",
+    schedule: "Due Monday 09:00",
     status: "active",
     nextRunAt: "Mon 09:00"
   },
@@ -39,7 +39,7 @@ const MOCK_TASKS: ReadonlyArray<ScheduledTask> = [
     id: "task_daily_report",
     name: "Daily report generation",
     kind: "report",
-    schedule: "Recurring · daily 18:00",
+    schedule: "Recurring - daily 18:00",
     status: "paused",
     nextRunAt: "Tomorrow 18:00"
   }
@@ -91,7 +91,7 @@ export function ScheduledTasks() {
             <span>{KIND_LABELS[task.kind]}</span>
             <span>{task.schedule}</span>
             {typeof task.countdownSeconds === "number" ? (
-              <span className="rp-card-countdown" aria-live="polite">⏱ {formatCountdown(countdown)}</span>
+              <span className="rp-card-countdown" aria-live="polite">{formatCountdown(countdown)}</span>
             ) : null}
             {task.nextRunAt ? <span>Next: {task.nextRunAt}</span> : null}
           </div>
