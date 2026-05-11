@@ -2066,3 +2066,106 @@ p {
   right: var(--space-3);
   top: var(--space-3);
 }
+
+/* ===== Knowledge Base panel (Slice 6: #110, #111) ===== */
+
+.kb-panel {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.kb-panel-header {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+
+.kb-upload {
+  align-items: center;
+  background: var(--color-bg-surface-muted);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  padding: var(--space-4);
+}
+
+.kb-upload-text {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.kb-document-list {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kb-document {
+  align-items: center;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-faint);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.kb-document-icon {
+  align-items: center;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-heavy);
+  height: 2.5rem;
+  justify-content: center;
+  letter-spacing: 0.04em;
+  width: 2.5rem;
+}
+
+.kb-document-icon-pdf { background: #fdecea; color: #a73525; }
+.kb-document-icon-word { background: #e8efff; color: #1746b7; }
+.kb-document-icon-excel { background: #e6f6ec; color: #1f6b34; }
+.kb-document-icon-report { background: #eef5ff; color: #34425c; }
+.kb-document-icon-manual { background: #fff7db; color: #835700; }
+.kb-document-icon-drawing { background: var(--color-bg-surface-muted); color: var(--color-text-secondary); }
+
+.kb-document-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kb-document-row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.kb-document-row strong {
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-document-meta {
+  color: var(--color-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-xs);
+  gap: var(--space-3);
+}
+
+.workspace-sidebar-shortcut {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
