@@ -5,6 +5,9 @@ import { Markdown } from "./ui/Markdown";
 import { ChatImageGallery } from "./ui/ChatImageGallery";
 import { KnowledgeBase, buildMockKnowledgeBaseDocuments } from "./ui/KnowledgeBase";
 import { Repository, buildMockRepositoryItems } from "./ui/Repository";
+import { ScheduledTasks } from "./ui/ScheduledTasks";
+import { Skills } from "./ui/Skills";
+import { Tools } from "./ui/Tools";
 import {
   ApiClientError,
   getChat,
@@ -559,29 +562,21 @@ function WorkspaceRightPanel({ registry, management }: { registry: RegistryRespo
           <span>Scheduled &amp; rule-based tasks</span>
           <Badge tone="warning">Mock</Badge>
         </summary>
-        <EmptyState title="No scheduled tasks">Task scheduling is not wired yet. Future slices will surface mock cron and rule-based entries here.</EmptyState>
+        <ScheduledTasks />
       </details>
       <details className="workspace-right-section" open>
         <summary>
           <span>Skills</span>
           <Badge tone="primary">{skillCount}</Badge>
         </summary>
-        {skillCount > 0 ? (
-          <p className="workspace-right-summary">{skillCount} skill placeholder{skillCount === 1 ? "" : "s"} loaded. Open the Platform Registry tab for details.</p>
-        ) : (
-          <EmptyState title="No skills">No skill placeholders returned.</EmptyState>
-        )}
+        <Skills />
       </details>
       <details className="workspace-right-section" open>
         <summary>
           <span>Tools</span>
           <Badge tone="info">{toolCount}</Badge>
         </summary>
-        {toolCount > 0 ? (
-          <p className="workspace-right-summary">{toolCount} tool placeholder{toolCount === 1 ? "" : "s"} loaded. Open the Building Domain tab for details.</p>
-        ) : (
-          <EmptyState title="No tools">No tool placeholders returned.</EmptyState>
-        )}
+        <Tools />
       </details>
     </div>
   );
