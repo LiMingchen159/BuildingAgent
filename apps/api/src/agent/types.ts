@@ -3,6 +3,8 @@ import type { ChatMessage } from "../seed.js";
 
 export type AgentLifecycleEventType =
   | "user_message_received"
+  | "memory_recalled"
+  | "skills_applied"
   | "tool_started"
   | "tool_completed"
   | "provider_started"

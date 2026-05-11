@@ -432,6 +432,48 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
   });
 
+  app.delete<{ Params: ProjectParams }>("/api/projects/:projectId/chat", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) {
+      return membership;
+    }
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) {
+      return selected;
+    }
+
+    const writable = requirePermission(request, reply, membership, "chat:write");
+    if (isReply(writable)) {
+      return writable;
+    }
+
+    const clearedMessages = store.messagesByProject[request.params.projectId]?.length ?? 0;
+    store.messagesByProject[request.params.projectId] = [];
+    const resetResult = await tools.dispatch(
+      "session_reset",
+      {},
+      {
+        projectId: request.params.projectId,
+        userId: session.userId,
+        requestId: requestIdFor(request),
+        messages: []
+      }
+    );
+
+    return reply.status(200).send({
+      projectId: request.params.projectId,
+      clearedMessages,
+      clearedMemories: typeof resetResult.result.clearedMemories === "number" ? resetResult.result.clearedMemories : 0,
+      requestId: requestIdFor(request)
+    });
+  });
+
   app.setErrorHandler((error, request, reply) => {
     if (error.validation) {
       return sendError(request, reply, 422, "chat_invalid", "Request payload is invalid.");

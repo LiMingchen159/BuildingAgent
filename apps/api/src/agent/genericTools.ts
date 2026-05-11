@@ -65,6 +65,19 @@ export function createGenericToolRegistry(memory: AgentMemoryStore): AgentToolRe
           lastRole: context.messages.at(-1)?.role ?? null
         };
       }
+    },
+    {
+      name: "session_reset",
+      category: "session",
+      description: "Clear the current user's project chat memory for a fresh conversation.",
+      schema: {
+        name: "session_reset",
+        description: "Clear the current user's project chat memory for a fresh conversation.",
+        parameters: { type: "object", properties: {} }
+      },
+      async run(_args, context) {
+        return { clearedMemories: memory.clear(context.projectId, context.userId) };
+      }
     }
   ];
 

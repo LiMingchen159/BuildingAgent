@@ -48,7 +48,8 @@ describe("placeholder registry and management API contracts", () => {
     expect(response.json().tools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "agent_memory_remember", status: "mock" }),
-        expect.objectContaining({ id: "agent_session_summary", status: "mock" })
+        expect.objectContaining({ id: "agent_session_summary", status: "mock" }),
+        expect.objectContaining({ id: "agent_session_reset", status: "mock" })
       ])
     );
     expect(response.json().skills).toEqual(

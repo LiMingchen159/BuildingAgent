@@ -111,6 +111,9 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
       expect((init?.headers as Headers).has("content-type")).toBe(false);
       return jsonResponse({ session: { userId: "user_ada", projectId: project.id, permissions: project.permissions }, requestId: "req_select" });
     }
+    if (url === `/api/projects/${project.id}/chat` && init?.method === "DELETE") {
+      return jsonResponse({ projectId: project.id, clearedMessages: options.chatMessages?.length ?? 0, clearedMemories: 1, requestId: "req_reset" });
+    }
     if (url === `/api/projects/${project.id}/chat` && init?.method !== "POST") {
       return jsonResponse({ messages: options.chatMessages ?? [], limit: 50, requestId: "req_chat" });
     }
@@ -216,6 +219,28 @@ describe("BuildingAgent Web flow", () => {
     });
     expect(chatPostCall?.[1]?.headers).toBeInstanceOf(Headers);
     expect((chatPostCall?.[1]?.headers as Headers).get("authorization")).toBe("Bearer seed-token-ada");
+  });
+
+  it("starts a new backend chat session from the sidebar", async () => {
+    const fetchMock = installBaseFetch({
+      chatMessages: [
+        { id: "msg_existing", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Existing context" },
+        { id: "msg_existing_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Existing answer" }
+      ]
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    expect(screen.getByText("Existing context")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /new chat/i }));
+
+    const resetCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "DELETE");
+    expect(resetCall).toBeTruthy();
+    expect(await screen.findByRole("status")).toHaveTextContent("New chat started");
+    expect(screen.queryByText("Existing context")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/provider diagnostics/i)).not.toBeInTheDocument();
   });
 
   it("guards the workspace when unauthenticated and clears invalid stored tokens", async () => {

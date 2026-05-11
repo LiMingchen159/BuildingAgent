@@ -29,6 +29,13 @@ export class AgentMemoryStore {
     return [...(this.entriesByScope.get(this.scope(projectId, userId)) ?? [])];
   }
 
+  clear(projectId: string, userId: string): number {
+    const scope = this.scope(projectId, userId);
+    const existing = this.entriesByScope.get(scope)?.length ?? 0;
+    this.entriesByScope.delete(scope);
+    return existing;
+  }
+
   search(projectId: string, userId: string, query: string): MemoryEntry[] {
     const normalized = query.trim().toLowerCase();
     if (!normalized) {
@@ -38,15 +45,6 @@ export class AgentMemoryStore {
   }
 
   syncTurn(projectId: string, userId: string, userContent: string, assistantContent: string): void {
-    const normalized = userContent.trim().toLowerCase();
-    if (normalized.startsWith("remember ")) {
-      this.remember(projectId, userId, userContent.trim().slice("remember ".length));
-      return;
-    }
-    if (normalized.startsWith("remember:")) {
-      this.remember(projectId, userId, userContent.trim().slice("remember:".length));
-      return;
-    }
     if (assistantContent.toLowerCase().includes("mock assistant response")) {
       return;
     }

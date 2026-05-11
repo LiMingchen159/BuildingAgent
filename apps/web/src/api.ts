@@ -76,6 +76,13 @@ export interface SendChatResponse {
   requestId: string;
 }
 
+export interface ResetChatResponse {
+  projectId: string;
+  clearedMessages: number;
+  clearedMemories: number;
+  requestId: string;
+}
+
 export interface LoginResponse {
   token: string;
   user: UserSummary;
@@ -478,6 +485,22 @@ export async function sendChatMessage(token: string, projectId: string, message:
     provider: parseProviderDiagnostics(payload.provider, payload.fallbackUsed),
     fallbackUsed: payload.fallbackUsed,
     ...(lifecycle ? { lifecycle } : {}),
+    requestId: payload.requestId
+  };
+}
+
+export async function resetChat(token: string, projectId: string): Promise<ResetChatResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/chat`, {
+    method: "DELETE",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.projectId !== "string" || typeof payload.clearedMessages !== "number" || typeof payload.clearedMemories !== "number" || typeof payload.requestId !== "string") {
+    throw malformed("Chat reset returned an unexpected response.");
+  }
+  return {
+    projectId: payload.projectId,
+    clearedMessages: payload.clearedMessages,
+    clearedMemories: payload.clearedMemories,
     requestId: payload.requestId
   };
 }

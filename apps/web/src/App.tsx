@@ -18,6 +18,7 @@ import {
   getSession,
   listProjects,
   login,
+  resetChat,
   selectProject,
   sendChatMessage,
   type ChatProviderDiagnostics,
@@ -723,6 +724,7 @@ function Workspace({
   activeTab,
   onTabChange,
   onSend,
+  onResetChat,
   onSwitchProject,
   onSelectProject,
   onCreateProject,
@@ -740,6 +742,7 @@ function Workspace({
   activeTab: WorkspaceTab;
   onTabChange: (tab: WorkspaceTab) => void;
   onSend: (message: string) => Promise<void>;
+  onResetChat: () => Promise<void>;
   onSwitchProject: () => void;
   onSelectProject: (project: ProjectSummary) => void;
   onCreateProject: () => void;
@@ -820,7 +823,7 @@ function Workspace({
             onSwitchProject={onSwitchProject}
             onSelectProject={onSelectProject}
             onSignOut={onSignOut}
-            onNewChat={() => onTabChange("chat")}
+            onNewChat={() => { void onResetChat(); }}
             onOpenKnowledgeBase={() => onTabChange("kb")}
             onOpenRepository={() => onTabChange("repo")}
           />
@@ -1026,6 +1029,38 @@ export default function App() {
     }
   }
 
+  async function handleResetChat() {
+    if (!token || !selectedProject) {
+      setActiveTab("chat");
+      setMessages([]);
+      setChatProviderDiagnostics(null);
+      setChatProviderRequestId(undefined);
+      return;
+    }
+    setBusy(true);
+    try {
+      const reset = await resetChat(token, selectedProject.id);
+      setMessages([]);
+      setChatProviderDiagnostics(null);
+      setChatProviderRequestId(undefined);
+      setActiveTab("chat");
+      setBanner({
+        tone: "success",
+        title: "New chat started",
+        message: `Cleared ${reset.clearedMessages} messages and ${reset.clearedMemories} memories for this project session.`,
+        requestId: reset.requestId
+      });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "New chat failed"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const authenticated = Boolean(token && user);
   const shellVariant = "workspace";
 
@@ -1034,7 +1069,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onCreateProject={handleCreateProject} onSignOut={() => clearAuth()} busy={busy} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onCreateProject={handleCreateProject} onSignOut={() => clearAuth()} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );
