@@ -1740,18 +1740,19 @@ p {
 
 .workspace-right-block {
   display: grid;
-  gap: var(--space-3);
+  align-content: start;
+  gap: var(--space-4);
 }
 
 .workspace-right-section {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-faint);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
 
 .workspace-right-section[open] {
-  background: var(--color-bg-surface-raised);
+  background: transparent;
 }
 
 .workspace-right-section summary {
@@ -1762,7 +1763,7 @@ p {
   gap: var(--space-3);
   justify-content: space-between;
   list-style: none;
-  padding: 0;
+  padding: 0 0 var(--space-2);
 }
 
 .workspace-right-section summary::-webkit-details-marker {
@@ -2278,7 +2279,7 @@ p {
 
 .rp-card-list {
   display: grid;
-  gap: var(--space-2);
+  gap: 0;
   list-style: none;
   margin: var(--space-3) 0 0;
   max-height: 22rem;
@@ -2287,12 +2288,13 @@ p {
 }
 
 .rp-card {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-faint);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 0;
   display: grid;
   gap: var(--space-1);
-  padding: var(--space-3);
+  padding: var(--space-3) 0;
 }
 
 .rp-card-row {
@@ -2311,7 +2313,7 @@ p {
 .rp-card-description {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
-  line-height: var(--line-height-normal);
+  line-height: var(--line-height-snug);
   margin: 0;
 }
 
