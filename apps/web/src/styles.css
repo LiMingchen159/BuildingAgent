@@ -1,6 +1,6 @@
 :root {
   /* Color palette — light theme with blue/navy/indigo accents */
-  --color-bg-app: #edf2f7;
+  --color-bg-app: #fafaf9;
   --color-bg-surface: #ffffff;
   --color-bg-surface-muted: #f8fafc;
   --color-bg-surface-raised: rgba(255, 255, 255, 0.92);
@@ -100,17 +100,17 @@
   /* Border radius */
   --radius-sm: 8px;
   --radius-md: 14px;
-  --radius-lg: 18px;
-  --radius-xl: 22px;
-  --radius-2xl: 28px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
   --radius-pill: 999px;
 
   /* Shadows */
-  --shadow-sm: 0 4px 12px rgba(23, 32, 51, 0.06);
-  --shadow-md: 0 18px 52px rgba(23, 32, 51, 0.08);
-  --shadow-lg: 0 24px 80px rgba(23, 32, 51, 0.12);
-  --shadow-primary: 0 12px 30px rgba(35, 87, 217, 0.22);
-  --shadow-inset-border: inset 0 0 0 1px rgba(35, 49, 77, 0.16);
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-primary: none;
+  --shadow-inset-border: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
 
   /* Motion */
   --duration-fast: 120ms;
@@ -282,7 +282,7 @@ textarea {
 
 button {
   border: 0;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   background: var(--color-primary-500);
   color: var(--color-text-on-accent);
   cursor: pointer;
@@ -1106,9 +1106,9 @@ p {
 
 .workspace-shell {
   display: grid;
-  gap: var(--space-4);
+  gap: 0;
   grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr) var(--layout-right-panel-width);
-  height: calc(100vh - 6rem);
+  height: 100vh;
   margin: 0 auto;
   max-width: 100%;
   min-height: 32rem;
@@ -1121,10 +1121,10 @@ p {
 .workspace-sidebar,
 .workspace-center,
 .workspace-right {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-faint);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
+  background: #ffffff;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   min-height: 0;
   overflow: hidden;
 }
@@ -1138,11 +1138,17 @@ p {
 }
 
 .workspace-center {
-  background: var(--color-bg-surface-raised);
+  background: #ffffff;
 }
 
 .workspace-sidebar {
-  background: var(--color-bg-surface-muted);
+  background: #f8f8f7;
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.workspace-right {
+  background: #f8f8f7;
+  border-left: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 @media (max-width: 960px) {
@@ -1502,7 +1508,7 @@ p {
 
 .workspace-card.workspace-management {
   padding: 0;
-  background: transparent;
+  background: #ffffff;
   border: 0;
   box-shadow: none;
   max-width: none;
