@@ -2606,6 +2606,44 @@ p {
   justify-content: space-between;
 }
 
+.minimal-auth-status,
+.minimal-loading-status {
+  align-items: center;
+  color: #737373;
+  display: inline-flex;
+  font-size: 0.72rem;
+  gap: 0.45rem;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  margin: -0.9rem 0 0;
+  min-height: 1rem;
+  text-transform: uppercase;
+}
+
+.minimal-bootstrap-shell {
+  align-items: center;
+  background: #fafafa;
+  color: #171717;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  width: 100%;
+}
+
+.minimal-bootstrap-status {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.75rem;
+}
+
+.minimal-bootstrap-status h1 {
+  color: #525252;
+  font-size: 0.9rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
 .minimal-auth-links span {
   color: #737373;
   transition: color var(--duration-base) var(--easing-standard);

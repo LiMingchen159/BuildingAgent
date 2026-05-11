@@ -150,7 +150,7 @@ afterEach(() => {
 });
 
 describe("BuildingAgent Web flow", () => {
-  it("shows a branded bounded skeleton while restoring a saved session", async () => {
+  it("shows a minimal startup status while restoring a saved session", async () => {
     window.localStorage.setItem("building-agent.session.v1", JSON.stringify({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, projectId: null }));
     const session = deferredResponse();
     installFetch((url) => {
@@ -166,9 +166,9 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
 
     expect(screen.getByRole("heading", { name: /restoring your saved session/i })).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: /checking your saved buildingagent session/i })).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toHaveTextContent(/safe phase: saved-session bootstrap/i);
-    expect(screen.getByText(/startup shell only/i)).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toHaveTextContent(/restoring your saved session/i);
+    expect(screen.queryByText(/startup shell only/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/checking your saved buildingagent session/i)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada/i);
 
     session.resolve(jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }));

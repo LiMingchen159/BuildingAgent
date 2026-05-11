@@ -108,12 +108,6 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
           <h2 className="visually-hidden">Sign in to BuildingAgent</h2>
           <p>Architecture Intelligence</p>
         </div>
-        {busy ? (
-          <p className="inline-status login-status" role="status">
-            <span className="spinner" aria-hidden="true" />
-            Connecting to the local API session boundary...
-          </p>
-        ) : null}
         <form className="minimal-auth-form" onSubmit={handleSubmit} aria-busy={busy}>
           <label>
             <span className="visually-hidden">Email</span>
@@ -128,6 +122,7 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
             {busy ? <span className="spinner" aria-hidden="true" /> : null}
             {busy ? "Connecting..." : "Initialize"}
           </Button>
+          {busy ? <p className="minimal-auth-status" role="status">Checking local access...</p> : null}
           <div className="minimal-auth-links" aria-label="Seeded demo guidance">
             <span>Recover key</span>
             <span>Request access</span>
@@ -188,7 +183,7 @@ function ProjectScreen({ projects, onSelect, onSignOut, busy }: { projects: Proj
       {busy ? (
         <p className="inline-status project-status" role="status">
           <span className="spinner" aria-hidden="true" />
-          Selecting project and loading placeholder workspace surfaces...
+          Opening workspace...
         </p>
       ) : null}
       {projects.length === 0 ? <EmptyState title="No authorized projects">This session did not return any selectable project records.</EmptyState> : null}
@@ -248,13 +243,12 @@ function ProjectScreenSkeleton() {
           <CubeLogo size={34} className="minimal-project-logo" />
           <p className="eyebrow">Project boundary</p>
           <h1 id="projects-skeleton-title">Loading authorized projects...</h1>
-          <p className="muted">Fetching the project list from the local API session.</p>
+          <p className="muted">Fetching your authorized projects.</p>
         </div>
-        <MockOnlyBadge kind="stub" label="Loading" />
       </div>
-      <p className="inline-status project-status" role="status" aria-label="Project list bootstrap phase">
+      <p className="minimal-loading-status project-status" role="status" aria-label="Project list bootstrap phase">
         <span className="spinner" aria-hidden="true" />
-        Loading project cards from the local API...
+        Loading projects...
       </p>
       <div className="project-grid" aria-hidden="true">
         <ProjectCardSkeleton />
@@ -266,15 +260,11 @@ function ProjectScreenSkeleton() {
 }
 function BootstrapLoading() {
   return (
-    <main className="workspace-card bootstrap-card" aria-labelledby="bootstrap-title">
-      <div>
-        <p className="eyebrow">BuildingAgent startup</p>
+    <main className="minimal-bootstrap-shell" aria-labelledby="bootstrap-title" aria-busy="true">
+      <div className="minimal-bootstrap-status" role="status" aria-live="polite" aria-label="Saved-session bootstrap phase">
+        <span className="spinner" aria-hidden="true" />
         <h1 id="bootstrap-title">Restoring your saved session</h1>
-        <p className="muted">Checking the local API session and authorized project list before showing any workspace data.</p>
       </div>
-      <LoadingSkeleton label="Checking your saved BuildingAgent session..." lines={5} />
-      <p className="inline-status" role="status" aria-label="Saved-session bootstrap phase">Safe phase: saved-session bootstrap is in progress. No live building systems, repositories, or control routes are being contacted.</p>
-      <MockOnlyBadge kind="stub" label="Startup shell only" />
     </main>
   );
 }
