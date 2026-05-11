@@ -67,7 +67,7 @@ describe("project-scoped chat contract", () => {
     });
 
     expect(posted.statusCode).toBe(201);
-    expect(posted.json()).toEqual({
+    expect(posted.json()).toMatchObject({
       message: {
         id: "msg_000001",
         projectId: "project_alpha",
@@ -90,6 +90,13 @@ describe("project-scoped chat contract", () => {
         fallbackUsed: false
       },
       fallbackUsed: false,
+      artifact: {
+        id: "artifact_msg_000002",
+        projectId: "project_alpha",
+        kind: "note",
+        sourceMessageId: "msg_000002",
+        content: "Assistant: What should we build first?"
+      },
       lifecycle: expect.arrayContaining([
         expect.objectContaining({ type: "user_message_received" }),
         expect.objectContaining({ type: "memory_recalled", metadata: { memoryCount: 0 } }),
@@ -110,6 +117,7 @@ describe("project-scoped chat contract", () => {
     ]);
     expect(calls[0]?.messages[0]?.content).toContain("Available skills:");
     expect(calls[0]?.messages[0]?.content).toContain("Available tools:");
+    expect(calls[0]?.messages[0]?.content).toContain("Knowledge Base files");
     assertNoSecrets(posted.json());
 
     const alphaChat = await app.inject({
@@ -311,6 +319,48 @@ describe("project-scoped chat contract", () => {
     );
     expect(calls.at(-1)?.messages[0]?.content).toContain("Alpha prefers concise weekly summaries");
     assertNoSecrets(response.json());
+  });
+
+  it("indexes knowledge base files and saves assistant outputs as repository artifacts", async () => {
+    const { provider, calls } = fakeProvider();
+    const app = buildServer({ chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const kb = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_alpha/knowledge-base",
+      headers: bearer(adaToken)
+    });
+    expect(kb.statusCode).toBe(200);
+    expect(kb.json().documents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "bldg40.ttl", kind: "turtle" })])
+    );
+
+    const posted = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Use the knowledge base" }
+    });
+    expect(posted.statusCode).toBe(201);
+    const assistantId = posted.json().assistantMessage.id;
+    expect(posted.json().artifact).toMatchObject({
+      id: `artifact_${assistantId}`,
+      projectId: "project_alpha",
+      kind: "note",
+      sourceMessageId: assistantId
+    });
+    expect(calls.at(-1)?.messages[0]?.content).toContain("bldg40.ttl");
+
+    const repo = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_alpha/repository",
+      headers: bearer(adaToken)
+    });
+    expect(repo.statusCode).toBe(200);
+    expect(repo.json().artifacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: `artifact_${assistantId}`, name: expect.stringContaining("Assistant note") })])
+    );
   });
 
   it("resets chat messages and project-scoped agent memory for the selected project", async () => {

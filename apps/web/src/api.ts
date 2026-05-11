@@ -50,6 +50,28 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   images?: ChatMessageImage[] | undefined;
+  artifactId?: string | undefined;
+}
+
+export interface KnowledgeBaseDocument {
+  id: string;
+  projectId: string;
+  name: string;
+  path: string;
+  kind: "text" | "turtle" | "markdown" | "parquet" | "data" | "other";
+  sizeBytes: number;
+  excerpt?: string | undefined;
+}
+
+export interface RepositoryArtifact {
+  id: string;
+  projectId: string;
+  name: string;
+  kind: "note" | "analysis" | "summary";
+  generatedAt: string;
+  sourceMessageId: string;
+  description: string;
+  content: string;
 }
 
 export interface ChatProviderDiagnostics {
@@ -58,6 +80,7 @@ export interface ChatProviderDiagnostics {
   model: string;
   fallbackUsed: boolean;
   fallbackReason?: string | undefined;
+  status?: string | undefined;
 }
 
 export interface ChatLifecycleEvent {
@@ -70,6 +93,7 @@ export interface ChatLifecycleEvent {
 export interface SendChatResponse {
   message: ChatMessage;
   assistantMessage: ChatMessage;
+  artifact?: RepositoryArtifact | undefined;
   provider: ChatProviderDiagnostics;
   fallbackUsed: boolean;
   lifecycle?: ChatLifecycleEvent[] | undefined;
@@ -400,7 +424,45 @@ function parseChatMessage(value: unknown, message: string): ChatMessage {
     userId: value.userId,
     role: value.role,
     content: value.content,
+    ...(typeof value.artifactId === "string" ? { artifactId: value.artifactId } : {}),
     ...(images ? { images } : {})
+  };
+}
+
+function parseKnowledgeBaseDocument(value: unknown): KnowledgeBaseDocument | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || typeof value.name !== "string" || typeof value.path !== "string" || typeof value.sizeBytes !== "number") {
+    return null;
+  }
+  if (!isStringIn<KnowledgeBaseDocument["kind"]>(value.kind, new Set(["text", "turtle", "markdown", "parquet", "data", "other"]))) {
+    return null;
+  }
+  return {
+    id: value.id,
+    projectId: value.projectId,
+    name: value.name,
+    path: value.path,
+    kind: value.kind,
+    sizeBytes: value.sizeBytes,
+    ...(typeof value.excerpt === "string" ? { excerpt: value.excerpt } : {})
+  };
+}
+
+function parseRepositoryArtifact(value: unknown): RepositoryArtifact | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || typeof value.name !== "string" || typeof value.generatedAt !== "string" || typeof value.sourceMessageId !== "string" || typeof value.description !== "string" || typeof value.content !== "string") {
+    return null;
+  }
+  if (!isStringIn<RepositoryArtifact["kind"]>(value.kind, new Set(["note", "analysis", "summary"]))) {
+    return null;
+  }
+  return {
+    id: value.id,
+    projectId: value.projectId,
+    name: value.name,
+    kind: value.kind,
+    generatedAt: value.generatedAt,
+    sourceMessageId: value.sourceMessageId,
+    description: value.description,
+    content: value.content
   };
 }
 
@@ -437,7 +499,8 @@ function parseProviderDiagnostics(value: unknown, fallbackUsed: boolean): ChatPr
     mode: value.mode,
     model: value.model,
     fallbackUsed,
-    ...(typeof value.fallbackReason === "string" ? { fallbackReason: value.fallbackReason } : {})
+    ...(typeof value.fallbackReason === "string" ? { fallbackReason: value.fallbackReason } : {}),
+    ...(typeof value.status === "string" ? { status: value.status } : {})
   };
 }
 
@@ -479,12 +542,51 @@ export async function sendChatMessage(token: string, projectId: string, message:
     throw malformed("Chat post returned an unexpected assistant message.");
   }
   const lifecycle = parseLifecycleEvents(payload.lifecycle);
+  const artifact = payload.artifact === undefined ? undefined : parseRepositoryArtifact(payload.artifact);
+  if (payload.artifact !== undefined && !artifact) {
+    throw malformed("Chat post returned an unexpected repository artifact.");
+  }
   return {
     message: userMessage,
     assistantMessage,
+    ...(artifact ? { artifact } : {}),
     provider: parseProviderDiagnostics(payload.provider, payload.fallbackUsed),
     fallbackUsed: payload.fallbackUsed,
     ...(lifecycle ? { lifecycle } : {}),
+    requestId: payload.requestId
+  };
+}
+
+export async function getKnowledgeBase(token: string, projectId: string): Promise<{ documents: KnowledgeBaseDocument[]; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/knowledge-base`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || !Array.isArray(payload.documents) || typeof payload.requestId !== "string") {
+    throw malformed("Knowledge base returned an unexpected response.");
+  }
+  return {
+    documents: payload.documents.map((document) => {
+      const parsed = parseKnowledgeBaseDocument(document);
+      if (!parsed) {
+        throw malformed("Knowledge base returned an unexpected document.");
+      }
+      return parsed;
+    }),
+    requestId: payload.requestId
+  };
+}
+
+export async function getRepository(token: string, projectId: string): Promise<{ artifacts: RepositoryArtifact[]; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/repository`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || !Array.isArray(payload.artifacts) || typeof payload.requestId !== "string") {
+    throw malformed("Repository returned an unexpected response.");
+  }
+  return {
+    artifacts: payload.artifacts.map((artifact) => {
+      const parsed = parseRepositoryArtifact(artifact);
+      if (!parsed) {
+        throw malformed("Repository returned an unexpected artifact.");
+      }
+      return parsed;
+    }),
     requestId: payload.requestId
   };
 }

@@ -2,6 +2,7 @@ import type { AgentMemoryStore } from "./memory.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentTurnRequest, AgentTurnResult } from "./types.js";
+import { knowledgeBasePrompt } from "./knowledgeBase.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -63,6 +64,7 @@ export class AgentRuntime {
           "Never expose secrets or hidden credentials.",
           skillHints ? `Available skills:\n${skillHints}` : "",
           recalled.length > 0 ? `Project memory:\n${recalled.map((entry) => `- ${entry.content}`).join("\n")}` : "Project memory: none yet.",
+          knowledgeBasePrompt(request.knowledgeBaseDocuments),
           `Available tools: ${this.options.tools.schemas().map((tool) => tool.name).join(", ")}`
         ].filter(Boolean).join("\n\n")
       },

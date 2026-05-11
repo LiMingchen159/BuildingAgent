@@ -1,2 +1,0 @@
-login 200 {"token":"seed-token-ada","user":{"id":"user_ada","name":"Ada Lovelace"},"requestId":"req_000001"}
-select 200 {"session":{"userId":"user_ada","projectId":"project_alpha","permissions":["chat:read","chat:write"]},"requestId":"req_000002"}

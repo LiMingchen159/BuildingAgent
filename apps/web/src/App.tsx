@@ -1,10 +1,10 @@
 import { FormEvent, type SVGProps, useEffect, useMemo, useState } from "react";
-import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
+import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
 import { ChatImageGallery } from "./ui/ChatImageGallery";
-import { KnowledgeBase, buildMockKnowledgeBaseDocuments } from "./ui/KnowledgeBase";
-import { Repository, buildMockRepositoryItems } from "./ui/Repository";
+import { KnowledgeBase, type KnowledgeBaseDocument } from "./ui/KnowledgeBase";
+import { Repository, type RepositoryItem } from "./ui/Repository";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
@@ -13,7 +13,9 @@ import { ParticleField } from "./ui/ParticleField";
 import {
   ApiClientError,
   getChat,
+  getKnowledgeBase,
   getProjectManagement,
+  getRepository,
   getRegistry,
   getSession,
   listProjects,
@@ -25,8 +27,10 @@ import {
   type BuildingCapabilitySummary,
   type ChatMessage,
   type GatewaySummary,
+  type KnowledgeBaseDocument as ApiKnowledgeBaseDocument,
   type ProjectManagementResponse,
   type ProjectSummary,
+  type RepositoryArtifact,
   type RegistryResponse,
   type RuntimeProviderSummary,
   type SessionSummary,
@@ -87,6 +91,42 @@ interface StoredSession {
 }
 
 type BannerState = BannerProps;
+
+interface ConversationSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+}
+
+function conversationTitle(messages: ChatMessage[]): string {
+  const firstUser = messages.find((message) => message.role === "user")?.content;
+  return firstUser ? firstUser.replace(/\s+/gu, " ").trim().slice(0, 42) : "Current workspace chat";
+}
+
+function apiDocumentToUi(document: ApiKnowledgeBaseDocument) {
+  return {
+    id: document.id,
+    name: document.name,
+    kind: document.kind,
+    uploadedAt: "local",
+    sizeBytes: document.sizeBytes,
+    uploaderName: "Knowledge Base",
+    path: document.path,
+    excerpt: document.excerpt
+  };
+}
+
+function artifactToRepositoryItem(artifact: RepositoryArtifact): RepositoryItem {
+  return {
+    id: artifact.id,
+    name: artifact.name,
+    kind: artifact.kind,
+    generatedAt: artifact.generatedAt,
+    sourceTaskId: artifact.sourceMessageId,
+    description: artifact.description,
+    content: artifact.content
+  };
+}
 
 function Icon({ name, className = "", ...props }: { name: IconName; className?: string } & SVGProps<SVGSVGElement>) {
   const common = {
@@ -451,7 +491,7 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
       <section className="message-list" aria-label={`${project.name} messages`}>
         {messages.length === 0 && busy ? <div className="workspace-inline-status" role="status">Sending...</div> : null}
         {messages.map((message) => (
-          <article className={`message message-${message.role}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
+          <article className={`message message-${message.role}${message.id.startsWith("pending_assistant_") ? " message-thinking" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
             <div className="message-content">
               {message.role === "assistant" ? <Markdown source={message.content} /> : <p>{message.content}</p>}
               {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
@@ -563,6 +603,8 @@ function WorkspaceSidebarBlock({
   user,
   kbCount,
   repoCount,
+  conversations,
+  activeConversationId,
   busy,
   onSwitchProject,
   onSelectProject,
@@ -576,6 +618,8 @@ function WorkspaceSidebarBlock({
   user: UserSummary | null;
   kbCount: number;
   repoCount: number;
+  conversations: ConversationSummary[];
+  activeConversationId: string | null;
   busy: boolean;
   onSwitchProject: () => void;
   onSelectProject: (project: ProjectSummary) => void;
@@ -585,13 +629,7 @@ function WorkspaceSidebarBlock({
   onOpenRepository: () => void;
 }) {
   const activeProjectName = project?.name ?? "No project";
-  const conversationStubs: Array<{ id: string; title: string }> = [
-    { id: "stub-1", title: "Chiller runtime summary" },
-    { id: "stub-2", title: "Readings anomaly check" },
-    { id: "stub-3", title: "Energy baseline analysis" },
-    { id: "stub-4", title: "Life safety review status" },
-    { id: "stub-5", title: "Weekly report draft" }
-  ];
+  const history = conversations.length > 0 ? conversations : [{ id: "empty", title: "No conversations yet", messageCount: 0 }];
 
   return (
     <div className="workspace-sidebar-block">
@@ -624,12 +662,12 @@ function WorkspaceSidebarBlock({
       </button>
       <div className="workspace-sidebar-section">
         <p className="workspace-sidebar-eyebrow">Recent conversations</p>
-        <ul className="workspace-sidebar-history" aria-label="Recent conversations (placeholder)">
-          {conversationStubs.map((stub, index) => (
-            <li key={stub.id}>
-              <button type="button" className={`workspace-sidebar-history-item${index === 0 ? " is-active" : ""}`} disabled aria-disabled="true" title="Conversation history placeholder">
-                <span><Icon name="message" />{stub.title}</span>
-                {index === 0 ? <Icon name="more" /> : null}
+        <ul className="workspace-sidebar-history" aria-label="Recent conversations">
+          {history.map((conversation) => (
+            <li key={conversation.id}>
+              <button type="button" className={`workspace-sidebar-history-item${conversation.id === activeConversationId ? " is-active" : ""}`} disabled={conversation.id === "empty"} aria-disabled={conversation.id === "empty"}>
+                <span><Icon name="message" />{conversation.title}</span>
+                {conversation.messageCount > 0 ? <small>{conversation.messageCount}</small> : null}
               </button>
             </li>
           ))}
@@ -717,6 +755,8 @@ function Workspace({
   projects,
   user,
   messages,
+  kbDocuments,
+  repoItems,
   providerDiagnostics,
   providerRequestId,
   registry,
@@ -735,6 +775,8 @@ function Workspace({
   projects: ProjectSummary[];
   user: UserSummary | null;
   messages: ChatMessage[];
+  kbDocuments: KnowledgeBaseDocument[];
+  repoItems: RepositoryItem[];
   providerDiagnostics: ChatProviderDiagnostics | null;
   providerRequestId: string | undefined;
   registry: RegistryResponse | null;
@@ -760,8 +802,12 @@ function Workspace({
 
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
-  const kbDocuments = useMemo(() => (project ? buildMockKnowledgeBaseDocuments(project.id) : []), [project]);
-  const repoItems = useMemo(() => (project ? buildMockRepositoryItems(project.id) : []), [project]);
+  const conversations = useMemo<ConversationSummary[]>(() => (
+    project && messages.length > 0
+      ? [{ id: `${project.id}-current`, title: conversationTitle(messages), messageCount: messages.length }]
+      : []
+  ), [messages, project]);
+  const activeConversationId = conversations[0]?.id ?? null;
 
   const noProjectCenter = (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
@@ -819,6 +865,8 @@ function Workspace({
             user={user}
             kbCount={kbDocuments.length}
             repoCount={repoItems.length}
+            conversations={conversations}
+            activeConversationId={activeConversationId}
             busy={busy}
             onSwitchProject={onSwitchProject}
             onSelectProject={onSelectProject}
@@ -843,6 +891,8 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [knowledgeBaseDocuments, setKnowledgeBaseDocuments] = useState<KnowledgeBaseDocument[]>([]);
+  const [repositoryItems, setRepositoryItems] = useState<RepositoryItem[]>([]);
   const [chatProviderDiagnostics, setChatProviderDiagnostics] = useState<ChatProviderDiagnostics | null>(null);
   const [chatProviderRequestId, setChatProviderRequestId] = useState<string | undefined>(undefined);
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
@@ -860,6 +910,8 @@ export default function App() {
     setProjects([]);
     setSelectedProject(null);
     setMessages([]);
+    setKnowledgeBaseDocuments([]);
+    setRepositoryItems([]);
     setChatProviderDiagnostics(null);
     setChatProviderRequestId(undefined);
     setRegistry(null);
@@ -870,10 +922,19 @@ export default function App() {
   }
 
   async function loadManagementSurfaces(currentToken: string, projectId: string) {
-    const [registryResponse, managementResponse] = await Promise.all([getRegistry(currentToken), getProjectManagement(currentToken, projectId)]);
+    const [registryResponse, managementResponse] = await Promise.all([
+      getRegistry(currentToken),
+      getProjectManagement(currentToken, projectId)
+    ]);
+    const [kbResponse, repoResponse] = await Promise.all([
+      getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], requestId: "" })),
+      getRepository(currentToken, projectId).catch(() => ({ artifacts: [], requestId: "" }))
+    ]);
     setRegistry(registryResponse);
     setManagement(managementResponse);
-    return { registryResponse, managementResponse };
+    setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+    setRepositoryItems(repoResponse.artifacts.map(artifactToRepositoryItem));
+    return { registryResponse, managementResponse, kbResponse, repoResponse };
   }
 
   useEffect(() => {
@@ -900,10 +961,16 @@ export default function App() {
             getRegistry(token),
             getProjectManagement(token, restoredProject.id)
           ]);
+          const [kbResponse, repoResponse] = await Promise.all([
+            getKnowledgeBase(token, restoredProject.id).catch(() => ({ documents: [], requestId: "" })),
+            getRepository(token, restoredProject.id).catch(() => ({ artifacts: [], requestId: "" }))
+          ]);
           if (!cancelled) {
             setMessages(chatResponse.messages);
             setRegistry(registryResponse);
             setManagement(managementResponse);
+            setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+            setRepositoryItems(repoResponse.artifacts.map(artifactToRepositoryItem));
           }
         }
         setBanner(null);
@@ -953,10 +1020,12 @@ export default function App() {
     setBusy(true);
     try {
       const selected = await selectProject(token, project.id);
-      const [chat] = await Promise.all([getChat(token, project.id), loadManagementSurfaces(token, project.id)]);
+      const [chat, surfaces] = await Promise.all([getChat(token, project.id), loadManagementSurfaces(token, project.id)]);
       setSession(selected.session);
       setSelectedProject(project);
       setMessages(chat.messages);
+      setKnowledgeBaseDocuments(surfaces.kbResponse.documents.map(apiDocumentToUi));
+      setRepositoryItems(surfaces.repoResponse.artifacts.map(artifactToRepositoryItem));
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
       setActiveTab("chat");
@@ -1004,7 +1073,7 @@ export default function App() {
       projectId: selectedProject.id,
       userId: user?.id ?? "local-user",
       role: "assistant",
-      content: "Thinking..."
+      content: "Thinking with project memory and Knowledge Base context..."
     };
     setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
     try {
@@ -1014,6 +1083,9 @@ export default function App() {
         posted.message,
         posted.assistantMessage
       ]);
+      if (posted.artifact) {
+        setRepositoryItems((current) => [artifactToRepositoryItem(posted.artifact!), ...current.filter((item) => item.id !== posted.artifact!.id)]);
+      }
       setChatProviderDiagnostics(posted.provider);
       setChatProviderRequestId(posted.requestId);
       setBanner({ tone: "success", title: "Message sent", message: "The assistant response is ready with redaction-safe provider diagnostics.", requestId: posted.requestId });
@@ -1033,6 +1105,7 @@ export default function App() {
     if (!token || !selectedProject) {
       setActiveTab("chat");
       setMessages([]);
+      setRepositoryItems([]);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
       return;
@@ -1069,7 +1142,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onCreateProject={handleCreateProject} onSignOut={() => clearAuth()} busy={busy} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onCreateProject={handleCreateProject} onSignOut={() => clearAuth()} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );

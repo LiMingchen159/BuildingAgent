@@ -220,9 +220,9 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
 
 export function resolveChatProvider(env: ProviderEnv, options: ResolveChatProviderOptions = {}): ChatProvider {
   const provider = nonEmpty(env.BUILDING_AGENT_LLM_PROVIDER);
-  const apiKey = nonEmpty(env.BUILDING_AGENT_LLM_API_KEY ?? env.OPENAI_API_KEY ?? env.CHAT_PROVIDER_API_KEY);
-  const model = nonEmpty(env.BUILDING_AGENT_LLM_MODEL ?? env.OPENAI_MODEL ?? env.CHAT_PROVIDER_MODEL) ?? DEFAULT_OPENAI_MODEL;
-  const baseUrl = nonEmpty(env.BUILDING_AGENT_LLM_BASE_URL ?? env.OPENAI_BASE_URL ?? env.CHAT_PROVIDER_BASE_URL) ?? DEFAULT_OPENAI_BASE_URL;
+  const apiKey = nonEmpty(env.BUILDING_AGENT_LLM_API_KEY ?? env.LLM_API_KEY ?? env.OPENAI_API_KEY ?? env.CHAT_PROVIDER_API_KEY);
+  const model = nonEmpty(env.BUILDING_AGENT_LLM_MODEL ?? env.LLM_MODEL ?? env.OPENAI_MODEL ?? env.CHAT_PROVIDER_MODEL) ?? DEFAULT_OPENAI_MODEL;
+  const baseUrl = nonEmpty(env.BUILDING_AGENT_LLM_BASE_URL ?? env.LLM_BASE_URL ?? env.OPENAI_BASE_URL ?? env.CHAT_PROVIDER_BASE_URL) ?? DEFAULT_OPENAI_BASE_URL;
 
   if (provider && provider !== "mock" && provider !== "openai-compatible") {
     throw new ProviderError("Unsupported chat provider configured.", {
@@ -239,7 +239,7 @@ export function resolveChatProvider(env: ProviderEnv, options: ResolveChatProvid
 }
 
 export function shouldAllowProviderFallback(env: ProviderEnv, explicit?: boolean): boolean {
-  return explicit ?? envFlag(env.BUILDING_AGENT_LLM_ALLOW_FALLBACK ?? env.CHAT_PROVIDER_ALLOW_FALLBACK ?? env.ALLOW_PROVIDER_FALLBACK);
+  return explicit ?? envFlag(env.BUILDING_AGENT_LLM_ALLOW_FALLBACK ?? env.LLM_ALLOW_FALLBACK ?? env.CHAT_PROVIDER_ALLOW_FALLBACK ?? env.ALLOW_PROVIDER_FALLBACK);
 }
 
 export function redactedProviderError(error: unknown): { code: string; status?: number; provider?: ProviderMetadata } {

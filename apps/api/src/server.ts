@@ -9,7 +9,7 @@ import {
   requireSelectedProject,
   sendError
 } from "./auth.js";
-import { createSeedStore, type ChatMessage, type SeedStore } from "./seed.js";
+import { createSeedStore, type ChatMessage, type RepositoryArtifact, type SeedStore } from "./seed.js";
 import {
   ProviderError,
   createDeterministicMockProvider,
@@ -25,6 +25,7 @@ import { createGenericToolRegistry } from "./agent/genericTools.js";
 import { AgentMemoryStore } from "./agent/memory.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
+import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -106,6 +107,20 @@ function chatHistoryForProvider(messages: ChatMessage[]): Array<{ role: "user" |
   return messages.map((message) => ({ role: message.role, content: message.content }));
 }
 
+function assistantArtifact(projectId: string, assistantMessage: ChatMessage, userMessage: ChatMessage): RepositoryArtifact {
+  const title = userMessage.content.replace(/\s+/gu, " ").trim().slice(0, 64) || "Assistant response";
+  return {
+    id: `artifact_${assistantMessage.id}`,
+    projectId,
+    name: `Assistant note: ${title}`,
+    kind: "note",
+    generatedAt: new Date().toISOString(),
+    sourceMessageId: assistantMessage.id,
+    description: "Saved assistant response from the chat workspace.",
+    content: assistantMessage.content
+  };
+}
+
 function providerErrorCode(error: unknown): string {
   if (error instanceof ProviderError) {
     return error.code;
@@ -130,6 +145,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const skills = createGenericSkillRegistry();
   const tools = createGenericToolRegistry(memory);
   const agentRuntime = new AgentRuntime({ memory, tools, skills });
+  const kbRoot = knowledgeBaseRoot(env);
   const app = Fastify({
     logger: false,
     genReqId: (() => {
@@ -340,6 +356,66 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   });
 
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/knowledge-base", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) {
+      return membership;
+    }
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) {
+      return selected;
+    }
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) {
+      return readable;
+    }
+
+    const documents = await indexKnowledgeBase(request.params.projectId, { rootDir: kbRoot });
+    store.knowledgeBaseByProject[request.params.projectId] = documents;
+
+    return {
+      projectId: request.params.projectId,
+      documents: bounded(documents, store.maxListSize),
+      rootConfigured: Boolean(kbRoot),
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/repository", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) {
+      return membership;
+    }
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) {
+      return selected;
+    }
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) {
+      return readable;
+    }
+
+    return {
+      projectId: request.params.projectId,
+      artifacts: bounded(store.repositoryByProject[request.params.projectId] ?? [], store.maxListSize),
+      requestId: requestIdFor(request)
+    };
+  });
+
   app.post<{ Params: ProjectParams; Body: ChatBody }>("/api/projects/:projectId/chat", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) {
@@ -380,13 +456,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     let agentTurn;
     try {
+      const knowledgeBaseDocuments = await indexKnowledgeBase(request.params.projectId, { rootDir: kbRoot });
+      store.knowledgeBaseByProject[request.params.projectId] = knowledgeBaseDocuments;
       agentTurn = await agentRuntime.runTurn({
         projectId: request.params.projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
         messages,
         providerMessages: chatHistoryForProvider(messages),
-        provider
+        provider,
+        knowledgeBaseDocuments
       });
     } catch (error) {
       if (!allowProviderFallback) {
@@ -401,13 +480,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const fallbackProvider = createDeterministicMockProvider(
         providerErrorCode(error)
       );
+      const knowledgeBaseDocuments = store.knowledgeBaseByProject[request.params.projectId] ?? [];
       agentTurn = await agentRuntime.runTurn({
         projectId: request.params.projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
         messages,
         providerMessages: chatHistoryForProvider(messages),
-        provider: fallbackProvider
+        provider: fallbackProvider,
+        knowledgeBaseDocuments
       });
     }
 
@@ -421,10 +502,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     messages.push(assistantMessage);
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[request.params.projectId] = messages;
+    const artifact = assistantArtifact(request.params.projectId, assistantMessage, message);
+    store.repositoryByProject[request.params.projectId] = [
+      ...(store.repositoryByProject[request.params.projectId] ?? []),
+      artifact
+    ].slice(-store.maxListSize);
 
     return reply.status(201).send({
       message,
       assistantMessage,
+      artifact,
       provider: providerDiagnostics(agentTurn.completion.provider, agentTurn.completion.fallbackUsed),
       fallbackUsed: agentTurn.completion.fallbackUsed,
       lifecycle: agentTurn.events,
@@ -455,6 +542,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     const clearedMessages = store.messagesByProject[request.params.projectId]?.length ?? 0;
     store.messagesByProject[request.params.projectId] = [];
+    store.repositoryByProject[request.params.projectId] = [];
     const resetResult = await tools.dispatch(
       "session_reset",
       {},

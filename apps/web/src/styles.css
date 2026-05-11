@@ -2282,6 +2282,26 @@ p {
   gap: var(--space-3);
 }
 
+.kb-document-path,
+.kb-document-excerpt,
+.repo-item-content {
+  color: #475569;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.kb-document-excerpt,
+.repo-item-content {
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 0.45rem;
+  max-height: 5.5rem;
+  overflow: hidden;
+  padding: 0.55rem 0.65rem;
+}
+
 .workspace-sidebar-shortcut {
   align-items: center;
   display: flex;
@@ -3289,6 +3309,12 @@ p {
   opacity: 1;
 }
 
+.workspace-sidebar-history-item small {
+  color: #64748b;
+  font-size: 0.74rem;
+  margin-left: auto;
+}
+
 .workspace-sidebar-shortcut {
   align-items: flex-start;
   display: flex;
@@ -3666,6 +3692,7 @@ p {
   gap: 0.9rem;
   max-width: 56rem;
   padding: 0;
+  animation: message-rise 180ms ease-out both;
 }
 
 .message-content {
@@ -3687,6 +3714,42 @@ p {
 
 .cgpt-workspace-shell .message-user .message-content {
   line-height: 1.5;
+}
+
+.message-thinking .message-content {
+  color: #64748b;
+}
+
+.message-thinking .message-content::after {
+  animation: thinking-dots 1.1s steps(4, end) infinite;
+  content: "";
+  display: inline-block;
+  min-width: 1.5rem;
+}
+
+@keyframes message-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes thinking-dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75%, 100% { content: "..."; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cgpt-workspace-shell .message,
+  .message-thinking .message-content::after {
+    animation: none;
+  }
 }
 
 .cgpt-workspace-shell .composer {

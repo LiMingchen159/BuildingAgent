@@ -1,6 +1,6 @@
-import { Badge, Button, EmptyState, MockOnlyBadge } from "./primitives";
+import { Badge, Button, EmptyState } from "./primitives";
 
-export type KnowledgeBaseDocumentKind = "pdf" | "word" | "excel" | "report" | "manual" | "drawing";
+export type KnowledgeBaseDocumentKind = "pdf" | "word" | "excel" | "report" | "manual" | "drawing" | "text" | "turtle" | "markdown" | "parquet" | "data" | "other";
 
 export interface KnowledgeBaseDocument {
   id: string;
@@ -9,6 +9,8 @@ export interface KnowledgeBaseDocument {
   uploadedAt: string;
   sizeBytes: number;
   uploaderName?: string | undefined;
+  path?: string | undefined;
+  excerpt?: string | undefined;
 }
 
 export interface KnowledgeBaseProps {
@@ -23,7 +25,13 @@ const KIND_ICONS: Record<KnowledgeBaseDocumentKind, string> = {
   excel: "XLS",
   report: "RPT",
   manual: "MAN",
-  drawing: "DWG"
+  drawing: "DWG",
+  text: "TXT",
+  turtle: "TTL",
+  markdown: "MD",
+  parquet: "PQT",
+  data: "DAT",
+  other: "FILE"
 };
 
 const KIND_TONES: Record<KnowledgeBaseDocumentKind, "danger" | "primary" | "success" | "warning" | "info" | "neutral"> = {
@@ -32,7 +40,13 @@ const KIND_TONES: Record<KnowledgeBaseDocumentKind, "danger" | "primary" | "succ
   excel: "success",
   report: "info",
   manual: "warning",
-  drawing: "neutral"
+  drawing: "neutral",
+  text: "neutral",
+  turtle: "info",
+  markdown: "primary",
+  parquet: "success",
+  data: "success",
+  other: "neutral"
 };
 
 function formatSize(bytes: number): string {
@@ -52,17 +66,17 @@ export function KnowledgeBase({ projectId, projectName, documents }: KnowledgeBa
           <p className="muted">Project id: <strong>{projectId}</strong></p>
           <p className="chat-scope-notice" role="note">I can only access data within this project.</p>
         </div>
-        <MockOnlyBadge kind="mock" label="Mock documents" />
+        <Badge tone="success">Live local files</Badge>
       </header>
       <div className="kb-upload">
         <div className="kb-upload-text">
           <strong>Upload a document</strong>
-          <span className="muted">PDF, Word, Excel, reports, manuals, drawings up to 50 MB. Uploads are placeholder-only — nothing is sent.</span>
+          <span className="muted">Drop files into the repo Knowledge Base folder. The assistant indexes readable text and lists data files for future tools.</span>
         </div>
         <Button variant="secondary" disabled aria-disabled="true">Choose file</Button>
       </div>
       {documents.length === 0 ? (
-        <EmptyState title="No documents yet">Upload a placeholder document to seed the knowledge base list.</EmptyState>
+        <EmptyState title="No documents found">Place Markdown, text, Turtle, CSV, JSON, or data files in the Knowledge Base folder.</EmptyState>
       ) : (
         <ul className="kb-document-list" aria-label={`${projectName} documents (${documents.length})`}>
           {documents.map((document) => (
@@ -73,6 +87,8 @@ export function KnowledgeBase({ projectId, projectName, documents }: KnowledgeBa
                   <strong>{document.name}</strong>
                   <Badge tone={KIND_TONES[document.kind]}>{document.kind}</Badge>
                 </div>
+                {document.path ? <p className="kb-document-path">{document.path}</p> : null}
+                {document.excerpt ? <p className="kb-document-excerpt">{document.excerpt}</p> : null}
                 <div className="kb-document-meta">
                   <span>{formatSize(document.sizeBytes)}</span>
                   <span>Uploaded {document.uploadedAt}</span>

@@ -1,6 +1,0 @@
-
-> @building-agent/cli@0.1.0 typecheck
-> tsc -p tsconfig.json --noEmit
-
-src/api.ts(47,5): error TS2412: Type 'string | undefined' is not assignable to type 'string' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.
-  Type 'undefined' is not assignable to type 'string'.

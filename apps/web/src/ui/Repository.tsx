@@ -1,6 +1,6 @@
-import { Badge, EmptyState, MockOnlyBadge } from "./primitives";
+import { Badge, EmptyState } from "./primitives";
 
-export type RepositoryItemKind = "image" | "chart" | "report" | "table" | "analysis";
+export type RepositoryItemKind = "image" | "chart" | "report" | "table" | "analysis" | "note" | "summary";
 
 export interface RepositoryItem {
   id: string;
@@ -9,6 +9,7 @@ export interface RepositoryItem {
   generatedAt: string;
   sourceTaskId: string;
   description?: string | undefined;
+  content?: string | undefined;
 }
 
 export interface RepositoryProps {
@@ -22,7 +23,9 @@ const KIND_TONES: Record<RepositoryItemKind, "primary" | "success" | "warning" |
   chart: "info",
   report: "warning",
   table: "success",
-  analysis: "neutral"
+  analysis: "neutral",
+  note: "primary",
+  summary: "info"
 };
 
 const KIND_LABELS: Record<RepositoryItemKind, string> = {
@@ -30,7 +33,9 @@ const KIND_LABELS: Record<RepositoryItemKind, string> = {
   chart: "CHT",
   report: "RPT",
   table: "TBL",
-  analysis: "ANL"
+  analysis: "ANL",
+  note: "NOTE",
+  summary: "SUM"
 };
 
 export function Repository({ projectId, projectName, items }: RepositoryProps) {
@@ -43,14 +48,14 @@ export function Repository({ projectId, projectName, items }: RepositoryProps) {
           <p className="muted">Project id: <strong>{projectId}</strong></p>
           <p className="chat-scope-notice" role="note">I can only access outputs from this project.</p>
         </div>
-        <MockOnlyBadge kind="mock" label="Mock outputs" />
+        <Badge tone="success">Session artifacts</Badge>
       </header>
       <p className="repo-approval-notice" role="note">
         <strong>Approval required:</strong> Future repository actions (download, share, delete, regenerate) will
         require explicit user approval before any state-changing call leaves the local API session boundary.
       </p>
       {items.length === 0 ? (
-        <EmptyState title="No outputs yet">When tasks generate images, charts, or reports they will appear here.</EmptyState>
+        <EmptyState title="No outputs yet">Assistant responses and future tool outputs will appear here after chat turns.</EmptyState>
       ) : (
         <ul className="repo-item-list" aria-label={`${projectName} outputs (${items.length})`}>
           {items.map((item) => (
@@ -62,6 +67,7 @@ export function Repository({ projectId, projectName, items }: RepositoryProps) {
                   <Badge tone={KIND_TONES[item.kind]}>{item.kind}</Badge>
                 </div>
                 {item.description ? <p className="repo-item-description">{item.description}</p> : null}
+                {item.content ? <p className="repo-item-content">{item.content}</p> : null}
                 <div className="repo-item-meta">
                   <span>Generated {item.generatedAt}</span>
                   <span>Source: {item.sourceTaskId}</span>

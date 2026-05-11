@@ -1,4 +1,0 @@
-    PID    PPID CMD
- 239075  239064 /home/limingchen/.hermes/node/bin/node --require /mnt/d/Git_Project/BuildingAgent/node_modules/tsx/dist/preflight.cjs --import file:///mnt/d/Git_Project/BuildingAgent/node_modules/tsx/dist/loader.mjs src/index.ts
-    PID    PPID CMD
- 238862  238861 node /mnt/d/Git_Project/BuildingAgent/node_modules/.bin/vite --host 127.0.0.1

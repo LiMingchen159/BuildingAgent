@@ -71,6 +71,28 @@ export interface ChatMessage {
   userId: string;
   role: "user" | "assistant";
   content: string;
+  artifactId?: string | undefined;
+}
+
+export interface KnowledgeBaseDocument {
+  id: string;
+  projectId: string;
+  name: string;
+  path: string;
+  kind: "text" | "turtle" | "markdown" | "parquet" | "data" | "other";
+  sizeBytes: number;
+  excerpt?: string | undefined;
+}
+
+export interface RepositoryArtifact {
+  id: string;
+  projectId: string;
+  name: string;
+  kind: "note" | "analysis" | "summary";
+  generatedAt: string;
+  sourceMessageId: string;
+  description: string;
+  content: string;
 }
 
 export interface SessionState {
@@ -84,6 +106,8 @@ export interface SeedStore {
   projects: SeedProject[];
   memberships: SeedMembership[];
   messagesByProject: Record<string, ChatMessage[]>;
+  knowledgeBaseByProject: Record<string, KnowledgeBaseDocument[]>;
+  repositoryByProject: Record<string, RepositoryArtifact[]>;
   runtimeProviders: PlaceholderRuntimeProvider[];
   tools: PlaceholderTool[];
   skills: PlaceholderSkill[];
@@ -256,6 +280,8 @@ export function createSeedStore(): SeedStore {
       { userId: "user_grace", projectId: "project_gamma", permissions: ["chat:read", "chat:write"] }
     ],
     messagesByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ChatMessage[]])),
+    knowledgeBaseByProject: Object.fromEntries(projects.map((project) => [project.id, [] as KnowledgeBaseDocument[]])),
+    repositoryByProject: Object.fromEntries(projects.map((project) => [project.id, [] as RepositoryArtifact[]])),
     runtimeProviders,
     tools,
     skills,
@@ -278,6 +304,18 @@ export function cloneStore(store: SeedStore): SeedStore {
       Object.entries(store.messagesByProject).map(([projectId, messages]) => [
         projectId,
         messages.map((message) => ({ ...message }))
+      ])
+    ),
+    knowledgeBaseByProject: Object.fromEntries(
+      Object.entries(store.knowledgeBaseByProject).map(([projectId, documents]) => [
+        projectId,
+        documents.map((document) => ({ ...document }))
+      ])
+    ),
+    repositoryByProject: Object.fromEntries(
+      Object.entries(store.repositoryByProject).map(([projectId, artifacts]) => [
+        projectId,
+        artifacts.map((artifact) => ({ ...artifact }))
       ])
     ),
     runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),

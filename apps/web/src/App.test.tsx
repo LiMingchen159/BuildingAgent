@@ -94,7 +94,7 @@ function deferredResponse() {
   return { promise, resolve };
 }
 
-function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[] } = {}) {
+function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[]; artifacts?: unknown[]; documents?: unknown[] } = {}) {
   const project = options.project ?? alphaProject;
   return installFetch((url, init) => {
     if (url === "/api/login") {
@@ -121,6 +121,7 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
       return jsonResponse({
         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
         assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "Mock assistant response for project_alpha: What should we build first?" },
+        artifact: { id: "artifact_msg_000002", projectId: project.id, name: "Assistant note: What should we build first?", kind: "note", generatedAt: "2026-05-11T00:00:00.000Z", sourceMessageId: "msg_000002", description: "Saved assistant response from the chat workspace.", content: "Mock assistant response for project_alpha: What should we build first?" },
         provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
         fallbackUsed: true,
         requestId: "req_post"
@@ -131,6 +132,12 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
     }
     if (url === `/api/projects/${project.id}/management`) {
       return options.management ?? jsonResponse(managementBody({ projectId: project.id }));
+    }
+    if (url === `/api/projects/${project.id}/knowledge-base`) {
+      return jsonResponse({ documents: options.documents ?? [{ id: "kb_bldg40", projectId: project.id, name: "bldg40.ttl", path: "bldg40.ttl", kind: "turtle", sizeBytes: 2048, excerpt: "Brick building metadata" }], requestId: "req_kb" });
+    }
+    if (url === `/api/projects/${project.id}/repository`) {
+      return jsonResponse({ artifacts: options.artifacts ?? [], requestId: "req_repo" });
     }
     return apiError("not_found", "Unexpected test URL", 404);
   });
@@ -195,11 +202,13 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Energy Baseline/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Space Summary/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 files/i)).toBeInTheDocument();
 
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "What should we build first?");
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
-    expect(await screen.findByText("What should we build first?")).toBeInTheDocument();
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    expect(within(messageList).getByText("What should we build first?")).toBeInTheDocument();
     expect(await screen.findByText("Mock assistant response for project_alpha: What should we build first?")).toBeInTheDocument();
     const assistantMessage = screen.getByRole("article", { name: /assistant message/i });
     expect(assistantMessage).not.toHaveTextContent("BuildingAgent");
@@ -211,6 +220,12 @@ describe("BuildingAgent Web flow", () => {
     expect(diagnostics).toHaveTextContent("Reason: local_default");
     expect(diagnostics).toHaveTextContent("Request: req_post");
     expect(diagnostics).not.toHaveTextContent(/provider-secret-should-not-render|apiKey/i);
+    expect(screen.getByRole("list", { name: /recent conversations/i })).toHaveTextContent("What should we build first?");
+    expect(screen.getByText(/1 items/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^repository/i }));
+    expect(await screen.findByText("Assistant note: What should we build first?")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /knowledge base/i }));
+    expect((await screen.findAllByText("bldg40.ttl")).length).toBeGreaterThan(0);
     const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "POST");
     expect(chatPostCall).toBeTruthy();
     expect(chatPostCall?.[1]).toMatchObject({
@@ -232,7 +247,7 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
     await loginAndSelectProject(user);
-    expect(screen.getByText("Existing context")).toBeInTheDocument();
+    expect(within(screen.getByLabelText(/alpha build messages/i)).getByText("Existing context")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /new chat/i }));
 
@@ -329,14 +344,14 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await loginAndSelectProject(user);
 
-    expect(screen.getByText("Existing context")).toBeInTheDocument();
+    expect(within(screen.getByLabelText(/alpha build messages/i)).getByText("Existing context")).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "Please mutate optimistically");
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
     expect(alert).toHaveTextContent("req_chat_forbidden");
-    expect(screen.getByText("Existing context")).toBeInTheDocument();
+    expect(screen.getAllByText("Existing context").length).toBeGreaterThan(0);
     expect(screen.queryByText("Please mutate optimistically")).not.toBeInTheDocument();
   });
 

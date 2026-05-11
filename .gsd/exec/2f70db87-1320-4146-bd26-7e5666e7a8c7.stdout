@@ -1,8 +1,0 @@
-
-> building-agent@0.1.0 typecheck
-> npm --workspace @building-agent/api run typecheck
-
-
-> @building-agent/api@0.1.0 typecheck
-> tsc -p tsconfig.json --noEmit
-

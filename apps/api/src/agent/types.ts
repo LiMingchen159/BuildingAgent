@@ -1,5 +1,5 @@
 import type { ChatCompletionResult, ChatProvider, ProviderChatMessage } from "../providers.js";
-import type { ChatMessage } from "../seed.js";
+import type { ChatMessage, KnowledgeBaseDocument } from "../seed.js";
 
 export type AgentLifecycleEventType =
   | "user_message_received"
@@ -25,6 +25,7 @@ export interface AgentTurnRequest {
   messages: ChatMessage[];
   providerMessages: ProviderChatMessage[];
   provider: ChatProvider;
+  knowledgeBaseDocuments: KnowledgeBaseDocument[];
 }
 
 export interface AgentTurnResult {
