@@ -353,7 +353,8 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
       </div>
       {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
-        {messages.length === 0 ? <p className="empty-state">No messages yet. Start with a project-scoped question.</p> : null}
+        {messages.length === 0 && busy ? <LoadingSkeleton label="Sending the first project-scoped message…" lines={4} /> : null}
+        {messages.length === 0 && !busy ? <p className="empty-state">No messages yet. Start with a project-scoped question.</p> : null}
         {messages.map((message) => (
           <article className={`message message-${message.role}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
             <span>{message.role === "assistant" ? "Assistant" : message.userId}</span>
