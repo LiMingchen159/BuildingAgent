@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AppShell, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
+import { AppShell, Badge, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import {
   ApiClientError,
   getChat,
@@ -131,27 +131,121 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
   );
 }
 
-function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; busy: boolean }) {
+function projectMockMetrics(projectId: string): { lastOpened: string; knowledgeBases: number; repositories: number; tasks: number } {
+  let hash = 0;
+  for (let index = 0; index < projectId.length; index += 1) {
+    hash = (hash * 31 + projectId.charCodeAt(index)) >>> 0;
+  }
+  const days = (hash % 14) + 1;
+  const lastOpened = days === 1 ? "Last opened: yesterday" : `Last opened: ${days} days ago`;
+  return {
+    lastOpened,
+    knowledgeBases: (hash >> 4) % 6,
+    repositories: (hash >> 8) % 4,
+    tasks: (hash >> 12) % 12
+  };
+}
+
+function ProjectCardSkeleton() {
   return (
-    <main className="workspace-card" aria-labelledby="projects-title">
-      <p className="eyebrow">Project boundary</p>
-      <h1 id="projects-title">Choose an authorized project</h1>
-      <p className="muted">Only projects returned by the API for this seeded session are selectable.</p>
-      {busy ? <p className="inline-status" role="status">Selecting project and loading placeholder workspace surfaces…</p> : null}
+    <Card className="project-card project-card-skeleton" aria-hidden="true">
+      <div className="project-card-skeleton-row">
+        <span className="skeleton-line skeleton-line-title" />
+        <span className="skeleton-line skeleton-line-tag" />
+      </div>
+      <div className="project-card-skeleton-row">
+        <span className="skeleton-line skeleton-line-meta" />
+        <span className="skeleton-line skeleton-line-meta" />
+        <span className="skeleton-line skeleton-line-meta" />
+      </div>
+      <span className="skeleton-line skeleton-line-button" />
+    </Card>
+  );
+}function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; busy: boolean }) {
+  return (
+    <main className="workspace-card project-screen" aria-labelledby="projects-title">
+      <div className="project-screen-header">
+        <div>
+          <p className="eyebrow">Project boundary</p>
+          <h1 id="projects-title">Choose an authorized project</h1>
+          <p className="muted">Only projects returned by the API for this seeded session are selectable. Metadata below is mock-only — no live customer telemetry.</p>
+        </div>
+        <MockOnlyBadge kind="stub" label="Mock metrics only" />
+      </div>
+      {busy ? (
+        <p className="inline-status project-status" role="status">
+          <span className="spinner" aria-hidden="true" />
+          Selecting project and loading placeholder workspace surfaces…
+        </p>
+      ) : null}
       {projects.length === 0 ? <EmptyState title="No authorized projects">This session did not return any selectable project records.</EmptyState> : null}
       <div className="project-grid" aria-busy={busy}>
-        {projects.map((project) => (
-          <Card className="project-card" key={project.id}>
-            <div>
-              <h2>{project.name}</h2>
-              <p>{project.id}</p>
+        {projects.map((project) => {
+          const metrics = projectMockMetrics(project.id);
+          const canChat = project.permissions.includes("chat:read");
+          return (
+            <Card className="project-card" key={project.id}>
+              <div className="project-card-heading">
+                <div>
+                  <h2>{project.name}</h2>
+                  <p className="project-card-id">{project.id}</p>
+                </div>
+                <Badge tone={canChat ? "success" : "neutral"}>{canChat ? "Chat-enabled" : "Read-only"}</Badge>
+              </div>
+              <p className="project-card-last-opened">{metrics.lastOpened}</p>
+              <dl className="project-card-metrics" aria-label={`${project.name} mock metrics`}>
+                <div>
+                  <dt>Knowledge bases</dt>
+                  <dd>{metrics.knowledgeBases}</dd>
+                </div>
+                <div>
+                  <dt>Repositories</dt>
+                  <dd>{metrics.repositories}</dd>
+                </div>
+                <div>
+                  <dt>Open tasks</dt>
+                  <dd>{metrics.tasks}</dd>
+                </div>
+              </dl>
               <p className="permissions">{project.permissions.join(" · ") || "No chat permissions"}</p>
-            </div>
-            <button type="button" onClick={() => void onSelect(project)} disabled={busy} aria-busy={busy}>
-              {busy ? "Selecting…" : "Select project"}
-            </button>
+              <Button type="button" onClick={() => void onSelect(project)} loading={busy}>
+                {busy ? "Selecting…" : "Select project"}
+              </Button>
+            </Card>
+          );
+        })}
+        {projects.length > 0 ? (
+          <Card className="project-card project-card-add" aria-label="Add project (placeholder)">
+            <div className="project-card-add-icon" aria-hidden="true">+</div>
+            <h2>Add project</h2>
+            <p className="muted">New project provisioning is not wired yet. Track progress in M002 follow-up issues.</p>
+            <Button type="button" variant="secondary" disabled>Coming soon</Button>
           </Card>
-        ))}
+        ) : null}
+      </div>
+    </main>
+  );
+}
+
+function ProjectScreenSkeleton() {
+  return (
+    <main className="workspace-card project-screen project-screen-skeleton" aria-labelledby="projects-skeleton-title" aria-busy="true">
+      <div className="project-screen-header">
+        <div>
+          <p className="eyebrow">Project boundary</p>
+          <h1 id="projects-skeleton-title">Loading authorized projects…</h1>
+          <p className="muted">Fetching the project list from the local API session.</p>
+        </div>
+        <MockOnlyBadge kind="stub" label="Loading" />
+      </div>
+      <p className="inline-status project-status" role="status" aria-label="Project list bootstrap phase">
+        <span className="spinner" aria-hidden="true" />
+        Loading project cards from the local API…
+      </p>
+      <div className="project-grid" aria-hidden="true">
+        <ProjectCardSkeleton />
+        <ProjectCardSkeleton />
+        <ProjectCardSkeleton />
       </div>
     </main>
   );
@@ -403,6 +497,7 @@ export default function App() {
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
+  const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
 
   function clearAuth(nextBanner?: BannerState) {
     setToken("");
@@ -556,7 +651,7 @@ export default function App() {
   return (
     <AppShell authenticated={authenticated} onSignOut={() => clearAuth()}>
       {banner ? <Banner {...banner} /> : null}
-      {bootstrapping ? <BootstrapLoading /> : null}
+      {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
       {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
