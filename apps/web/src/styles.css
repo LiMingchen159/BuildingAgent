@@ -2169,3 +2169,86 @@ p {
   display: flex;
   justify-content: space-between;
 }
+
+/* ===== Repository panel (Slice 7: #112, #113) ===== */
+
+.repo-panel {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.repo-approval-notice {
+  background: var(--color-accent-amber-soft);
+  border: 1px solid #f3d68a;
+  border-radius: var(--radius-md);
+  color: var(--color-accent-amber-strong);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.repo-item-list {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.repo-item {
+  align-items: flex-start;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-faint);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.repo-item-icon {
+  align-items: center;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-heavy);
+  height: 2.5rem;
+  justify-content: center;
+  width: 2.5rem;
+}
+
+.repo-item-icon-image { background: #e8efff; color: #1746b7; }
+.repo-item-icon-chart { background: #eef5ff; color: #34425c; }
+.repo-item-icon-report { background: #fff7db; color: #835700; }
+.repo-item-icon-table { background: #e6f6ec; color: #1f6b34; }
+.repo-item-icon-analysis { background: var(--color-bg-surface-muted); color: var(--color-text-secondary); }
+
+.repo-item-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.repo-item-row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.repo-item-row strong {
+  color: var(--color-text-primary);
+}
+
+.repo-item-description {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+.repo-item-meta {
+  color: var(--color-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-xs);
+  gap: var(--space-3);
+}

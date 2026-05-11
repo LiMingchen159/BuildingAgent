@@ -4,6 +4,7 @@ import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
 import { ChatImageGallery } from "./ui/ChatImageGallery";
 import { KnowledgeBase, buildMockKnowledgeBaseDocuments } from "./ui/KnowledgeBase";
+import { Repository, buildMockRepositoryItems } from "./ui/Repository";
 import {
   ApiClientError,
   getChat,
@@ -29,7 +30,7 @@ import {
 } from "./api";
 
 const STORAGE_KEY = "building-agent.session.v1";
-type WorkspaceTab = "chat" | "kb" | "registry" | "gateways" | "building";
+type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
 
 interface StoredSession {
   token: string;
@@ -449,19 +450,23 @@ function WorkspaceSidebarBlock({
   projects,
   user,
   kbCount,
+  repoCount,
   onSwitchProject,
   onSignOut,
   onNewChat,
-  onOpenKnowledgeBase
+  onOpenKnowledgeBase,
+  onOpenRepository
 }: {
   project: ProjectSummary;
   projects: ProjectSummary[];
   user: UserSummary | null;
   kbCount: number;
+  repoCount: number;
   onSwitchProject: () => void;
   onSignOut: () => void;
   onNewChat: () => void;
   onOpenKnowledgeBase: () => void;
+  onOpenRepository: () => void;
 }) {
   const otherProjects = projects.filter((candidate) => candidate.id !== project.id).slice(0, 5);
   const conversationStubs: Array<{ id: string; title: string }> = [
@@ -514,7 +519,10 @@ function WorkspaceSidebarBlock({
             </button>
           </li>
           <li>
-            <button type="button" className="workspace-sidebar-shortcut" disabled aria-disabled="true">Repository</button>
+            <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenRepository}>
+              <span>Repository</span>
+              <Badge tone="info">{repoCount}</Badge>
+            </button>
           </li>
         </ul>
       </div>
@@ -613,12 +621,14 @@ function Workspace({
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "chat", label: "Chat" },
     { id: "kb", label: "Knowledge Base" },
+    { id: "repo", label: "Repository" },
     { id: "registry", label: "Platform Registry" },
     { id: "gateways", label: "Gateways" },
     { id: "building", label: "Building Domain" }
   ];
 
   const kbDocuments = useMemo(() => buildMockKnowledgeBaseDocuments(project.id), [project.id]);
+  const repoItems = useMemo(() => buildMockRepositoryItems(project.id), [project.id]);
 
   const center = (
     <div className="workspace-center-block" aria-labelledby="workspace-title">
@@ -639,6 +649,7 @@ function Workspace({
       </nav>
       {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
+      {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
       {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
       {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
@@ -657,10 +668,12 @@ function Workspace({
             projects={projects}
             user={user}
             kbCount={kbDocuments.length}
+            repoCount={repoItems.length}
             onSwitchProject={onSwitchProject}
             onSignOut={onSignOut}
             onNewChat={() => onTabChange("chat")}
             onOpenKnowledgeBase={() => onTabChange("kb")}
+            onOpenRepository={() => onTabChange("repo")}
           />
         }
         center={center}
