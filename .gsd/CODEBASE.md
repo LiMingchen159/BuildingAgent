@@ -1,7 +1,7 @@
 # Codebase Map
 
-Generated: 2026-05-10T18:18:21Z | Files: 39 | Described: 0/39
-<!-- gsd:codebase-meta {"generatedAt":"2026-05-10T18:18:21Z","fingerprint":"5f4dc37faa91893bdeb56be3be85adcec5c36f0e","fileCount":39,"truncated":false} -->
+Generated: 2026-05-10T20:01:31Z | Files: 42 | Described: 0/42
+<!-- gsd:codebase-meta {"generatedAt":"2026-05-10T20:01:31Z","fingerprint":"ce2d0f5907b0412064d15df44ccb70becc1b0c73","fileCount":42,"truncated":false} -->
 
 ### (root)/
 - `.gitignore`
@@ -45,15 +45,22 @@ Generated: 2026-05-10T18:18:21Z | Files: 39 | Described: 0/39
 - `apps/web/tsconfig.json`
 - `apps/web/vite.config.ts`
 
+### apps/web/apps/web/src/
+- `apps/web/apps/web/src/appShell.test.tsx`
+
 ### apps/web/src/
 - `apps/web/src/api.ts`
 - `apps/web/src/App.test.tsx`
 - `apps/web/src/App.tsx`
+- `apps/web/src/appShell.test.tsx`
 - `apps/web/src/main.tsx`
 - `apps/web/src/styles.css`
 
 ### apps/web/src/test/
 - `apps/web/src/test/setup.ts`
+
+### apps/web/src/ui/
+- `apps/web/src/ui/primitives.tsx`
 
 ### scripts/
 - `scripts/run-api-tests.cjs`

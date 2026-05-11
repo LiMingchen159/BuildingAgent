@@ -81,17 +81,6 @@ This file is the explicit capability and coverage contract for the project.
 - Validation: validated when the browser and tests prove the section order and labels are stable.
 - Notes: This order is fixed for M002 and must be preserved in the UI and tests. Any task or tool examples remain mock/stub-only.
 
-### R034 — The app renders a visible shell, loading state, or skeleton quickly on first load and does not leave the user staring at a blank screen.
-- Class: launchability
-- Status: active
-- Description: The app renders a visible shell, loading state, or skeleton quickly on first load and does not leave the user staring at a blank screen.
-- Why it matters: First load is part of the user experience and currently looks empty for too long.
-- Source: user
-- Primary owning slice: M002/S01
-- Supporting slices: M002/S02, M002/S04
-- Validation: validated when browser evidence shows the app shell or loading state appears immediately on startup and the blank-screen case is removed or materially reduced.
-- Notes: If cold-start delay is unavoidable, the UI must still surface immediate feedback. This is a perceived-load requirement, not a backend-performance claim.
-
 ### R035 — All M002 agent, skill, tool, task, repository, scheduling, BIM, Brick/RDF/SPARQL, time-series, mapping, and building-control behavior remains mock/stub-only.
 - Class: anti-feature
 - Status: active
@@ -269,6 +258,17 @@ This file is the explicit capability and coverage contract for the project.
 - Supporting slices: M001/S01, M001/S03
 - Validation: Validated by S01 README local-run documentation, S03 smoke documentation, and S04 README provider configuration/fallback instructions included in the full build/smoke-verified slice; redaction scan included README to guard against committed provider keys or secret-looking examples.
 - Notes: S04 updated README coverage for provider environment variables, default mock fallback, explicit fallback policy, and verification commands. Final M001 validation should reconcile complete README coverage across all slices.
+
+### R034 — The app renders a visible shell, loading state, or skeleton quickly on first load and does not leave the user staring at a blank screen.
+- Class: launchability
+- Status: validated
+- Description: The app renders a visible shell, loading state, or skeleton quickly on first load and does not leave the user staring at a blank screen.
+- Why it matters: First load is part of the user experience and currently looks empty for too long.
+- Source: user
+- Primary owning slice: M002/S01
+- Supporting slices: M002/S01
+- Validation: Validated by S01: static fallback DOM assertions, React mount cleanup tests, branded loading/status primitive tests, package-relative App regression tests, production build, and T01 browser evidence for blocked-bundle fallback visibility with zero static fallback nodes after React mount.
+- Notes: M002/S01 added a branded static HTML fallback in apps/web/index.html, React bootstrap cleanup in mountBuildingAgent, and shared branded loading/status primitives. T01 browser verification showed the fallback visible when the bundle is blocked and React superseding it on normal load; S01 fresh verification passed shell/App tests and production build.
 
 ## Deferred
 
@@ -454,14 +454,14 @@ This file is the explicit capability and coverage contract for the project.
 | R031 | primary-user-loop | active | M002/S06 | M002/S04 | validated when the KB surface is visible, project-scoped, and explicitly mock-only in the browser flow. |
 | R032 | primary-user-loop | active | M002/S06 | M002/S04 | validated when the repository surface is visible, project-scoped, and the approval-gated future action language is present. |
 | R033 | core-capability | active | M002/S07 | M002/S04 | validated when the browser and tests prove the section order and labels are stable. |
-| R034 | launchability | active | M002/S01 | M002/S02, M002/S04 | validated when browser evidence shows the app shell or loading state appears immediately on startup and the blank-screen case is removed or materially reduced. |
+| R034 | launchability | validated | M002/S01 | M002/S01 | Validated by S01: static fallback DOM assertions, React mount cleanup tests, branded loading/status primitive tests, package-relative App regression tests, production build, and T01 browser evidence for blocked-bundle fallback visibility with zero static fallback nodes after React mount. |
 | R035 | anti-feature | active | M002/S01-S07 | none | validated when the implementation and browser/tests show only mock/stub behaviors and no live external actions are reachable. |
 | R036 | constraint | active | M002/S04 | M002/S05, M002/S06, M002/S07 | validated when the UI and API preserve account-level settings separation and project-scoped content boundaries. |
 | R037 | anti-feature | out-of-scope | none | none | n/a |
 
 ## Coverage Summary
 
-- Active requirements: 10
-- Mapped to slices: 10
-- Validated: 14 (R001, R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R012, R013, R014)
+- Active requirements: 9
+- Mapped to slices: 9
+- Validated: 15 (R001, R002, R003, R004, R005, R006, R007, R008, R009, R010, R011, R012, R013, R014, R034)
 - Unmapped active requirements: 0

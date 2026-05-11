@@ -14,7 +14,7 @@
 
 ## Slices
 
-- [ ] **S01: S01** `risk:high` `depends:[]`
+- [x] **S01: S01** `risk:high` `depends:[]`
   > After this: After this: opening the local Web app shows a branded BuildingAgent shell or skeleton immediately after HTML/React bootstrap, with bounded loading/error states and reusable UI primitives ready for later screens.
 
 - [ ] **S02: Polished Seeded Login Experience** `risk:medium` `depends:[S01]`

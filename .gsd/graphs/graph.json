@@ -1,19 +1,26 @@
 {
   "nodes": [
     {
-      "id": "milestone:M001",
-      "label": "M001: Local Hermes-Like Foundation Skeleton",
+      "id": "milestone:M002",
+      "label": "M002: BuildingAgent UI Redesign and Project-Scoped Workspace",
       "type": "milestone",
-      "description": "Active milestone: M001",
+      "description": "Active milestone: M002",
       "confidence": "EXTRACTED",
       "sourceFile": "STATE.md"
     },
     {
-      "id": "concept:phase:completing-milestone",
-      "label": "Phase: completing-milestone",
+      "id": "concept:phase:refining",
+      "label": "Phase: refining",
       "type": "concept",
       "confidence": "EXTRACTED",
       "sourceFile": "STATE.md"
+    },
+    {
+      "id": "milestone:M001",
+      "label": "M001: Local Hermes-Like Foundation Skeleton",
+      "type": "milestone",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-ROADMAP.md"
     },
     {
       "id": "slice:M001:S01",
@@ -135,11 +142,29 @@
       "confidence": "EXTRACTED"
     },
     {
-      "id": "milestone:M002",
-      "label": "M002: Building-Domain Data Source Stubs",
-      "type": "milestone",
+      "id": "slice:M002:S01",
+      "label": "S01: App Shell, Loading Skeleton, and UI Primitives",
+      "type": "slice",
       "confidence": "EXTRACTED",
-      "sourceFile": "milestones/M002/M002-ROADMAP.md"
+      "sourceFile": "milestones/M002/slices/S01/S01-PLAN.md"
+    },
+    {
+      "id": "task:M002:S01:T01",
+      "label": "T01: Add a branded no-blank HTML fallback shell",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M002:S01:T02",
+      "label": "T02: Extract reusable shell, status, and mock-only UI primitives",
+      "type": "task",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "id": "task:M002:S01:T03",
+      "label": "T03: Wire primitives into App loading and error states",
+      "type": "task",
+      "confidence": "EXTRACTED"
     },
     {
       "id": "milestone:M003",
@@ -147,6 +172,342 @@
       "type": "milestone",
       "confidence": "EXTRACTED",
       "sourceFile": "milestones/M003/M003-ROADMAP.md"
+    },
+    {
+      "id": "decision:M001:1",
+      "label": "Chose an npm workspace monorepo with a TypeScript Fastify API, Vite React Web UI, and TypeScript CLI so the local platform can be verified through shared root scripts while preserving separate entrypoint boundaries.",
+      "type": "decision",
+      "description": "Source: S01-SUMMARY.md/Key decisions; S03-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:2",
+      "label": "Chose backend-side bearer auth, selected-project state, project membership, and permission checks as the source of truth for all protected Web/API/CLI/provider operations rather than trusting browser or CLI state.",
+      "type": "decision",
+      "description": "Source: S01-SUMMARY.md/Patterns established; S04-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:3",
+      "label": "Chose bounded authenticated placeholder registry and project-management APIs with `placeholderOnly`, `limit`, and `requestId` metadata so future runtime/tool/skill/gateway/building-domain surfaces are visible without becoming live integrations.",
+      "type": "decision",
+      "description": "Source: S02-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:4",
+      "label": "Chose a backend provider ports-and-adapters seam that prefers configured OpenAI-compatible providers and uses deterministic mock fallback for no-secret local/CI/smoke runs.",
+      "type": "decision",
+      "description": "Source: S04-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:5",
+      "label": "Chose to make the M001 validation artifact and requirements matrix the closure source of truth for validated, skeleton-only, deferred, and out-of-scope claims.",
+      "type": "decision",
+      "description": "Source: S05-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:6",
+      "label": "The auth/session/project boundary had to land first because registry, CLI, smoke, and provider-backed chat all reuse the same `userId`, `projectId`, and `permissions` contract.",
+      "type": "decision",
+      "description": "Source: S01-SUMMARY.md/What Happened",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:7",
+      "label": "Placeholder surfaces are easy to overclaim unless the artifacts repeatedly state that gateway, building-domain, tool, and skill surfaces are synthetic inspections rather than live integrations.",
+      "type": "decision",
+      "description": "Source: M001-VALIDATION.md/Requirement coverage matrix",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:8",
+      "label": "A smoke check that uses the built CLI against live API/Web services gives stronger platform evidence than unit tests alone because it catches startup, config, auth persistence, request-id diagnostics, and cleanup behavior together.",
+      "type": "decision",
+      "description": "Source: S03-SUMMARY.md/What Happened",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:9",
+      "label": "Real-provider-first architecture can still be safe for local verification if live-provider calls are env-gated and default smoke asserts deterministic fallback metadata rather than requiring secrets.",
+      "type": "decision",
+      "description": "Source: S04-SUMMARY.md/Verification",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:10",
+      "label": "Requirement wording must be reconciled after implementation because early broad requirements can imply production runtime, real dispatcher, or real analytics scope that the local skeleton did not and should not claim.",
+      "type": "decision",
+      "description": "Source: S05-SUMMARY.md/What Happened",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:11",
+      "label": "Reuse canonical request-id-bearing API error envelopes across Web and CLI so future agents can diagnose auth, project, malformed payload, provider, and service availability failures without secret exposure.",
+      "type": "decision",
+      "description": "Source: S01-SUMMARY.md/Patterns established; S03-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:12",
+      "label": "Put provider invocation behind backend auth, selected-project, membership, and permission guards; clients should render provider metadata but never own provider selection or secrets.",
+      "type": "decision",
+      "description": "Source: S04-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:13",
+      "label": "Parse API payloads strictly at Web/CLI boundaries and fail closed with `api_malformed` rather than silently rendering partial or unexpected placeholder data.",
+      "type": "decision",
+      "description": "Source: S02-SUMMARY.md/Patterns established; S03-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:14",
+      "label": "Treat `npm run smoke` as the authoritative local coherence check and make its output agent-readable with stage markers, request ids, child exit codes, fallback assertions, and cleanup logs.",
+      "type": "decision",
+      "description": "Source: S03-SUMMARY.md/Observability surfaces; M001-VALIDATION.md/Operational verification",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:15",
+      "label": "Use requirements and validation artifacts as a closure record that explicitly separates proven local skeleton behavior, skeleton-only contracts, deferred work, and negative boundaries.",
+      "type": "decision",
+      "description": "Source: S05-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:16",
+      "label": "The workspace package did not expose the CLI as a linked `@building-agent/cli` binary in this install, so smoke had to use the verified emitted build artifact path.",
+      "type": "decision",
+      "description": "Source: S03-SUMMARY.md/Deviations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:17",
+      "label": "Closure review surfaced that Web project-management responses should validate `projectId` exactly against the requested id before real integrations land.",
+      "type": "decision",
+      "description": "Source: S02-SUMMARY.md/Known Limitations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "decision:M001:18",
+      "label": "Final validation required a remediation-round operational rerun to prove smoke and README command coverage freshly at milestone closure, not just from prior slice evidence.",
+      "type": "decision",
+      "description": "Source: M001-VALIDATION.md/Verification classes",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:1",
+      "label": "The auth/session/project boundary had to land first because registry, CLI, smoke, and provider-backed chat all reuse the same `userId`, `projectId`, and `permissions` contract.",
+      "type": "lesson",
+      "description": "Source: S01-SUMMARY.md/What Happened",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:2",
+      "label": "Placeholder surfaces are easy to overclaim unless the artifacts repeatedly state that gateway, building-domain, tool, and skill surfaces are synthetic inspections rather than live integrations.",
+      "type": "lesson",
+      "description": "Source: M001-VALIDATION.md/Requirement coverage matrix",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:3",
+      "label": "A smoke check that uses the built CLI against live API/Web services gives stronger platform evidence than unit tests alone because it catches startup, config, auth persistence, request-id diagnostics, and cleanup behavior together.",
+      "type": "lesson",
+      "description": "Source: S03-SUMMARY.md/What Happened",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:4",
+      "label": "Real-provider-first architecture can still be safe for local verification if live-provider calls are env-gated and default smoke asserts deterministic fallback metadata rather than requiring secrets.",
+      "type": "lesson",
+      "description": "Source: S04-SUMMARY.md/Verification",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:5",
+      "label": "Requirement wording must be reconciled after implementation because early broad requirements can imply production runtime, real dispatcher, or real analytics scope that the local skeleton did not and should not claim.",
+      "type": "lesson",
+      "description": "Source: S05-SUMMARY.md/What Happened",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:6",
+      "label": "Reuse canonical request-id-bearing API error envelopes across Web and CLI so future agents can diagnose auth, project, malformed payload, provider, and service availability failures without secret exposure.",
+      "type": "lesson",
+      "description": "Source: S01-SUMMARY.md/Patterns established; S03-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:7",
+      "label": "Put provider invocation behind backend auth, selected-project, membership, and permission guards; clients should render provider metadata but never own provider selection or secrets.",
+      "type": "lesson",
+      "description": "Source: S04-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:8",
+      "label": "Parse API payloads strictly at Web/CLI boundaries and fail closed with `api_malformed` rather than silently rendering partial or unexpected placeholder data.",
+      "type": "lesson",
+      "description": "Source: S02-SUMMARY.md/Patterns established; S03-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:9",
+      "label": "Treat `npm run smoke` as the authoritative local coherence check and make its output agent-readable with stage markers, request ids, child exit codes, fallback assertions, and cleanup logs.",
+      "type": "lesson",
+      "description": "Source: S03-SUMMARY.md/Observability surfaces; M001-VALIDATION.md/Operational verification",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:10",
+      "label": "Use requirements and validation artifacts as a closure record that explicitly separates proven local skeleton behavior, skeleton-only contracts, deferred work, and negative boundaries.",
+      "type": "lesson",
+      "description": "Source: S05-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:11",
+      "label": "The workspace package did not expose the CLI as a linked `@building-agent/cli` binary in this install, so smoke had to use the verified emitted build artifact path.",
+      "type": "lesson",
+      "description": "Source: S03-SUMMARY.md/Deviations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:12",
+      "label": "Closure review surfaced that Web project-management responses should validate `projectId` exactly against the requested id before real integrations land.",
+      "type": "lesson",
+      "description": "Source: S02-SUMMARY.md/Known Limitations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "lesson:M001:13",
+      "label": "Final validation required a remediation-round operational rerun to prove smoke and README command coverage freshly at milestone closure, not just from prior slice evidence.",
+      "type": "lesson",
+      "description": "Source: M001-VALIDATION.md/Verification classes",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:1",
+      "label": "Reuse canonical request-id-bearing API error envelopes across Web and CLI so future agents can diagnose auth, project, malformed payload, provider, and service availability failures without secret exposure.",
+      "type": "pattern",
+      "description": "Source: S01-SUMMARY.md/Patterns established; S03-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:2",
+      "label": "Put provider invocation behind backend auth, selected-project, membership, and permission guards; clients should render provider metadata but never own provider selection or secrets.",
+      "type": "pattern",
+      "description": "Source: S04-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:3",
+      "label": "Parse API payloads strictly at Web/CLI boundaries and fail closed with `api_malformed` rather than silently rendering partial or unexpected placeholder data.",
+      "type": "pattern",
+      "description": "Source: S02-SUMMARY.md/Patterns established; S03-SUMMARY.md/Key decisions",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:4",
+      "label": "Treat `npm run smoke` as the authoritative local coherence check and make its output agent-readable with stage markers, request ids, child exit codes, fallback assertions, and cleanup logs.",
+      "type": "pattern",
+      "description": "Source: S03-SUMMARY.md/Observability surfaces; M001-VALIDATION.md/Operational verification",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:5",
+      "label": "Use requirements and validation artifacts as a closure record that explicitly separates proven local skeleton behavior, skeleton-only contracts, deferred work, and negative boundaries.",
+      "type": "pattern",
+      "description": "Source: S05-SUMMARY.md/Patterns established",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:6",
+      "label": "The workspace package did not expose the CLI as a linked `@building-agent/cli` binary in this install, so smoke had to use the verified emitted build artifact path.",
+      "type": "pattern",
+      "description": "Source: S03-SUMMARY.md/Deviations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:7",
+      "label": "Closure review surfaced that Web project-management responses should validate `projectId` exactly against the requested id before real integrations land.",
+      "type": "pattern",
+      "description": "Source: S02-SUMMARY.md/Known Limitations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "pattern:M001:8",
+      "label": "Final validation required a remediation-round operational rerun to prove smoke and README command coverage freshly at milestone closure, not just from prior slice evidence.",
+      "type": "pattern",
+      "description": "Source: M001-VALIDATION.md/Verification classes",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "surprise:M001:1",
+      "label": "The workspace package did not expose the CLI as a linked `@building-agent/cli` binary in this install, so smoke had to use the verified emitted build artifact path.",
+      "type": "lesson",
+      "description": "Source: S03-SUMMARY.md/Deviations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "surprise:M001:2",
+      "label": "Closure review surfaced that Web project-management responses should validate `projectId` exactly against the requested id before real integrations land.",
+      "type": "lesson",
+      "description": "Source: S02-SUMMARY.md/Known Limitations",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
+    },
+    {
+      "id": "surprise:M001:3",
+      "label": "Final validation required a remediation-round operational rerun to prove smoke and README command coverage freshly at milestone closure, not just from prior slice evidence.",
+      "type": "lesson",
+      "description": "Source: M001-VALIDATION.md/Verification classes",
+      "confidence": "EXTRACTED",
+      "sourceFile": "milestones/M001/M001-LEARNINGS.md"
     }
   ],
   "edges": [
@@ -263,7 +624,283 @@
       "to": "task:M001:S05:T02",
       "type": "contains",
       "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M002",
+      "to": "slice:M002:S01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M002:S01",
+      "to": "task:M002:S01:T01",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M002:S01",
+      "to": "task:M002:S01:T02",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "slice:M002:S01",
+      "to": "task:M002:S01:T03",
+      "type": "contains",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:1",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:2",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:3",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:4",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:5",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:6",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:7",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:8",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:9",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:10",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:11",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:12",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:13",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:14",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:15",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:16",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:17",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "decision:M001:18",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:1",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:2",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:3",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:4",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:5",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:6",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:7",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:8",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:9",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:10",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:11",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:12",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "lesson:M001:13",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:1",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:2",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:3",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:4",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:5",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:6",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:7",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "pattern:M001:8",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "surprise:M001:1",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "surprise:M001:2",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
+    },
+    {
+      "from": "milestone:M001",
+      "to": "surprise:M001:3",
+      "type": "relates_to",
+      "confidence": "EXTRACTED"
     }
   ],
-  "builtAt": "2026-05-10T16:31:14.278Z"
+  "builtAt": "2026-05-10T20:06:13.528Z"
 }

@@ -51,12 +51,12 @@ Upstream surfaces consumed: `apps/web/index.html`, `apps/web/src/main.tsx`, `app
   - Files: ``apps/web/index.html``, ``apps/web/src/main.tsx``, ``apps/web/src/styles.css``, ``apps/web/src/appShell.test.tsx``
   - Verify: npm --workspace @building-agent/web test -- --run apps/web/src/appShell.test.tsx
 
-- [ ] **T02: Extract reusable shell, status, and mock-only UI primitives** `est:1h30m`
+- [x] **T02: Extract reusable shell, status, and mock-only UI primitives** `est:1h30m`
   Expected skills: frontend-design, make-interfaces-feel-better, accessibility, react-best-practices, verify-before-complete.
   - Files: ``apps/web/src/ui/primitives.tsx``, ``apps/web/src/styles.css``, ``apps/web/src/appShell.test.tsx``
   - Verify: npm --workspace @building-agent/web test -- --run apps/web/src/appShell.test.tsx
 
-- [ ] **T03: Wire primitives into App loading and error states** `est:2h`
+- [x] **T03: Wire primitives into App loading and error states** `est:2h`
   Expected skills: frontend-design, accessibility, react-best-practices, verify-before-complete.
   - Files: ``apps/web/src/App.tsx``, ``apps/web/src/ui/primitives.tsx``, ``apps/web/src/styles.css``, ``apps/web/src/App.test.tsx``, ``apps/web/src/appShell.test.tsx``
   - Verify: npm --workspace @building-agent/web test -- --run apps/web/src/appShell.test.tsx apps/web/src/App.test.tsx && npm --workspace @building-agent/web run build
