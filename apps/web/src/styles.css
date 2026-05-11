@@ -1516,22 +1516,25 @@ p {
 
 .workspace-sidebar-block {
   display: grid;
-  gap: var(--space-4);
+  align-content: start;
+  gap: var(--space-5);
 }
 
 .workspace-sidebar-brand {
   align-items: center;
   display: flex;
   gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
 }
 
 .workspace-sidebar-new-chat {
   width: 100%;
+  justify-content: flex-start;
 }
 
 .workspace-sidebar-section {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .workspace-sidebar-eyebrow {
@@ -1544,9 +1547,9 @@ p {
 }
 
 .workspace-sidebar-current-project {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-faint);
-  border-radius: var(--radius-md);
+  background: rgba(15, 23, 42, 0.04);
+  border: 0;
+  border-radius: var(--radius-sm);
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3);
@@ -1573,7 +1576,8 @@ p {
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: var(--font-size-sm);
-  padding: var(--space-2) var(--space-3);
+  box-shadow: none;
+  padding: var(--space-2) var(--space-2);
   text-align: left;
   width: 100%;
 }
@@ -1591,13 +1595,14 @@ p {
 }
 
 .workspace-sidebar-account {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-faint);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 0;
   display: grid;
   gap: var(--space-2);
-  margin-top: var(--space-2);
-  padding: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-4) var(--space-2) 0;
 }
 
 .workspace-sidebar-account-row {
@@ -1660,6 +1665,7 @@ p {
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);
+  box-shadow: none;
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: var(--font-size-sm);
@@ -2174,6 +2180,14 @@ p {
   align-items: center;
   display: flex;
   justify-content: space-between;
+}
+
+.workspace-sidebar-block .mock-badge {
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-size: 0.68rem;
+  padding: 0;
+  text-transform: none;
 }
 
 /* ===== Repository panel (Slice 7: #112, #113) ===== */
