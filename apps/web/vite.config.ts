@@ -1,12 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const appRoot = dirname(fileURLToPath(import.meta.url));
+import { resolve } from "node:path";
 
 export default defineConfig({
-  root: appRoot,
   plugins: [react()],
   server: {
     proxy: {
@@ -31,6 +27,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: ["./src/test/setup.ts"]
+    setupFiles: [resolve("src/test/setup.ts")],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"]
   }
 });
