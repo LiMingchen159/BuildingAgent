@@ -29,6 +29,7 @@ export interface AppShellProps {
   children: ReactNode;
   authenticated?: boolean | undefined;
   onSignOut?: (() => void) | undefined;
+  variant?: "default" | "workspace" | undefined;
 }
 
 export interface SurfaceProps {
@@ -81,10 +82,10 @@ export function BrandHeader({ authenticated = false, onSignOut }: { authenticate
   );
 }
 
-export function AppShell({ children, authenticated = false, onSignOut }: AppShellProps) {
+export function AppShell({ children, authenticated = false, onSignOut, variant = "default" }: AppShellProps) {
   return (
-    <div className="app-shell">
-      <BrandHeader authenticated={authenticated} onSignOut={onSignOut} />
+    <div className={classNames("app-shell", variant === "workspace" && "app-shell-workspace")}>
+      {variant === "default" ? <BrandHeader authenticated={authenticated} onSignOut={onSignOut} /> : null}
       {children}
     </div>
   );
@@ -142,7 +143,7 @@ export function EmptyState({ children, title = "Nothing to show yet" }: EmptySta
   );
 }
 
-export function LoadingSkeleton({ label = "Loading BuildingAgent workspace…", lines = 3 }: LoadingSkeletonProps) {
+export function LoadingSkeleton({ label = "Loading BuildingAgent workspace...", lines = 3 }: LoadingSkeletonProps) {
   const count = Math.max(1, Math.min(lines, 8));
   return (
     <section className="loading-skeleton" role="status" aria-live="polite" aria-label={label}>
@@ -428,7 +429,7 @@ export function Dropdown<TValue extends string = string>({
         onKeyDown={handleTriggerKeyDown}
       >
         <span className="dropdown-value">{selectedOption ? selectedOption.label : placeholder}</span>
-        <span className="dropdown-caret" aria-hidden="true">▾</span>
+        <span className="dropdown-caret" aria-hidden="true">v</span>
       </button>
       {open ? (
         <ul

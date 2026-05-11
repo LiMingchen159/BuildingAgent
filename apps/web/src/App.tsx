@@ -8,6 +8,8 @@ import { Repository, buildMockRepositoryItems } from "./ui/Repository";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
+import { CubeLogo } from "./ui/CubeLogo";
+import { ParticleField } from "./ui/ParticleField";
 import { buildDemoConversation } from "./ui/demoConversation";
 import {
   ApiClientError,
@@ -97,49 +99,44 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
   }
 
   return (
-    <main className="login-shell" aria-labelledby="login-title">
-      <section className="login-hero" aria-hidden="false">
-        <p className="eyebrow">BuildingAgent</p>
-        <h1 className="login-hero-title">Project-scoped AI assistant for building data</h1>
-        <p className="muted login-hero-tagline">
-          Authenticated, redaction-safe access to placeholder gateway, registry, and capability surfaces — never live customer systems in this build.
-        </p>
-        <ul className="login-hero-points" aria-label="What you get">
-          <li><strong>Mock-only surfaces</strong> until live gateways are wired.</li>
-          <li><strong>Project boundary</strong> enforced on every chat call.</li>
-          <li><strong>Redaction-safe</strong> provider diagnostics out of the box.</li>
-        </ul>
-      </section>
-      <Card className="auth-card login-card" labelledBy="login-title">
-        <p className="eyebrow">Local seeded access</p>
-        <h1 id="login-title">Sign in to BuildingAgent</h1>
-        <p className="muted">Use the development credentials from the README. Anonymous access is intentionally disabled.</p>
+    <main className="login-shell minimal-auth-shell" aria-labelledby="login-title">
+      <ParticleField className="minimal-particle-field" density={60} connectionDistance={150} opacity={0.15} />
+      <section className="minimal-auth-panel" aria-label="BuildingAgent local access">
+        <CubeLogo className="minimal-auth-logo" />
+        <div className="minimal-auth-heading">
+          <h1 id="login-title">BuildingAgent</h1>
+          <h2 className="visually-hidden">Sign in to BuildingAgent</h2>
+          <p>Architecture Intelligence</p>
+        </div>
         {busy ? (
           <p className="inline-status login-status" role="status">
             <span className="spinner" aria-hidden="true" />
-            Signing in with the local API session boundary…
+            Connecting to the local API session boundary...
           </p>
         ) : null}
-        <form className="stack" onSubmit={handleSubmit} aria-busy={busy}>
+        <form className="minimal-auth-form" onSubmit={handleSubmit} aria-busy={busy}>
           <label>
-            Email
-            <Input autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <span className="visually-hidden">Email</span>
+            <Input className="input-minimal" autoComplete="username" placeholder="Workspace ID or Email" value={email} onChange={(event) => setEmail(event.target.value)} invalid={Boolean(validation && !email.trim())} />
           </label>
           <label>
-            Password
-            <Input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} />
+            <span className="visually-hidden">Password</span>
+            <Input className="input-minimal" type="password" autoComplete="current-password" placeholder="Access Key" value={password} onChange={(event) => setPassword(event.target.value)} invalid={Boolean(validation && !password)} />
           </label>
           {validation ? <p className="field-error login-error" role="alert">{validation}</p> : null}
-          <Button type="submit" loading={busy} className="login-submit">
+          <Button type="submit" loading={busy} className="btn-minimal login-submit" aria-label="Sign in">
             {busy ? <span className="spinner" aria-hidden="true" /> : null}
-            {busy ? "Signing in…" : "Sign in"}
+            {busy ? "Connecting..." : "Initialize"}
           </Button>
+          <div className="minimal-auth-links" aria-label="Seeded demo guidance">
+            <span>Seeded local demo</span>
+            <span>Anonymous disabled</span>
+          </div>
         </form>
-      </Card>
+      </section>
     </main>
   );
 }
-
 function projectMockMetrics(projectId: string): { lastOpened: string; knowledgeBases: number; repositories: number; tasks: number } {
   let hash = 0;
   for (let index = 0; index < projectId.length; index += 1) {
@@ -170,21 +167,25 @@ function ProjectCardSkeleton() {
       <span className="skeleton-line skeleton-line-button" />
     </Card>
   );
-}function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; busy: boolean }) {
+}
+
+function ProjectScreen({ projects, onSelect, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; busy: boolean }) {
   return (
-    <main className="workspace-card project-screen" aria-labelledby="projects-title">
-      <div className="project-screen-header">
+    <main className="workspace-card project-screen minimal-project-shell" aria-labelledby="projects-title">
+      <ParticleField className="minimal-particle-field" density={44} connectionDistance={145} opacity={0.12} />
+      <div className="project-screen-header minimal-project-header">
         <div>
+          <CubeLogo size={34} className="minimal-project-logo" />
           <p className="eyebrow">Project boundary</p>
           <h1 id="projects-title">Choose an authorized project</h1>
-          <p className="muted">Only projects returned by the API for this seeded session are selectable. Metadata below is mock-only — no live customer telemetry.</p>
+          <p className="muted">Only projects returned by the API for this seeded session are selectable. Metadata below is mock-only; no live customer telemetry.</p>
         </div>
         <MockOnlyBadge kind="stub" label="Mock metrics only" />
       </div>
       {busy ? (
         <p className="inline-status project-status" role="status">
           <span className="spinner" aria-hidden="true" />
-          Selecting project and loading placeholder workspace surfaces…
+          Selecting project and loading placeholder workspace surfaces...
         </p>
       ) : null}
       {projects.length === 0 ? <EmptyState title="No authorized projects">This session did not return any selectable project records.</EmptyState> : null}
@@ -193,7 +194,7 @@ function ProjectCardSkeleton() {
           const metrics = projectMockMetrics(project.id);
           const canChat = project.permissions.includes("chat:read");
           return (
-            <Card className="project-card" key={project.id}>
+            <Card className="project-card minimal-project-card" key={project.id}>
               <div className="project-card-heading">
                 <div>
                   <h2>{project.name}</h2>
@@ -216,40 +217,41 @@ function ProjectCardSkeleton() {
                   <dd>{metrics.tasks}</dd>
                 </div>
               </dl>
-              <p className="permissions">{project.permissions.join(" · ") || "No chat permissions"}</p>
-              <Button type="button" onClick={() => void onSelect(project)} loading={busy}>
-                {busy ? "Selecting…" : "Select project"}
+              <p className="permissions">{project.permissions.join(" / ") || "No chat permissions"}</p>
+              <Button type="button" className="btn-minimal" onClick={() => void onSelect(project)} loading={busy}>
+                {busy ? "Selecting..." : "Select project"}
               </Button>
             </Card>
           );
         })}
         {projects.length > 0 ? (
-          <Card className="project-card project-card-add" aria-label="Add project (placeholder)">
+          <Card className="project-card project-card-add minimal-project-card" aria-label="Add project (placeholder)">
             <div className="project-card-add-icon" aria-hidden="true">+</div>
             <h2>Add project</h2>
             <p className="muted">New project provisioning is not wired yet. Track progress in M002 follow-up issues.</p>
-            <Button type="button" variant="secondary" disabled>Coming soon</Button>
+            <Button type="button" variant="secondary" className="btn-minimal" disabled>Coming soon</Button>
           </Card>
         ) : null}
       </div>
     </main>
   );
 }
-
 function ProjectScreenSkeleton() {
   return (
-    <main className="workspace-card project-screen project-screen-skeleton" aria-labelledby="projects-skeleton-title" aria-busy="true">
-      <div className="project-screen-header">
+    <main className="workspace-card project-screen project-screen-skeleton minimal-project-shell" aria-labelledby="projects-skeleton-title" aria-busy="true">
+      <ParticleField className="minimal-particle-field" density={36} connectionDistance={145} opacity={0.1} />
+      <div className="project-screen-header minimal-project-header">
         <div>
+          <CubeLogo size={34} className="minimal-project-logo" />
           <p className="eyebrow">Project boundary</p>
-          <h1 id="projects-skeleton-title">Loading authorized projects…</h1>
+          <h1 id="projects-skeleton-title">Loading authorized projects...</h1>
           <p className="muted">Fetching the project list from the local API session.</p>
         </div>
         <MockOnlyBadge kind="stub" label="Loading" />
       </div>
       <p className="inline-status project-status" role="status" aria-label="Project list bootstrap phase">
         <span className="spinner" aria-hidden="true" />
-        Loading project cards from the local API…
+        Loading project cards from the local API...
       </p>
       <div className="project-grid" aria-hidden="true">
         <ProjectCardSkeleton />
@@ -259,7 +261,6 @@ function ProjectScreenSkeleton() {
     </main>
   );
 }
-
 function BootstrapLoading() {
   return (
     <main className="workspace-card bootstrap-card" aria-labelledby="bootstrap-title">
@@ -268,7 +269,7 @@ function BootstrapLoading() {
         <h1 id="bootstrap-title">Restoring your saved session</h1>
         <p className="muted">Checking the local API session and authorized project list before showing any workspace data.</p>
       </div>
-      <LoadingSkeleton label="Checking your saved BuildingAgent session…" lines={5} />
+      <LoadingSkeleton label="Checking your saved BuildingAgent session..." lines={5} />
       <p className="inline-status" role="status" aria-label="Saved-session bootstrap phase">Safe phase: saved-session bootstrap is in progress. No live building systems, repositories, or control routes are being contacted.</p>
       <MockOnlyBadge kind="stub" label="Startup shell only" />
     </main>
@@ -305,7 +306,7 @@ function ItemList<T extends { id: string; name: string; status: string; descript
             <h3>{item.name}</h3>
             <span className={`status-pill status-${item.status.replace("_", "-")}`}>{item.status.replace("_", " ")}</span>
           </div>
-          <p className="item-meta">{item.id} · {getMeta(item)}</p>
+          <p className="item-meta">{item.id} / {getMeta(item)}</p>
           <p>{item.description}</p>
         </Card>
       ))}
@@ -354,7 +355,7 @@ function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, 
       </div>
       {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
-        {messages.length === 0 && busy ? <LoadingSkeleton label="Sending the first project-scoped message…" lines={4} /> : null}
+        {messages.length === 0 && busy ? <LoadingSkeleton label="Sending the first project-scoped message..." lines={4} /> : null}
         {messages.length === 0 && !busy ? (
           <div className="empty-state empty-state-with-action">
             <p>No messages yet. Start with a project-scoped question, or load a building-domain demo to see the surfaces in action.</p>
@@ -371,7 +372,7 @@ function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, 
       </section>
       <form className="composer" onSubmit={handleSubmit}>
         <label htmlFor="chat-message">Message</label>
-        <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project…" : "This project is read-only for your account."} />
+        <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project..." : "This project is read-only for your account."} />
         <div className="composer-actions">
           <ul className="composer-quick-actions" aria-label="Quick actions (placeholder)">
             {quickActions.map((label) => (
@@ -382,7 +383,7 @@ function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, 
               </li>
             ))}
           </ul>
-          <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending…" : "Send message"}</button>
+          <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending..." : "Send message"}</button>
         </div>
       </form>
       {!canWrite ? <p className="field-error" role="status">This project does not grant chat write permission.</p> : null}
@@ -661,7 +662,7 @@ function Workspace({
   );
 
   return (
-    <div className="workspace-card workspace-management">
+    <div className="workspace-card workspace-management cgpt-workspace">
       <WorkspaceShell
         leftLabel="Project sidebar"
         centerLabel="Workspace content"
@@ -681,7 +682,7 @@ function Workspace({
           />
         }
         center={center}
-        right={<WorkspaceRightPanel registry={registry} management={management} />}
+        right={<WorkspaceRightPanel registry={registry} management={management} />} className="cgpt-workspace-shell"
       />
     </div>
   );
@@ -853,9 +854,10 @@ export default function App() {
   }
 
   const authenticated = Boolean(token && user);
+  const shellVariant = authenticated && Boolean(selectedProject) ? "workspace" : "default";
 
   return (
-    <AppShell authenticated={authenticated} onSignOut={() => clearAuth()}>
+    <AppShell authenticated={authenticated} onSignOut={() => clearAuth()} variant={shellVariant}>
       {banner ? <Banner {...banner} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
