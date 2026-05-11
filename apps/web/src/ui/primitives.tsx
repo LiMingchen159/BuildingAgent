@@ -11,7 +11,7 @@ import {
   type TextareaHTMLAttributes
 } from "react";
 
-export type BannerTone = "error" | "info" | "success";
+export type BannerTone = "error" | "info" | "success" | "warning";
 
 export interface DiagnosticLineProps {
   code?: string | undefined;
@@ -23,6 +23,7 @@ export interface BannerProps extends DiagnosticLineProps {
   tone?: BannerTone | undefined;
   title: string;
   message: string;
+  onDismiss?: (() => void) | undefined;
 }
 
 export interface AppShellProps {
@@ -103,12 +104,21 @@ export function DiagnosticLine({ code, requestId, className }: DiagnosticLinePro
   );
 }
 
-export function Banner({ tone = "info", title, message, code, requestId }: BannerProps) {
+export function Banner({ tone = "info", title, message, code, requestId, onDismiss }: BannerProps) {
+  const role = tone === "error" ? "alert" : "status";
   return (
-    <section className={`banner banner-${tone}`} role={tone === "error" ? "alert" : "status"} aria-live={tone === "error" ? "assertive" : "polite"}>
-      <strong>{title}</strong>
-      <p>{message}</p>
+    <section className={`banner toast toast-${tone}`} role={role} aria-live={tone === "error" ? "assertive" : "polite"}>
+      <span className="toast-dot" aria-hidden="true" />
+      <div className="toast-body">
+        <strong className="toast-title">{title}</strong>
+        <p className="toast-message">{message}</p>
+      </div>
       <DiagnosticLine code={code} requestId={requestId} />
+      {onDismiss ? (
+        <button className="toast-dismiss" type="button" onClick={onDismiss} aria-label="Dismiss notification">
+          x
+        </button>
+      ) : null}
     </section>
   );
 }

@@ -1,5 +1,7 @@
 const { spawnSync } = require("node:child_process");
 
+const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
+const spawnOptions = { stdio: "inherit", shell: process.platform === "win32" };
 const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
 const runIndex = rawArgs.indexOf("--run");
 const args = rawArgs.filter((arg) => arg !== "--run");
@@ -14,10 +16,13 @@ const passthrough = args.filter(
 function runWorkspace(workspace, files, prefix) {
   const normalizedFiles = files.map((arg) => arg.replace(new RegExp(`^${prefix}/`, "u"), ""));
   const result = spawnSync(
-    "npm",
+    npmBin,
     ["--workspace", workspace, "exec", "--", "vitest", "run", ...passthrough, ...normalizedFiles],
-    { stdio: "inherit" }
+    spawnOptions
   );
+  if (result.error) {
+    console.error(`[test] failed to spawn ${npmBin}: ${result.error.message}`);
+  }
   return result.status ?? 1;
 }
 
@@ -37,9 +42,12 @@ if (targetedRuns.length > 0) {
   process.exit(0);
 }
 
-if (runIndex !== -1 || args.length === 0) {
+if (runIndex !== -1) {
   process.exit(runWorkspace("@building-agent/api", apiFiles, "apps/api"));
 }
 
-const result = spawnSync("npm", ["--workspaces", "--if-present", "run", "test"], { stdio: "inherit" });
+const result = spawnSync(npmBin, ["--workspaces", "--if-present", "run", "test"], spawnOptions);
+if (result.error) {
+  console.error(`[test] failed to spawn ${npmBin}: ${result.error.message}`);
+}
 process.exit(result.status ?? 1);

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type SVGProps, useEffect, useMemo, useState } from "react";
 import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
@@ -10,7 +10,6 @@ import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
 import { CubeLogo } from "./ui/CubeLogo";
 import { ParticleField } from "./ui/ParticleField";
-import { buildDemoConversation } from "./ui/demoConversation";
 import {
   ApiClientError,
   getChat,
@@ -19,6 +18,7 @@ import {
   getSession,
   listProjects,
   login,
+  resetChat,
   selectProject,
   sendChatMessage,
   type ChatProviderDiagnostics,
@@ -37,6 +37,48 @@ import {
 
 const STORAGE_KEY = "building-agent.session.v1";
 type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
+type IconName =
+  | "activity"
+  | "arrow-up"
+  | "bar-chart"
+  | "book-open"
+  | "building"
+  | "check-check"
+  | "chevron-down"
+  | "clock"
+  | "copy"
+  | "cpu"
+  | "file-chart"
+  | "file-text"
+  | "folder"
+  | "folder-open"
+  | "grid"
+  | "info"
+  | "key"
+  | "link"
+  | "lock"
+  | "message"
+  | "more"
+  | "panel-left"
+  | "panel-right"
+  | "paperclip"
+  | "plus"
+  | "puzzle"
+  | "rotate"
+  | "search"
+  | "search-code"
+  | "settings"
+  | "shield"
+  | "shield-check"
+  | "snowflake"
+  | "table"
+  | "thermometer"
+  | "thumbs-down"
+  | "thumbs-up"
+  | "upload"
+  | "wrench"
+  | "zap"
+  | "x";
 
 interface StoredSession {
   token: string;
@@ -45,6 +87,64 @@ interface StoredSession {
 }
 
 type BannerState = BannerProps;
+
+function Icon({ name, className = "", ...props }: { name: IconName; className?: string } & SVGProps<SVGSVGElement>) {
+  const common = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    strokeWidth: 2,
+    viewBox: "0 0 24 24",
+    className: `workspace-icon ${className}`.trim(),
+    "aria-hidden": true,
+    ...props
+  };
+  const paths: Record<IconName, JSX.Element> = {
+    activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
+    "arrow-up": <><path d="m12 19 0-14" /><path d="m5 12 7-7 7 7" /></>,
+    "bar-chart": <><path d="M3 3v18h18" /><path d="M7 16v-5" /><path d="M12 16V7" /><path d="M17 16v-8" /></>,
+    "book-open": <><path d="M12 7v14" /><path d="M3 5a5 5 0 0 1 5-1l4 2v15l-4-2a5 5 0 0 0-5 1z" /><path d="M21 5a5 5 0 0 0-5-1l-4 2v15l4-2a5 5 0 0 1 5 1z" /></>,
+    building: <><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18" /><path d="M6 12H4a2 2 0 0 0-2 2v8" /><path d="M18 9h2a2 2 0 0 1 2 2v11" /><path d="M10 6h4" /><path d="M10 10h4" /><path d="M10 14h4" /><path d="M10 18h4" /></>,
+    "check-check": <><path d="m3 12 4 4L17 6" /><path d="m14 14 1.5 1.5L21 10" /></>,
+    "chevron-down": <path d="m6 9 6 6 6-6" />,
+    clock: <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
+    copy: <><rect width="14" height="14" x="8" y="8" rx="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></>,
+    cpu: <><rect x="7" y="7" width="10" height="10" rx="2" /><path d="M9 1v3" /><path d="M15 1v3" /><path d="M9 20v3" /><path d="M15 20v3" /><path d="M20 9h3" /><path d="M20 14h3" /><path d="M1 9h3" /><path d="M1 14h3" /></>,
+    "file-chart": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 18v-3" /><path d="M12 18v-6" /><path d="M16 18v-4" /></>,
+    "file-text": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 13h8" /><path d="M8 17h6" /></>,
+    folder: <><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z" /></>,
+    "folder-open": <><path d="m6 14 1.5-3h12.8a1.7 1.7 0 0 1 1.6 2.2l-1.8 5.4A2 2 0 0 1 18.2 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3" /></>,
+    grid: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /></>,
+    info: <><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></>,
+    key: <><circle cx="7.5" cy="15.5" r="5.5" /><path d="m21 2-9.6 9.6" /><path d="m15 7 2 2" /><path d="m18 4 2 2" /></>,
+    link: <><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" /></>,
+    lock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
+    message: <><path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" /></>,
+    more: <><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></>,
+    "panel-left": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>,
+    "panel-right": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
+    paperclip: <path d="m21.4 11.6-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 1 1-2.8-2.8l8.5-8.5" />,
+    plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
+    puzzle: <><path d="M19 13.5V19a2 2 0 0 1-2 2h-4v-2.5a2 2 0 0 0-4 0V21H5a2 2 0 0 1-2-2v-4h2.5a2 2 0 0 0 0-4H3V7a2 2 0 0 1 2-2h5.5V3.5a2 2 0 0 1 4 0V5H17a2 2 0 0 1 2 2v2.5h1.5a2 2 0 0 1 0 4z" /></>,
+    rotate: <><path d="M21 12a9 9 0 1 1-3-6.7" /><path d="M21 3v6h-6" /></>,
+    search: <><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>,
+    "search-code": <><path d="m21 21-4.3-4.3" /><circle cx="11" cy="11" r="8" /><path d="m10 8-3 3 3 3" /><path d="m12 14 3-3-3-3" /></>,
+    settings: <><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z" /></>,
+    shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />,
+    "shield-check": <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></>,
+    snowflake: <><path d="M12 2v20" /><path d="m17 5-10 14" /><path d="m7 5 10 14" /><path d="M2 12h20" /></>,
+    table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18" /><path d="M9 4v16" /></>,
+    thermometer: <><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z" /></>,
+    "thumbs-down": <><path d="M17 14V2" /><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.2-7A2 2 0 0 1 6.4 3H20v11h-4.3a2 2 0 0 0-1.7 1l-3 5a2 2 0 0 1-3.7-1.5z" /></>,
+    "thumbs-up": <><path d="M7 10v12" /><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.2 7a2 2 0 0 1-1.9 1.4H4V10h4.3a2 2 0 0 0 1.7-1l3-5a2 2 0 0 1 3.7 1.5z" /></>,
+    upload: <><path d="M16 16l-4-4-4 4" /><path d="M12 12v9" /><path d="M20.4 18.5A5 5 0 0 0 18 9h-1.3A8 8 0 1 0 4 16.3" /></>,
+    wrench: <><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.6-2.6z" /></>,
+    x: <><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>,
+    zap: <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+  };
+  return <svg {...common}>{paths[name]}</svg>;
+}
 
 function readStoredSession(): StoredSession {
   try {
@@ -108,12 +208,6 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
           <h2 className="visually-hidden">Sign in to BuildingAgent</h2>
           <p>Architecture Intelligence</p>
         </div>
-        {busy ? (
-          <p className="inline-status login-status" role="status">
-            <span className="spinner" aria-hidden="true" />
-            Connecting to the local API session boundary...
-          </p>
-        ) : null}
         <form className="minimal-auth-form" onSubmit={handleSubmit} aria-busy={busy}>
           <label>
             <span className="visually-hidden">Email</span>
@@ -128,6 +222,7 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
             {busy ? <span className="spinner" aria-hidden="true" /> : null}
             {busy ? "Connecting..." : "Initialize"}
           </Button>
+          {busy ? <p className="minimal-auth-status" role="status">Checking local access...</p> : null}
           <div className="minimal-auth-links" aria-label="Seeded demo guidance">
             <span>Recover key</span>
             <span>Request access</span>
@@ -188,7 +283,7 @@ function ProjectScreen({ projects, onSelect, onSignOut, busy }: { projects: Proj
       {busy ? (
         <p className="inline-status project-status" role="status">
           <span className="spinner" aria-hidden="true" />
-          Selecting project and loading placeholder workspace surfaces...
+          Opening workspace...
         </p>
       ) : null}
       {projects.length === 0 ? <EmptyState title="No authorized projects">This session did not return any selectable project records.</EmptyState> : null}
@@ -248,13 +343,12 @@ function ProjectScreenSkeleton() {
           <CubeLogo size={34} className="minimal-project-logo" />
           <p className="eyebrow">Project boundary</p>
           <h1 id="projects-skeleton-title">Loading authorized projects...</h1>
-          <p className="muted">Fetching the project list from the local API session.</p>
+          <p className="muted">Fetching your authorized projects.</p>
         </div>
-        <MockOnlyBadge kind="stub" label="Loading" />
       </div>
-      <p className="inline-status project-status" role="status" aria-label="Project list bootstrap phase">
+      <p className="minimal-loading-status project-status" role="status" aria-label="Project list bootstrap phase">
         <span className="spinner" aria-hidden="true" />
-        Loading project cards from the local API...
+        Loading projects...
       </p>
       <div className="project-grid" aria-hidden="true">
         <ProjectCardSkeleton />
@@ -266,15 +360,11 @@ function ProjectScreenSkeleton() {
 }
 function BootstrapLoading() {
   return (
-    <main className="workspace-card bootstrap-card" aria-labelledby="bootstrap-title">
-      <div>
-        <p className="eyebrow">BuildingAgent startup</p>
+    <main className="minimal-bootstrap-shell" aria-labelledby="bootstrap-title" aria-busy="true">
+      <div className="minimal-bootstrap-status" role="status" aria-live="polite" aria-label="Saved-session bootstrap phase">
+        <span className="spinner" aria-hidden="true" />
         <h1 id="bootstrap-title">Restoring your saved session</h1>
-        <p className="muted">Checking the local API session and authorized project list before showing any workspace data.</p>
       </div>
-      <LoadingSkeleton label="Checking your saved BuildingAgent session..." lines={5} />
-      <p className="inline-status" role="status" aria-label="Saved-session bootstrap phase">Safe phase: saved-session bootstrap is in progress. No live building systems, repositories, or control routes are being contacted.</p>
-      <MockOnlyBadge kind="stub" label="Startup shell only" />
     </main>
   );
 }
@@ -333,10 +423,16 @@ function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: st
   );
 }
 
-function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; onLoadDemo: () => void; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
+function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
-  const quickActions = ["Upload PDF", "Search KB", "Open Repo"];
+  const quickActions = [
+    { label: "Upload PDF", detail: "Add to knowledge base", icon: "upload" as IconName },
+    { label: "Search Knowledge Base", detail: "Find documents & insights", icon: "search" as IconName },
+    { label: "Open Repository", detail: "View generated outputs", icon: "folder" as IconName },
+    { label: "Analyze Energy Baseline", detail: "Compare & identify issues", icon: "bar-chart" as IconName }
+  ];
+  const hasMessages = messages.length > 0;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -349,47 +445,49 @@ function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, 
   }
 
   return (
-    <section className="chat-shell" aria-labelledby="chat-title">
-      <div className="chat-heading">
-        <p className="eyebrow">Selected project</p>
-        <h2 id="chat-title">{project.name} chat</h2>
-        <p className="muted">Project id: <strong>{project.id}</strong></p>
-        <p className="chat-scope-notice" role="note">I can only access data within this project.</p>
-      </div>
+    <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}`} aria-labelledby="chat-title">
+      <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
       {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
-        {messages.length === 0 && busy ? <LoadingSkeleton label="Sending the first project-scoped message..." lines={4} /> : null}
-        {messages.length === 0 && !busy ? (
-          <div className="empty-state empty-state-with-action">
-            <p>No messages yet. Start with a project-scoped question, or load a building-domain demo to see the surfaces in action.</p>
-            <Button type="button" variant="secondary" size="sm" onClick={onLoadDemo}>Load demo conversation</Button>
-          </div>
-        ) : null}
+        {messages.length === 0 && busy ? <div className="workspace-inline-status" role="status">Sending...</div> : null}
         {messages.map((message) => (
           <article className={`message message-${message.role}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
-            <span>{message.role === "assistant" ? "Assistant" : message.userId}</span>
-            {message.role === "assistant" ? <Markdown source={message.content} /> : <p>{message.content}</p>}
-            {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
+            <div className="message-content">
+              {message.role === "assistant" ? <Markdown source={message.content} /> : <p>{message.content}</p>}
+              {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
+            </div>
           </article>
         ))}
       </section>
       <form className="composer" onSubmit={handleSubmit}>
-        <label htmlFor="chat-message">Message</label>
-        <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project..." : "This project is read-only for your account."} />
-        <div className="composer-actions">
-          <ul className="composer-quick-actions" aria-label="Quick actions (placeholder)">
-            {quickActions.map((label) => (
-              <li key={label}>
-                <button type="button" className="composer-quick-action" disabled aria-disabled="true" title="Quick action placeholder">
-                  {label}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending..." : "Send message"}</button>
+        <ul className="composer-quick-actions" aria-label="Quick actions (placeholder)">
+          {quickActions.map((action) => (
+            <li key={action.label}>
+              <button type="button" className="composer-quick-action" disabled aria-disabled="true" title="Quick action placeholder">
+                <Icon name={action.icon} />
+                <span>
+                  <strong>{action.label}</strong>
+                  <small>{action.detail}</small>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="composer-box">
+          <label className="visually-hidden" htmlFor="chat-message">Message</label>
+          <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project, its knowledge base, or repository files..." : "This project is read-only for your account."} />
+          <div className="composer-actions">
+            <div className="composer-tools">
+              <button type="button" disabled aria-disabled="true" title="Attach file"><Icon name="paperclip" /></button>
+              <button type="button" disabled aria-disabled="true" title="Tools"><Icon name="grid" /></button>
+            </div>
+            <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy} aria-label={busy ? "Sending message" : "Send message"}>
+              {busy ? <span className="button-spinner" aria-hidden="true" /> : <Icon name="arrow-up" />}
+            </button>
+          </div>
         </div>
+        {!canWrite ? <p className="field-error composer-readonly" role="status">This project does not grant chat write permission.</p> : null}
       </form>
-      {!canWrite ? <p className="field-error" role="status">This project does not grant chat write permission.</p> : null}
     </section>
   );
 }
@@ -465,28 +563,34 @@ function WorkspaceSidebarBlock({
   user,
   kbCount,
   repoCount,
+  busy,
   onSwitchProject,
+  onSelectProject,
   onSignOut,
   onNewChat,
   onOpenKnowledgeBase,
   onOpenRepository
 }: {
-  project: ProjectSummary;
+  project: ProjectSummary | null;
   projects: ProjectSummary[];
   user: UserSummary | null;
   kbCount: number;
   repoCount: number;
+  busy: boolean;
   onSwitchProject: () => void;
+  onSelectProject: (project: ProjectSummary) => void;
   onSignOut: () => void;
   onNewChat: () => void;
   onOpenKnowledgeBase: () => void;
   onOpenRepository: () => void;
 }) {
-  const otherProjects = projects.filter((candidate) => candidate.id !== project.id).slice(0, 5);
+  const activeProjectName = project?.name ?? "No project";
   const conversationStubs: Array<{ id: string; title: string }> = [
-    { id: "stub-1", title: "Energy baseline placeholder review" },
-    { id: "stub-2", title: "Gateway provisioning checklist" },
-    { id: "stub-3", title: "Tooling audit notes" }
+    { id: "stub-1", title: "Chiller runtime summary" },
+    { id: "stub-2", title: "Readings anomaly check" },
+    { id: "stub-3", title: "Energy baseline analysis" },
+    { id: "stub-4", title: "Life safety review status" },
+    { id: "stub-5", title: "Weekly report draft" }
   ];
 
   return (
@@ -495,47 +599,62 @@ function WorkspaceSidebarBlock({
         <span className="brand-mark" aria-hidden="true">BA</span>
         <span className="brand-name">BuildingAgent</span>
       </div>
-      <Button variant="primary" size="sm" onClick={onNewChat} className="workspace-sidebar-new-chat">
-        + New chat
-      </Button>
-      <div className="workspace-sidebar-section">
-        <p className="workspace-sidebar-eyebrow">Active project</p>
-        <div className="workspace-sidebar-current-project">
-          <strong>{project.name}</strong>
-          <span className="project-card-id">{project.id}</span>
-          {otherProjects.length > 0 ? (
-            <Button variant="secondary" size="sm" onClick={onSwitchProject} className="workspace-sidebar-switch">
-              Switch project
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      <div className="workspace-sidebar-section">
-        <p className="workspace-sidebar-eyebrow">Conversation history</p>
-        <ul className="workspace-sidebar-history" aria-label="Recent conversations (placeholder)">
-          {conversationStubs.map((stub) => (
-            <li key={stub.id}>
-              <button type="button" className="workspace-sidebar-history-item" disabled aria-disabled="true" title="Conversation history placeholder">
-                {stub.title}
+      <details className="workspace-project-menu">
+        <summary className="workspace-sidebar-project-switcher">
+          <span>
+            <Icon name="building" />
+            <span>{activeProjectName} workspace</span>
+          </span>
+          <Icon name="chevron-down" />
+        </summary>
+        <ul>
+          {projects.length === 0 ? <li><span className="workspace-project-menu-empty">No authorized projects</span></li> : null}
+          {projects.map((candidate) => (
+            <li key={candidate.id}>
+              <button type="button" disabled={candidate.id === project?.id || busy} onClick={candidate.id === project?.id ? undefined : () => onSelectProject(candidate)}>
+                {candidate.name}
               </button>
             </li>
           ))}
         </ul>
-        <MockOnlyBadge kind="placeholder" label="History is mock-only" />
-      </div>
+      </details>
+      <button type="button" onClick={onNewChat} className="workspace-sidebar-new-chat">
+        <Icon name="plus" />
+        <span>New chat</span>
+      </button>
       <div className="workspace-sidebar-section">
-        <p className="workspace-sidebar-eyebrow">Shortcuts</p>
+        <p className="workspace-sidebar-eyebrow">Recent conversations</p>
+        <ul className="workspace-sidebar-history" aria-label="Recent conversations (placeholder)">
+          {conversationStubs.map((stub, index) => (
+            <li key={stub.id}>
+              <button type="button" className={`workspace-sidebar-history-item${index === 0 ? " is-active" : ""}`} disabled aria-disabled="true" title="Conversation history placeholder">
+                <span><Icon name="message" />{stub.title}</span>
+                {index === 0 ? <Icon name="more" /> : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="workspace-sidebar-section workspace-sidebar-assets">
         <ul className="workspace-sidebar-shortcuts">
           <li>
             <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenKnowledgeBase}>
-              <span>Knowledge base</span>
-              <Badge tone="primary">{kbCount}</Badge>
+              <span className="workspace-sidebar-shortcut-icon is-blue"><Icon name="book-open" /></span>
+              <span>
+                <strong>Knowledge Base</strong>
+                <small>PDFs, manuals, reports, drawings</small>
+              </span>
+              <small>{kbCount} files</small>
             </button>
           </li>
           <li>
             <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenRepository}>
-              <span>Repository</span>
-              <Badge tone="info">{repoCount}</Badge>
+              <span className="workspace-sidebar-shortcut-icon is-purple"><Icon name="folder-open" /></span>
+              <span>
+                <strong>Repository</strong>
+                <small>Images, daily/weekly/monthly reports</small>
+              </span>
+              <small>{repoCount} items</small>
             </button>
           </li>
         </ul>
@@ -551,10 +670,10 @@ function WorkspaceSidebarBlock({
         <details className="workspace-sidebar-account-menu">
           <summary aria-label="Account menu">Account menu</summary>
           <ul>
-            <li><button type="button" disabled aria-disabled="true">LLM API key (placeholder)</button></li>
-            <li><button type="button" disabled aria-disabled="true">Base URL (placeholder)</button></li>
-            <li><button type="button" disabled aria-disabled="true">Model (placeholder)</button></li>
-            <li><button type="button" disabled aria-disabled="true">Settings (placeholder)</button></li>
+            <li><button type="button" disabled aria-disabled="true"><Icon name="key" />LLM API key</button></li>
+            <li><button type="button" disabled aria-disabled="true"><Icon name="link" />Base URL</button></li>
+            <li><button type="button" disabled aria-disabled="true"><Icon name="cpu" />Model</button></li>
+            <li><button type="button" disabled aria-disabled="true"><Icon name="settings" />Settings</button></li>
             <li><button type="button" onClick={onSignOut}>Switch account</button></li>
           </ul>
         </details>
@@ -570,22 +689,22 @@ function WorkspaceRightPanel({ registry, management }: { registry: RegistryRespo
     <div className="workspace-right-block">
       <details className="workspace-right-section" open>
         <summary>
-          <span>Scheduled &amp; rule-based tasks</span>
-          <Badge tone="warning">Mock</Badge>
+          <span><Icon name="clock" />Scheduled &amp; rule-based tasks</span>
+          <span className="right-section-meta">3</span>
         </summary>
         <ScheduledTasks />
       </details>
       <details className="workspace-right-section" open>
         <summary>
-          <span>Skills</span>
-          <Badge tone="primary">{skillCount}</Badge>
+          <span><Icon name="puzzle" />Skills</span>
+          <span className="right-section-meta">{skillCount}</span>
         </summary>
         <Skills />
       </details>
       <details className="workspace-right-section" open>
         <summary>
-          <span>Tools</span>
-          <Badge tone="info">{toolCount}</Badge>
+          <span><Icon name="wrench" />Tools</span>
+          <span className="right-section-meta">{toolCount}</span>
         </summary>
         <Tools />
       </details>
@@ -605,12 +724,14 @@ function Workspace({
   activeTab,
   onTabChange,
   onSend,
-  onLoadDemo,
+  onResetChat,
   onSwitchProject,
+  onSelectProject,
+  onCreateProject,
   onSignOut,
   busy
 }: {
-  project: ProjectSummary;
+  project: ProjectSummary | null;
   projects: ProjectSummary[];
   user: UserSummary | null;
   messages: ChatMessage[];
@@ -621,8 +742,10 @@ function Workspace({
   activeTab: WorkspaceTab;
   onTabChange: (tab: WorkspaceTab) => void;
   onSend: (message: string) => Promise<void>;
-  onLoadDemo: () => void;
+  onResetChat: () => Promise<void>;
   onSwitchProject: () => void;
+  onSelectProject: (project: ProjectSummary) => void;
+  onCreateProject: () => void;
   onSignOut: () => void;
   busy: boolean;
 }) {
@@ -635,32 +758,48 @@ function Workspace({
     { id: "building", label: "Building Domain" }
   ];
 
-  const kbDocuments = useMemo(() => buildMockKnowledgeBaseDocuments(project.id), [project.id]);
-  const repoItems = useMemo(() => buildMockRepositoryItems(project.id), [project.id]);
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
+  const kbDocuments = useMemo(() => (project ? buildMockKnowledgeBaseDocuments(project.id) : []), [project]);
+  const repoItems = useMemo(() => (project ? buildMockRepositoryItems(project.id) : []), [project]);
+
+  const noProjectCenter = (
+    <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
+      <div className="workspace-floating-toggles">
+        <button type="button" className="workspace-icon-button" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
+          <Icon name="panel-left" />
+        </button>
+        <button type="button" className="workspace-icon-button" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
+          <Icon name="panel-right" />
+        </button>
+      </div>
+      <section className="new-project-state">
+        <div className="brand-mark" aria-hidden="true">BA</div>
+        <h1 id="workspace-title">BuildingAgent workspace</h1>
+        <p>Create a project to unlock project-scoped chat, knowledge base search, and repository outputs.</p>
+        <button type="button" className="workspace-primary-action" onClick={onCreateProject} disabled={busy || projects.length === 0}>
+          <Icon name="plus" />
+          <span>{busy ? "Creating project..." : "New project"}</span>
+        </button>
+        {projects.length === 0 ? <p className="workspace-inline-status" role="status">No authorized projects are available for this account.</p> : null}
+      </section>
+    </div>
+  );
 
   const center = (
     <div className="workspace-center-block" aria-labelledby="workspace-title">
-      <div className="workspace-heading">
-        <div>
-          <p className="eyebrow">Selected project</p>
-          <h1 id="workspace-title">{project.name} workspace</h1>
-          <p className="muted">Project id: <strong>{project.id}</strong></p>
-        </div>
-        <span className="workspace-scope-label">
-          <span className="visually-hidden">Inspection surfaces are placeholder-only</span>
-          <span aria-hidden="true">Project data only</span>
-        </span>
+      <div className="workspace-floating-toggles">
+        <button type="button" className="workspace-icon-button" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
+          <Icon name="panel-left" />
+        </button>
+        <button type="button" className="workspace-icon-button" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
+          <Icon name="panel-right" />
+        </button>
       </div>
-      <nav className="workspace-tabs" aria-label="Workspace panels">
-        {tabs.map((tab) => (
-          <button key={tab.id} type="button" className={activeTab === tab.id ? "tab-active secondary" : "secondary"} aria-pressed={activeTab === tab.id} onClick={() => onTabChange(tab.id)}>
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} onLoadDemo={onLoadDemo} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} /> : null}
-      {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
-      {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
+      {project ? <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1> : null}
+      {activeTab === "chat" && project ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} /> : null}
+      {activeTab === "kb" && project ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
+      {activeTab === "repo" && project ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
       {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
       {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
@@ -673,22 +812,24 @@ function Workspace({
         leftLabel="Project sidebar"
         centerLabel="Workspace content"
         rightLabel="Workspace details"
-        left={
+        left={leftOpen ? (
           <WorkspaceSidebarBlock
             project={project}
             projects={projects}
             user={user}
             kbCount={kbDocuments.length}
             repoCount={repoItems.length}
+            busy={busy}
             onSwitchProject={onSwitchProject}
+            onSelectProject={onSelectProject}
             onSignOut={onSignOut}
-            onNewChat={() => onTabChange("chat")}
+            onNewChat={() => { void onResetChat(); }}
             onOpenKnowledgeBase={() => onTabChange("kb")}
             onOpenRepository={() => onTabChange("repo")}
           />
-        }
-        center={center}
-        right={<WorkspaceRightPanel registry={registry} management={management} />} className="cgpt-workspace-shell"
+        ) : null}
+        center={project ? center : noProjectCenter}
+        right={rightOpen ? <WorkspaceRightPanel registry={registry} management={management} /> : null} className={`cgpt-workspace-shell${leftOpen ? "" : " is-left-collapsed"}${rightOpen ? "" : " is-right-collapsed"}`}
       />
     </div>
   );
@@ -832,6 +973,15 @@ export default function App() {
     }
   }
 
+  function handleCreateProject() {
+    const firstProject = projects[0];
+    if (!firstProject) {
+      setBanner({ tone: "error", title: "No project available", message: "This account does not have an authorized project yet.", code: "project_missing" });
+      return;
+    }
+    void handleProjectSelect(firstProject);
+  }
+
   async function handleSend(message: string) {
     if (!token || !selectedProject) {
       setBanner({ tone: "error", title: "Select a project first", message: "Chat is available only after authentication and project selection.", code: "project_not_selected" });
@@ -842,17 +992,69 @@ export default function App() {
       return;
     }
     setBusy(true);
+    const optimisticUser: ChatMessage = {
+      id: `pending_user_${Date.now()}`,
+      projectId: selectedProject.id,
+      userId: user?.id ?? "local-user",
+      role: "user",
+      content: message.trim()
+    };
+    const optimisticAssistant: ChatMessage = {
+      id: `pending_assistant_${Date.now()}`,
+      projectId: selectedProject.id,
+      userId: user?.id ?? "local-user",
+      role: "assistant",
+      content: "Thinking..."
+    };
+    setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
     try {
       const posted = await sendChatMessage(token, selectedProject.id, message.trim());
-      setMessages((current) => [...current, posted.message, posted.assistantMessage]);
+      setMessages((current) => [
+        ...current.filter((item) => item.id !== optimisticUser.id && item.id !== optimisticAssistant.id),
+        posted.message,
+        posted.assistantMessage
+      ]);
       setChatProviderDiagnostics(posted.provider);
       setChatProviderRequestId(posted.requestId);
       setBanner({ tone: "success", title: "Message sent", message: "The assistant response is ready with redaction-safe provider diagnostics.", requestId: posted.requestId });
     } catch (error) {
+      setMessages((current) => current.filter((item) => item.id !== optimisticUser.id && item.id !== optimisticAssistant.id));
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
       } else {
         setBanner(errorBanner(error, "Chat message failed"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResetChat() {
+    if (!token || !selectedProject) {
+      setActiveTab("chat");
+      setMessages([]);
+      setChatProviderDiagnostics(null);
+      setChatProviderRequestId(undefined);
+      return;
+    }
+    setBusy(true);
+    try {
+      const reset = await resetChat(token, selectedProject.id);
+      setMessages([]);
+      setChatProviderDiagnostics(null);
+      setChatProviderRequestId(undefined);
+      setActiveTab("chat");
+      setBanner({
+        tone: "success",
+        title: "New chat started",
+        message: `Cleared ${reset.clearedMessages} messages and ${reset.clearedMemories} memories for this project session.`,
+        requestId: reset.requestId
+      });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "New chat failed"));
       }
     } finally {
       setBusy(false);
@@ -864,11 +1066,10 @@ export default function App() {
 
   return (
     <AppShell authenticated={authenticated} onSignOut={() => clearAuth()} variant={shellVariant}>
-      {banner ? <Banner {...banner} /> : null}
+      {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} onSignOut={() => clearAuth()} busy={busy} /> : null}
-      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onLoadDemo={() => setMessages(buildDemoConversation(selectedProject.id, user?.id ?? "user_demo"))} onSwitchProject={() => setSelectedProject(null)} onSignOut={() => clearAuth()} busy={busy} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onCreateProject={handleCreateProject} onSignOut={() => clearAuth()} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );

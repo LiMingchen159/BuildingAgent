@@ -54,7 +54,7 @@ describe("BuildingAgent no-blank HTML shell", () => {
 });
 
 describe("BuildingAgent reusable UI primitives", () => {
- it("renders bounded alert/status banners with optional diagnostics and no secret-like fields", () => {
+ it("renders compact overlay toasts with optional diagnostics and no secret-like fields", () => {
  const { rerender } = render(<Banner tone="error" title="Could not load session" message="Retry with a valid session." code="auth_invalid" requestId="req_123" />);
 
  const alert = screen.getByRole("alert");

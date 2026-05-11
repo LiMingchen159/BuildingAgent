@@ -45,6 +45,19 @@ describe("placeholder registry and management API contracts", () => {
       requestId: expect.stringMatching(/^req_/)
     });
     expect(response.json().runtimeProviders).toHaveLength(3);
+    expect(response.json().tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "agent_memory_remember", status: "mock" }),
+        expect.objectContaining({ id: "agent_session_summary", status: "mock" }),
+        expect.objectContaining({ id: "agent_session_reset", status: "mock" })
+      ])
+    );
+    expect(response.json().skills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "skill_project_readiness", status: "mock" }),
+        expect.objectContaining({ id: "skill_runtime_health", status: "mock" })
+      ])
+    );
     assertNoLiveIntegrationFields(response.json());
   });
 

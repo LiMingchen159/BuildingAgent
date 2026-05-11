@@ -90,11 +90,26 @@ describe("project-scoped chat contract", () => {
         fallbackUsed: false
       },
       fallbackUsed: false,
+      lifecycle: expect.arrayContaining([
+        expect.objectContaining({ type: "user_message_received" }),
+        expect.objectContaining({ type: "memory_recalled", metadata: { memoryCount: 0 } }),
+        expect.objectContaining({ type: "skills_applied", metadata: { skillCount: 3 } }),
+        expect.objectContaining({ type: "provider_started" }),
+        expect.objectContaining({ type: "assistant_message_completed" })
+      ]),
       requestId: expect.stringMatching(/^req_/)
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ projectId: "project_alpha", userId: "user_ada", requestId: expect.stringMatching(/^req_/) });
-    expect(calls[0]?.messages).toEqual([{ role: "user", content: "What should we build first?" }]);
+    expect(calls[0]?.messages).toEqual([
+      expect.objectContaining({
+        role: "system",
+        content: expect.stringContaining("You are BuildingAgent, a Hermes-like project assistant MVP.")
+      }),
+      { role: "user", content: "What should we build first?" }
+    ]);
+    expect(calls[0]?.messages[0]?.content).toContain("Available skills:");
+    expect(calls[0]?.messages[0]?.content).toContain("Available tools:");
     assertNoSecrets(posted.json());
 
     const alphaChat = await app.inject({
@@ -142,6 +157,7 @@ describe("project-scoped chat contract", () => {
         fallbackUsed: true
       },
       fallbackUsed: true,
+      lifecycle: expect.arrayContaining([expect.objectContaining({ type: "provider_started" })]),
       requestId: expect.stringMatching(/^req_/)
     });
   });
@@ -254,9 +270,92 @@ describe("project-scoped chat contract", () => {
         status: "fallback",
         fallbackUsed: true
       },
-      fallbackUsed: true
+      fallbackUsed: true,
+      lifecycle: expect.arrayContaining([expect.objectContaining({ type: "provider_started" })])
     });
     assertNoSecrets(response.json());
+  });
+
+  it("runs explicit memory commands through the agent lifecycle", async () => {
+    const { provider, calls } = fakeProvider();
+    const app = buildServer({ chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Remember: Alpha prefers concise weekly summaries" }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().lifecycle).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "tool_started", metadata: expect.objectContaining({ tool: "memory_remember" }) }),
+        expect.objectContaining({ type: "tool_completed", metadata: expect.objectContaining({ tool: "memory_remember" }) }),
+        expect.objectContaining({ type: "memory_synced" })
+      ])
+    );
+
+    const recall = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Use that preference now" }
+    });
+    expect(recall.statusCode).toBe(201);
+    expect(recall.json().lifecycle).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "memory_recalled", metadata: { memoryCount: 1 } })
+      ])
+    );
+    expect(calls.at(-1)?.messages[0]?.content).toContain("Alpha prefers concise weekly summaries");
+    assertNoSecrets(response.json());
+  });
+
+  it("resets chat messages and project-scoped agent memory for the selected project", async () => {
+    const app = buildServer({ env: {} });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Remember: Reset should clear this" }
+    });
+
+    const reset = await app.inject({
+      method: "DELETE",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken)
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(reset.json()).toEqual({
+      projectId: "project_alpha",
+      clearedMessages: 2,
+      clearedMemories: 1,
+      requestId: expect.stringMatching(/^req_/)
+    });
+
+    const chat = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken)
+    });
+    expect(chat.json().messages).toEqual([]);
+
+    const afterReset = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "What do you remember?" }
+    });
+    expect(afterReset.statusCode).toBe(201);
+    expect(afterReset.json().lifecycle).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "memory_recalled", metadata: { memoryCount: 0 } })
+      ])
+    );
   });
 
   it("rechecks membership on every operation and isolates projects between users", async () => {

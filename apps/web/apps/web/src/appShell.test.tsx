@@ -84,11 +84,12 @@ describe("BuildingAgent shell and primitives via workspace-relative filter", () 
  render(<App />);
 
  expect(screen.getByRole("heading", { name: /restoring your saved session/i })).toBeInTheDocument();
- expect(screen.getByRole("status", { name: /checking your saved buildingagent session/i })).toBeInTheDocument();
- expect(screen.getByText(/startup shell only/i)).toBeInTheDocument();
+ expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toHaveTextContent(/restoring your saved session/i);
+ expect(screen.queryByText(/checking your saved buildingagent session/i)).not.toBeInTheDocument();
+ expect(screen.queryByText(/startup shell only/i)).not.toBeInTheDocument();
  expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada|secret/i);
 
  resolveSession(new Response(JSON.stringify({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }), { status: 200, headers: { "content-type": "application/json" } }));
- expect(await screen.findByRole("heading", { name: /choose an authorized project/i })).toBeInTheDocument();
+ expect(await screen.findByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
  });
 });
