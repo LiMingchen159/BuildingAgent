@@ -1686,18 +1686,18 @@ p {
 
 .workspace-center-block {
   display: grid;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .chat-heading {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .chat-scope-notice {
-  background: var(--color-info-bg);
-  border: 1px solid var(--color-info-border-soft);
-  border-radius: var(--radius-md);
+  background: rgba(37, 99, 235, 0.06);
+  border: 0;
+  border-radius: var(--radius-sm);
   color: var(--color-info-fg);
   font-size: var(--font-size-sm);
   margin: var(--space-1) 0 0;
@@ -1722,9 +1722,10 @@ p {
 }
 
 .composer-quick-action {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-pill);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: var(--font-size-xs);
@@ -2589,31 +2590,83 @@ p {
 
 .cgpt-workspace-shell .workspace-heading {
   border-bottom: 1px solid #ececf1;
+  display: grid;
+  gap: 0.25rem;
   padding-bottom: 1rem;
+}
+
+.cgpt-workspace-shell .workspace-heading h1 {
+  font-size: var(--font-size-xl);
+  letter-spacing: 0;
+  line-height: var(--line-height-snug);
+  margin: 0;
+}
+
+.cgpt-workspace-shell .workspace-tabs {
+  border-bottom: 1px solid #ececf1;
+  gap: var(--space-5);
+}
+
+.cgpt-workspace-shell .workspace-tabs button {
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--color-text-muted);
+  padding: 0 0 var(--space-3);
+}
+
+.cgpt-workspace-shell .workspace-tabs .tab-active {
+  background: transparent;
+  border-bottom: 2px solid var(--color-primary-500);
+  color: var(--color-primary-600);
 }
 
 .cgpt-workspace-shell .message-list {
   background: #ffffff;
   border: 0;
   border-radius: 0;
+  gap: var(--space-4);
   max-height: calc(100vh - 24rem);
+  padding: var(--space-2) 0;
 }
 
 .cgpt-workspace-shell .message {
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   max-width: 48rem;
+  padding: var(--space-4);
 }
 
 .cgpt-workspace-shell .message-assistant {
-  background: #f7f7f8;
+  background: transparent;
   margin-left: 0;
+}
+
+.cgpt-workspace-shell .message-user {
+  background: #f7f7f8;
+  margin-left: auto;
 }
 
 .cgpt-workspace-shell .composer {
   border-top: 1px solid #ececf1;
   padding-top: 1rem;
+}
+
+.cgpt-workspace-shell .composer textarea {
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: var(--radius-lg);
+  min-height: 6rem;
+}
+
+.cgpt-workspace-shell .composer textarea:focus {
+  border-color: rgba(37, 99, 235, 0.55);
+}
+
+.cgpt-workspace-shell .composer-actions > button[type="submit"] {
+  border-radius: var(--radius-sm);
+  box-shadow: none;
 }
 
 @keyframes rotate-cube {
