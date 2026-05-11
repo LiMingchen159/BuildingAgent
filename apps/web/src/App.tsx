@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AppShell, Banner, Card, EmptyState, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
+import { AppShell, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import {
   ApiClientError,
   getChat,
@@ -88,23 +88,45 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
   }
 
   return (
-    <main className="auth-card" aria-labelledby="login-title">
-      <p className="eyebrow">Local seeded access</p>
-      <h1 id="login-title">Sign in to BuildingAgent</h1>
-      <p className="muted">Use the development credentials from the README. Anonymous access is intentionally disabled.</p>
-      {busy ? <p className="inline-status" role="status">Signing in with the local API session boundary…</p> : null}
-      <form className="stack" onSubmit={handleSubmit} aria-busy={busy}>
-        <label>
-          Email
-          <input autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} />
-        </label>
-        <label>
-          Password
-          <input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} />
-        </label>
-        {validation ? <p className="field-error" role="alert">{validation}</p> : null}
-        <button type="submit" disabled={busy} aria-busy={busy}>{busy ? "Signing in…" : "Sign in"}</button>
-      </form>
+    <main className="login-shell" aria-labelledby="login-title">
+      <section className="login-hero" aria-hidden="false">
+        <p className="eyebrow">BuildingAgent</p>
+        <h1 className="login-hero-title">Project-scoped AI assistant for building data</h1>
+        <p className="muted login-hero-tagline">
+          Authenticated, redaction-safe access to placeholder gateway, registry, and capability surfaces — never live customer systems in this build.
+        </p>
+        <ul className="login-hero-points" aria-label="What you get">
+          <li><strong>Mock-only surfaces</strong> until live gateways are wired.</li>
+          <li><strong>Project boundary</strong> enforced on every chat call.</li>
+          <li><strong>Redaction-safe</strong> provider diagnostics out of the box.</li>
+        </ul>
+      </section>
+      <Card className="auth-card login-card" labelledBy="login-title">
+        <p className="eyebrow">Local seeded access</p>
+        <h1 id="login-title">Sign in to BuildingAgent</h1>
+        <p className="muted">Use the development credentials from the README. Anonymous access is intentionally disabled.</p>
+        {busy ? (
+          <p className="inline-status login-status" role="status">
+            <span className="spinner" aria-hidden="true" />
+            Signing in with the local API session boundary…
+          </p>
+        ) : null}
+        <form className="stack" onSubmit={handleSubmit} aria-busy={busy}>
+          <label>
+            Email
+            <Input autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} />
+          </label>
+          <label>
+            Password
+            <Input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} />
+          </label>
+          {validation ? <p className="field-error login-error" role="alert">{validation}</p> : null}
+          <Button type="submit" loading={busy} className="login-submit">
+            {busy ? <span className="spinner" aria-hidden="true" /> : null}
+            {busy ? "Signing in…" : "Sign in"}
+          </Button>
+        </form>
+      </Card>
     </main>
   );
 }
