@@ -2307,3 +2307,20 @@ p {
   font-family: var(--font-family-mono);
   font-weight: var(--font-weight-bold);
 }
+
+.empty-state-with-action {
+  align-items: center;
+  background: var(--color-bg-surface);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  padding: var(--space-4);
+}
+
+.empty-state-with-action p {
+  color: var(--color-text-secondary);
+  margin: 0;
+  max-width: 56ch;
+}

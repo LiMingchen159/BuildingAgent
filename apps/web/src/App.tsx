@@ -8,6 +8,7 @@ import { Repository, buildMockRepositoryItems } from "./ui/Repository";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
+import { buildDemoConversation } from "./ui/demoConversation";
 import {
   ApiClientError,
   getChat,
@@ -328,7 +329,7 @@ function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: st
   );
 }
 
-function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
+function ChatWorkspace({ project, messages, onSend, onLoadDemo, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; onLoadDemo: () => void; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
   const quickActions = ["Upload PDF", "Search KB", "Open Repo", "Analyze Energy", "Inspect Tools"];
@@ -354,7 +355,12 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
       {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
         {messages.length === 0 && busy ? <LoadingSkeleton label="Sending the first project-scoped message…" lines={4} /> : null}
-        {messages.length === 0 && !busy ? <p className="empty-state">No messages yet. Start with a project-scoped question.</p> : null}
+        {messages.length === 0 && !busy ? (
+          <div className="empty-state empty-state-with-action">
+            <p>No messages yet. Start with a project-scoped question, or load a building-domain demo to see the surfaces in action.</p>
+            <Button type="button" variant="secondary" size="sm" onClick={onLoadDemo}>Load demo conversation</Button>
+          </div>
+        ) : null}
         {messages.map((message) => (
           <article className={`message message-${message.role}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
             <span>{message.role === "assistant" ? "Assistant" : message.userId}</span>
@@ -595,6 +601,7 @@ function Workspace({
   activeTab,
   onTabChange,
   onSend,
+  onLoadDemo,
   onSwitchProject,
   onSignOut,
   busy
@@ -610,6 +617,7 @@ function Workspace({
   activeTab: WorkspaceTab;
   onTabChange: (tab: WorkspaceTab) => void;
   onSend: (message: string) => Promise<void>;
+  onLoadDemo: () => void;
   onSwitchProject: () => void;
   onSignOut: () => void;
   busy: boolean;
@@ -643,7 +651,7 @@ function Workspace({
           </button>
         ))}
       </nav>
-      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} onLoadDemo={onLoadDemo} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -852,7 +860,7 @@ export default function App() {
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
-      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onSwitchProject={() => setSelectedProject(null)} onSignOut={() => clearAuth()} busy={busy} /> : null}
+      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onLoadDemo={() => setMessages(buildDemoConversation(selectedProject.id, user?.id ?? "user_demo"))} onSwitchProject={() => setSelectedProject(null)} onSignOut={() => clearAuth()} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );
