@@ -253,3 +253,11 @@
 {"id":"716077ce-ca99-40f7-9e7b-0714a243be7f","ts":"2026-05-10T20:13:03.102Z","severity":"info","message":"UAT requires human execution. Auto-mode will pause after this unit writes the result file.","source":"notify","read":false}
 {"id":"c30e510b-135a-4dc7-ab24-037e82a1c633","ts":"2026-05-10T20:13:08.830Z","severity":"info","message":"Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.","source":"notify","read":false}
 {"id":"1aa713d3-7151-4b52-93c6-be6093a92a43","ts":"2026-05-11T00:00:12.044Z","severity":"info","message":"Auto-mode resumed.","source":"notify","read":false}
+{"id":"dd714df8-c40c-4b82-80da-b49317a316fc","ts":"2026-05-11T00:00:25.224Z","severity":"info","message":"Resume: applied 6 fix(es) to state.","source":"notify","read":false}
+{"id":"3c424f84-25d8-4d00-8771-a7fed6ef2c29","ts":"2026-05-11T00:00:28.568Z","severity":"info","message":"Recovered 16 tool calls from paused session. Resuming with context.","source":"notify","read":false}
+{"id":"fcb02463-3fd5-4662-b467-b297bdf8dbe7","ts":"2026-05-11T00:04:34.935Z","severity":"info","message":"Stuck recovery: artifact for plan-slice M002/S02 found on disk. Invalidating caches.","source":"notify","read":false}
+{"id":"1c7cdda0-4a1d-4126-865b-2049696edb9b","ts":"2026-05-11T00:10:33.388Z","severity":"info","message":"Stuck recovery: artifact for plan-slice M002/S02 found on disk. Invalidating caches.","source":"notify","read":false}
+{"id":"5ff4c906-f10f-445b-bfea-41f88774d3db","ts":"2026-05-11T00:14:47.770Z","severity":"info","message":"Stuck recovery: artifact for plan-slice M002/S02 found on disk. Invalidating caches.","source":"notify","read":false}
+{"id":"9c27723a-b030-46cd-8bf3-4ecaf9468bcf","ts":"2026-05-11T00:18:44.132Z","severity":"info","message":"Stuck recovery: artifact for plan-slice M002/S02 found on disk. Invalidating caches.","source":"notify","read":false}
+{"id":"eb771fdd-027f-4e9f-b111-779e84e47b7b","ts":"2026-05-11T00:22:38.645Z","severity":"info","message":"Stuck recovery: artifact for plan-slice M002/S02 found on disk. Invalidating caches.","source":"notify","read":false}
+{"id":"295986bf-23f0-4dac-9206-3b22d65ace00","ts":"2026-05-11T00:26:00.481Z","severity":"info","message":"Stuck recovery: artifact for plan-slice M002/S02 found on disk. Invalidating caches.","source":"notify","read":false}
