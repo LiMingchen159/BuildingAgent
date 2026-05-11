@@ -2348,8 +2348,16 @@ p {
   width: 100%;
 }
 
+.minimal-auth-shell::before,
+.minimal-auth-shell::after,
+.minimal-project-shell::before,
+.minimal-project-shell::after {
+  content: none;
+}
+
 .minimal-particle-field {
   height: 100%;
+  opacity: 0.72;
   inset: 0;
   pointer-events: none;
   position: absolute;
@@ -2361,7 +2369,7 @@ p {
   display: grid;
   gap: 2rem;
   max-width: 24rem;
-  padding: 2rem;
+  padding: 2rem 2.25rem;
   width: min(100%, 24rem);
 }
 
@@ -2373,7 +2381,7 @@ p {
 }
 
 .cube-logo-face {
-  border: 1px solid rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(17, 24, 39, 0.28);
   height: 100%;
   inset: 0;
   position: absolute;
@@ -2478,6 +2486,15 @@ p {
   display: flex;
   gap: 1rem;
   justify-content: space-between;
+}
+
+.minimal-auth-links span {
+  color: #737373;
+  transition: color var(--duration-base) var(--easing-standard);
+}
+
+.minimal-auth-links span:hover {
+  color: #171717;
 }
 
 .minimal-project-shell {

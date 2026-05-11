@@ -129,8 +129,8 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
             {busy ? "Connecting..." : "Initialize"}
           </Button>
           <div className="minimal-auth-links" aria-label="Seeded demo guidance">
-            <span>Seeded local demo</span>
-            <span>Anonymous disabled</span>
+            <span>Recover key</span>
+            <span>Request access</span>
           </div>
         </form>
       </section>
