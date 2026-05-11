@@ -864,7 +864,7 @@ export default function App() {
 
   return (
     <AppShell authenticated={authenticated} onSignOut={() => clearAuth()} variant={shellVariant}>
-      {banner ? <Banner {...banner} /> : null}
+      {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} onSignOut={() => clearAuth()} busy={busy} /> : null}

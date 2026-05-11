@@ -373,8 +373,7 @@ textarea {
 }
 
 .auth-card,
-.workspace-card,
-.banner {
+.workspace-card {
   background: var(--color-bg-surface-raised);
   border: 1px solid var(--color-border-faint);
   border-radius: var(--radius-2xl);
@@ -426,28 +425,99 @@ h2 {
   line-height: var(--line-height-normal);
 }
 
-.banner {
-  margin-bottom: var(--space-4);
-  padding: var(--space-4) var(--space-5);
+.banner,
+.toast {
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  left: auto;
+  margin: 0;
+  max-width: min(24rem, calc(100vw - 2rem));
+  padding: 0.75rem 0.85rem;
+  position: fixed;
+  right: 1rem;
+  top: 1rem;
+  width: max-content;
+  z-index: 1000;
 }
 
-.banner p {
-  margin-bottom: 0;
+.toast-dot {
+  background: var(--color-info-fg);
+  border-radius: 999px;
+  height: 0.45rem;
+  margin-top: 0.45rem;
+  width: 0.45rem;
 }
 
-.banner-error {
-  background: var(--color-danger-bg);
-  border-color: var(--color-danger-border);
+.toast-body {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
 }
 
-.banner-info {
-  background: var(--color-info-bg);
-  border-color: var(--color-info-border);
+.toast-title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
 }
 
-.banner-success {
-  background: var(--color-success-bg);
-  border-color: var(--color-success-border);
+.toast-message {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  margin: 0;
+}
+
+.toast .diagnostic-line {
+  grid-column: 2 / 3;
+  margin-top: 0;
+}
+
+.toast-dismiss {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.85rem;
+  grid-column: 3;
+  grid-row: 1;
+  height: 1.35rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.35rem;
+}
+
+.toast-dismiss:hover,
+.toast-dismiss:focus-visible {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--color-text-primary);
+  transform: none;
+}
+
+.toast-error .toast-dot {
+  background: var(--color-danger-fg);
+}
+
+.toast-success .toast-dot {
+  background: var(--color-success-fg);
+}
+
+.toast-warning .toast-dot {
+  background: var(--color-accent-amber-strong);
+}
+
+.toast-info .toast-dot {
+  background: var(--color-info-fg);
 }
 
 .diagnostic-line {
@@ -702,10 +772,18 @@ h2 {
   }
 
   .auth-card,
-  .workspace-card,
-  .banner {
+  .workspace-card {
     border-radius: 20px;
     padding: 1.25rem;
+  }
+
+  .banner,
+  .toast {
+    left: 1rem;
+    max-width: calc(100vw - 2rem);
+    right: 1rem;
+    top: 0.75rem;
+    width: auto;
   }
 }
 
