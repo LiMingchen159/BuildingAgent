@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AppShell, Badge, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
+import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
+import { WorkspaceShell } from "./ui/WorkspaceShell";
 import {
   ApiClientError,
   getChat,
@@ -323,6 +324,7 @@ function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: st
 function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
+  const quickActions = ["Upload PDF", "Search KB", "Open Repo", "Analyze Energy", "Inspect Tools"];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -336,10 +338,11 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
 
   return (
     <section className="chat-shell" aria-labelledby="chat-title">
-      <div>
+      <div className="chat-heading">
         <p className="eyebrow">Selected project</p>
         <h2 id="chat-title">{project.name} chat</h2>
         <p className="muted">Project id: <strong>{project.id}</strong></p>
+        <p className="chat-scope-notice" role="note">I can only access data within this project.</p>
       </div>
       {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
@@ -354,7 +357,18 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
       <form className="composer" onSubmit={handleSubmit}>
         <label htmlFor="chat-message">Message</label>
         <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project…" : "This project is read-only for your account."} />
-        <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending…" : "Send message"}</button>
+        <div className="composer-actions">
+          <ul className="composer-quick-actions" aria-label="Quick actions (placeholder)">
+            {quickActions.map((label) => (
+              <li key={label}>
+                <button type="button" className="composer-quick-action" disabled aria-disabled="true" title="Quick action placeholder">
+                  {label}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy}>{busy ? "Sending…" : "Send message"}</button>
+        </div>
       </form>
       {!canWrite ? <p className="field-error" role="status">This project does not grant chat write permission.</p> : null}
     </section>
@@ -426,8 +440,138 @@ function BuildingDomainPanel({ registry, management }: { registry: RegistryRespo
   );
 }
 
+function WorkspaceSidebarBlock({
+  project,
+  projects,
+  user,
+  onSwitchProject,
+  onSignOut,
+  onNewChat
+}: {
+  project: ProjectSummary;
+  projects: ProjectSummary[];
+  user: UserSummary | null;
+  onSwitchProject: () => void;
+  onSignOut: () => void;
+  onNewChat: () => void;
+}) {
+  const otherProjects = projects.filter((candidate) => candidate.id !== project.id).slice(0, 5);
+  const conversationStubs: Array<{ id: string; title: string }> = [
+    { id: "stub-1", title: "Energy baseline placeholder review" },
+    { id: "stub-2", title: "Gateway provisioning checklist" },
+    { id: "stub-3", title: "Tooling audit notes" }
+  ];
+
+  return (
+    <div className="workspace-sidebar-block">
+      <div className="workspace-sidebar-brand">
+        <span className="brand-mark" aria-hidden="true">BA</span>
+        <span className="brand-name">BuildingAgent</span>
+      </div>
+      <Button variant="primary" size="sm" onClick={onNewChat} className="workspace-sidebar-new-chat">
+        + New chat
+      </Button>
+      <div className="workspace-sidebar-section">
+        <p className="workspace-sidebar-eyebrow">Active project</p>
+        <div className="workspace-sidebar-current-project">
+          <strong>{project.name}</strong>
+          <span className="project-card-id">{project.id}</span>
+          {otherProjects.length > 0 ? (
+            <Button variant="secondary" size="sm" onClick={onSwitchProject} className="workspace-sidebar-switch">
+              Switch project
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <div className="workspace-sidebar-section">
+        <p className="workspace-sidebar-eyebrow">Conversation history</p>
+        <ul className="workspace-sidebar-history" aria-label="Recent conversations (placeholder)">
+          {conversationStubs.map((stub) => (
+            <li key={stub.id}>
+              <button type="button" className="workspace-sidebar-history-item" disabled aria-disabled="true" title="Conversation history placeholder">
+                {stub.title}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <MockOnlyBadge kind="placeholder" label="History is mock-only" />
+      </div>
+      <div className="workspace-sidebar-section">
+        <p className="workspace-sidebar-eyebrow">Shortcuts</p>
+        <ul className="workspace-sidebar-shortcuts">
+          <li>
+            <button type="button" className="workspace-sidebar-shortcut" disabled aria-disabled="true">Knowledge base</button>
+          </li>
+          <li>
+            <button type="button" className="workspace-sidebar-shortcut" disabled aria-disabled="true">Repository</button>
+          </li>
+        </ul>
+      </div>
+      <div className="workspace-sidebar-account" aria-label="Account">
+        <div className="workspace-sidebar-account-row">
+          <Avatar name={user?.name ?? "Local user"} size="md" />
+          <div className="workspace-sidebar-account-info">
+            <strong>{user?.name ?? "Local user"}</strong>
+            <span>{user?.id ?? "local-user"}</span>
+          </div>
+        </div>
+        <details className="workspace-sidebar-account-menu">
+          <summary aria-label="Account menu">Account menu</summary>
+          <ul>
+            <li><button type="button" disabled aria-disabled="true">LLM API key (placeholder)</button></li>
+            <li><button type="button" disabled aria-disabled="true">Base URL (placeholder)</button></li>
+            <li><button type="button" disabled aria-disabled="true">Model (placeholder)</button></li>
+            <li><button type="button" disabled aria-disabled="true">Settings (placeholder)</button></li>
+            <li><button type="button" onClick={onSignOut}>Switch account</button></li>
+          </ul>
+        </details>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceRightPanel({ registry, management }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null }) {
+  const skillCount = registry?.skills.length ?? 0;
+  const toolCount = management?.tools.length ?? registry?.tools.length ?? 0;
+  return (
+    <div className="workspace-right-block">
+      <details className="workspace-right-section" open>
+        <summary>
+          <span>Scheduled &amp; rule-based tasks</span>
+          <Badge tone="warning">Mock</Badge>
+        </summary>
+        <EmptyState title="No scheduled tasks">Task scheduling is not wired yet. Future slices will surface mock cron and rule-based entries here.</EmptyState>
+      </details>
+      <details className="workspace-right-section" open>
+        <summary>
+          <span>Skills</span>
+          <Badge tone="primary">{skillCount}</Badge>
+        </summary>
+        {skillCount > 0 ? (
+          <p className="workspace-right-summary">{skillCount} skill placeholder{skillCount === 1 ? "" : "s"} loaded. Open the Platform Registry tab for details.</p>
+        ) : (
+          <EmptyState title="No skills">No skill placeholders returned.</EmptyState>
+        )}
+      </details>
+      <details className="workspace-right-section" open>
+        <summary>
+          <span>Tools</span>
+          <Badge tone="info">{toolCount}</Badge>
+        </summary>
+        {toolCount > 0 ? (
+          <p className="workspace-right-summary">{toolCount} tool placeholder{toolCount === 1 ? "" : "s"} loaded. Open the Building Domain tab for details.</p>
+        ) : (
+          <EmptyState title="No tools">No tool placeholders returned.</EmptyState>
+        )}
+      </details>
+    </div>
+  );
+}
+
 function Workspace({
   project,
+  projects,
+  user,
   messages,
   providerDiagnostics,
   providerRequestId,
@@ -436,9 +580,13 @@ function Workspace({
   activeTab,
   onTabChange,
   onSend,
+  onSwitchProject,
+  onSignOut,
   busy
 }: {
   project: ProjectSummary;
+  projects: ProjectSummary[];
+  user: UserSummary | null;
   messages: ChatMessage[];
   providerDiagnostics: ChatProviderDiagnostics | null;
   providerRequestId: string | undefined;
@@ -447,6 +595,8 @@ function Workspace({
   activeTab: WorkspaceTab;
   onTabChange: (tab: WorkspaceTab) => void;
   onSend: (message: string) => Promise<void>;
+  onSwitchProject: () => void;
+  onSignOut: () => void;
   busy: boolean;
 }) {
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
@@ -456,8 +606,8 @@ function Workspace({
     { id: "building", label: "Building Domain" }
   ];
 
-  return (
-    <main className="workspace-card workspace-management" aria-labelledby="workspace-title">
+  const center = (
+    <div className="workspace-center-block" aria-labelledby="workspace-title">
       <div className="workspace-heading">
         <div>
           <p className="eyebrow">Selected project</p>
@@ -477,7 +627,29 @@ function Workspace({
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
       {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
       {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
-    </main>
+    </div>
+  );
+
+  return (
+    <div className="workspace-card workspace-management">
+      <WorkspaceShell
+        leftLabel="Project sidebar"
+        centerLabel="Workspace content"
+        rightLabel="Workspace details"
+        left={
+          <WorkspaceSidebarBlock
+            project={project}
+            projects={projects}
+            user={user}
+            onSwitchProject={onSwitchProject}
+            onSignOut={onSignOut}
+            onNewChat={() => onTabChange("chat")}
+          />
+        }
+        center={center}
+        right={<WorkspaceRightPanel registry={registry} management={management} />}
+      />
+    </div>
   );
 }
 
@@ -654,7 +826,7 @@ export default function App() {
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
       {!bootstrapping && authenticated && !selectedProject ? <ProjectScreen projects={projects} onSelect={handleProjectSelect} busy={busy} /> : null}
-      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} busy={busy} /> : null}
+      {!bootstrapping && authenticated && selectedProject ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onSwitchProject={() => setSelectedProject(null)} onSignOut={() => clearAuth()} busy={busy} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );
