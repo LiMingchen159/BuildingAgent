@@ -646,7 +646,10 @@ function Workspace({
           <h1 id="workspace-title">{project.name} workspace</h1>
           <p className="muted">Project id: <strong>{project.id}</strong></p>
         </div>
-        <MockOnlyBadge kind="inspection" />
+        <span className="workspace-scope-label">
+          <span className="visually-hidden">Inspection surfaces are placeholder-only</span>
+          <span aria-hidden="true">Project data only</span>
+        </span>
       </div>
       <nav className="workspace-tabs" aria-label="Workspace panels">
         {tabs.map((tab) => (

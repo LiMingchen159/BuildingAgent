@@ -2606,6 +2606,7 @@ p {
 
 .cgpt-workspace {
   height: 100vh;
+  overflow: hidden;
   width: 100%;
 }
 
@@ -2616,6 +2617,7 @@ p {
   box-shadow: none;
   grid-template-columns: 260px minmax(0, 1fr) 320px;
   height: 100vh;
+  overflow: hidden;
 }
 
 .cgpt-workspace-shell .workspace-sidebar,
@@ -2635,14 +2637,42 @@ p {
 }
 
 .cgpt-workspace-shell .workspace-sidebar-inner,
+.cgpt-workspace-shell .workspace-center-inner,
 .cgpt-workspace-shell .workspace-right-inner {
+  scrollbar-color: rgba(15, 23, 42, 0.22) transparent;
+  scrollbar-width: thin;
   overflow-y: auto;
 }
 
+.cgpt-workspace-shell .workspace-sidebar-inner::-webkit-scrollbar,
+.cgpt-workspace-shell .workspace-center-inner::-webkit-scrollbar,
+.cgpt-workspace-shell .workspace-right-inner::-webkit-scrollbar,
+.cgpt-workspace-shell .workspace-tabs::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
+.cgpt-workspace-shell .workspace-sidebar-inner::-webkit-scrollbar-thumb,
+.cgpt-workspace-shell .workspace-center-inner::-webkit-scrollbar-thumb,
+.cgpt-workspace-shell .workspace-right-inner::-webkit-scrollbar-thumb,
+.cgpt-workspace-shell .workspace-tabs::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+}
+
+.cgpt-workspace-shell .workspace-sidebar-inner::-webkit-scrollbar-track,
+.cgpt-workspace-shell .workspace-center-inner::-webkit-scrollbar-track,
+.cgpt-workspace-shell .workspace-right-inner::-webkit-scrollbar-track,
+.cgpt-workspace-shell .workspace-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .cgpt-workspace-shell .workspace-heading {
+  align-items: flex-start;
   border-bottom: 1px solid #ececf1;
-  display: grid;
-  gap: 0.25rem;
+  display: flex;
+  gap: var(--space-4);
+  justify-content: space-between;
   padding-bottom: 1rem;
 }
 
@@ -2655,7 +2685,10 @@ p {
 
 .cgpt-workspace-shell .workspace-tabs {
   border-bottom: 1px solid #ececf1;
-  gap: var(--space-5);
+  flex-wrap: nowrap;
+  gap: var(--space-4);
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .cgpt-workspace-shell .workspace-tabs button {
@@ -2663,7 +2696,20 @@ p {
   border-radius: 0;
   box-shadow: none;
   color: var(--color-text-muted);
+  flex: 0 0 auto;
+  font-size: var(--font-size-sm);
   padding: 0 0 var(--space-3);
+}
+
+.workspace-scope-label {
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 0.2rem 0.45rem;
 }
 
 .cgpt-workspace-shell .workspace-tabs .tab-active {
@@ -2758,6 +2804,7 @@ p {
   .cgpt-workspace-shell .workspace-right {
     border-bottom: 1px solid #e5e5e5;
     border-right: 0;
+    max-height: none;
   }
 
   .cgpt-workspace-shell .workspace-sidebar-inner,
@@ -2792,11 +2839,6 @@ p {
 
   .cgpt-workspace-shell .workspace-tabs {
     gap: var(--space-3);
-    overflow-x: auto;
-  }
-
-  .cgpt-workspace-shell .workspace-tabs button {
-    flex: 0 0 auto;
   }
 }
 
