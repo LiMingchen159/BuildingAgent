@@ -21,6 +21,10 @@ import {
   type ProviderEnv,
   type ProviderMetadata
 } from "./providers.js";
+import { createGenericToolRegistry } from "./agent/genericTools.js";
+import { AgentMemoryStore } from "./agent/memory.js";
+import { AgentRuntime } from "./agent/runtime.js";
+import { createGenericSkillRegistry } from "./agent/skills.js";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -102,6 +106,16 @@ function chatHistoryForProvider(messages: ChatMessage[]): Array<{ role: "user" |
   return messages.map((message) => ({ role: message.role, content: message.content }));
 }
 
+function providerErrorCode(error: unknown): string {
+  if (error instanceof ProviderError) {
+    return error.code;
+  }
+  if (typeof error === "object" && error !== null && "code" in error && typeof (error as { code?: unknown }).code === "string") {
+    return (error as { code: string }).code;
+  }
+  return "provider_unknown_error";
+}
+
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? createSeedStore();
   const env = options.env ?? process.env;
@@ -112,6 +126,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   messageSequence = 0;
 
   const provider = options.chatProvider ?? providerResolver(env);
+  const memory = new AgentMemoryStore();
+  const skills = createGenericSkillRegistry();
+  const tools = createGenericToolRegistry(memory);
+  const agentRuntime = new AgentRuntime({ memory, tools, skills });
   const app = Fastify({
     logger: false,
     genReqId: (() => {
@@ -195,8 +213,32 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     return {
       runtimeProviders: boundedPlaceholderList(store.runtimeProviders, store),
-      tools: boundedPlaceholderList(store.tools, store),
-      skills: boundedPlaceholderList(store.skills, store),
+      tools: boundedPlaceholderList(
+        [
+          ...store.tools,
+          ...tools.list().map((tool) => ({
+            id: `agent_${tool.name}`,
+            name: tool.schema.name,
+            category: tool.category === "memory" || tool.category === "session" || tool.category === "utility" ? "analysis" as const : "building" as const,
+            status: "mock" as const,
+            description: tool.description
+          }))
+        ],
+        store
+      ),
+      skills: boundedPlaceholderList(
+        [
+          ...store.skills,
+          ...skills.list().map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            domain: skill.domain,
+            status: "mock" as const,
+            description: skill.description
+          }))
+        ],
+        store
+      ),
       gateways: boundedPlaceholderList(store.gateways, store),
       buildingCapabilities: boundedPlaceholderList(store.buildingCapabilities, store),
       limit: store.maxListSize,
@@ -336,13 +378,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[request.params.projectId] = messages;
 
-    let completion;
+    let agentTurn;
     try {
-      completion = await provider.complete({
+      agentTurn = await agentRuntime.runTurn({
         projectId: request.params.projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
-        messages: chatHistoryForProvider(messages)
+        messages,
+        providerMessages: chatHistoryForProvider(messages),
+        provider
       });
     } catch (error) {
       if (!allowProviderFallback) {
@@ -355,13 +399,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         "Chat provider failed; using deterministic fallback"
       );
       const fallbackProvider = createDeterministicMockProvider(
-        error instanceof ProviderError ? error.code : "provider_unknown_error"
+        providerErrorCode(error)
       );
-      completion = await fallbackProvider.complete({
+      agentTurn = await agentRuntime.runTurn({
         projectId: request.params.projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
-        messages: chatHistoryForProvider(messages)
+        messages,
+        providerMessages: chatHistoryForProvider(messages),
+        provider: fallbackProvider
       });
     }
 
@@ -370,7 +416,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId: request.params.projectId,
       userId: session.userId,
       role: "assistant",
-      content: completion.text
+      content: agentTurn.completion.text
     };
     messages.push(assistantMessage);
     trimChatMessages(messages, store.maxChatMessages);
@@ -379,8 +425,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return reply.status(201).send({
       message,
       assistantMessage,
-      provider: providerDiagnostics(completion.provider, completion.fallbackUsed),
-      fallbackUsed: completion.fallbackUsed,
+      provider: providerDiagnostics(agentTurn.completion.provider, agentTurn.completion.fallbackUsed),
+      fallbackUsed: agentTurn.completion.fallbackUsed,
+      lifecycle: agentTurn.events,
       requestId: requestIdFor(request)
     });
   });

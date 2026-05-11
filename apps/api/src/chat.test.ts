@@ -90,6 +90,11 @@ describe("project-scoped chat contract", () => {
         fallbackUsed: false
       },
       fallbackUsed: false,
+      lifecycle: expect.arrayContaining([
+        expect.objectContaining({ type: "user_message_received" }),
+        expect.objectContaining({ type: "provider_started" }),
+        expect.objectContaining({ type: "assistant_message_completed" })
+      ]),
       requestId: expect.stringMatching(/^req_/)
     });
     expect(calls).toHaveLength(1);
@@ -142,6 +147,7 @@ describe("project-scoped chat contract", () => {
         fallbackUsed: true
       },
       fallbackUsed: true,
+      lifecycle: expect.arrayContaining([expect.objectContaining({ type: "provider_started" })]),
       requestId: expect.stringMatching(/^req_/)
     });
   });
@@ -254,8 +260,31 @@ describe("project-scoped chat contract", () => {
         status: "fallback",
         fallbackUsed: true
       },
-      fallbackUsed: true
+      fallbackUsed: true,
+      lifecycle: expect.arrayContaining([expect.objectContaining({ type: "provider_started" })])
     });
+    assertNoSecrets(response.json());
+  });
+
+  it("runs explicit memory commands through the agent lifecycle", async () => {
+    const app = buildServer({ env: {} });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Remember: Alpha prefers concise weekly summaries" }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().lifecycle).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "tool_started", metadata: expect.objectContaining({ tool: "memory_remember" }) }),
+        expect.objectContaining({ type: "tool_completed", metadata: expect.objectContaining({ tool: "memory_remember" }) }),
+        expect.objectContaining({ type: "memory_synced" })
+      ])
+    );
     assertNoSecrets(response.json());
   });
 

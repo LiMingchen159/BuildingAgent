@@ -989,13 +989,33 @@ export default function App() {
       return;
     }
     setBusy(true);
+    const optimisticUser: ChatMessage = {
+      id: `pending_user_${Date.now()}`,
+      projectId: selectedProject.id,
+      userId: user?.id ?? "local-user",
+      role: "user",
+      content: message.trim()
+    };
+    const optimisticAssistant: ChatMessage = {
+      id: `pending_assistant_${Date.now()}`,
+      projectId: selectedProject.id,
+      userId: user?.id ?? "local-user",
+      role: "assistant",
+      content: "Thinking..."
+    };
+    setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
     try {
       const posted = await sendChatMessage(token, selectedProject.id, message.trim());
-      setMessages((current) => [...current, posted.message, posted.assistantMessage]);
+      setMessages((current) => [
+        ...current.filter((item) => item.id !== optimisticUser.id && item.id !== optimisticAssistant.id),
+        posted.message,
+        posted.assistantMessage
+      ]);
       setChatProviderDiagnostics(posted.provider);
       setChatProviderRequestId(posted.requestId);
       setBanner({ tone: "success", title: "Message sent", message: "The assistant response is ready with redaction-safe provider diagnostics.", requestId: posted.requestId });
     } catch (error) {
+      setMessages((current) => current.filter((item) => item.id !== optimisticUser.id && item.id !== optimisticAssistant.id));
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
       } else {

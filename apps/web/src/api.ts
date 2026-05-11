@@ -60,11 +60,19 @@ export interface ChatProviderDiagnostics {
   fallbackReason?: string | undefined;
 }
 
+export interface ChatLifecycleEvent {
+  type: string;
+  message: string;
+  at: string;
+  metadata?: Record<string, string | number | boolean> | undefined;
+}
+
 export interface SendChatResponse {
   message: ChatMessage;
   assistantMessage: ChatMessage;
   provider: ChatProviderDiagnostics;
   fallbackUsed: boolean;
+  lifecycle?: ChatLifecycleEvent[] | undefined;
   requestId: string;
 }
 
@@ -426,6 +434,26 @@ function parseProviderDiagnostics(value: unknown, fallbackUsed: boolean): ChatPr
   };
 }
 
+function parseLifecycleEvents(value: unknown): ChatLifecycleEvent[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw malformed("Chat post returned unexpected lifecycle events.");
+  }
+  return value.map((event) => {
+    if (!isRecord(event) || typeof event.type !== "string" || typeof event.message !== "string" || typeof event.at !== "string") {
+      throw malformed("Chat post returned unexpected lifecycle events.");
+    }
+    return {
+      type: event.type,
+      message: event.message,
+      at: event.at,
+      ...(isRecord(event.metadata) ? { metadata: event.metadata as Record<string, string | number | boolean> } : {})
+    };
+  });
+}
+
 export async function sendChatMessage(token: string, projectId: string, message: string): Promise<SendChatResponse> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/chat`, {
     method: "POST",
@@ -443,11 +471,13 @@ export async function sendChatMessage(token: string, projectId: string, message:
   if (assistantMessage.role !== "assistant") {
     throw malformed("Chat post returned an unexpected assistant message.");
   }
+  const lifecycle = parseLifecycleEvents(payload.lifecycle);
   return {
     message: userMessage,
     assistantMessage,
     provider: parseProviderDiagnostics(payload.provider, payload.fallbackUsed),
     fallbackUsed: payload.fallbackUsed,
+    ...(lifecycle ? { lifecycle } : {}),
     requestId: payload.requestId
   };
 }
