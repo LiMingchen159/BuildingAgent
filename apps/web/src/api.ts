@@ -35,12 +35,21 @@ export interface ProjectSummary {
   permissions: string[];
 }
 
+export interface ChatMessageImage {
+  src: string;
+  alt: string;
+  filename?: string | undefined;
+  capturedAt?: string | undefined;
+  source?: string | undefined;
+}
+
 export interface ChatMessage {
   id: string;
   projectId: string;
   userId: string;
   role: "user" | "assistant";
   content: string;
+  images?: ChatMessageImage[] | undefined;
 }
 
 export interface ChatProviderDiagnostics {
@@ -369,7 +378,36 @@ function parseChatMessage(value: unknown, message: string): ChatMessage {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || typeof value.userId !== "string" || (value.role !== "user" && value.role !== "assistant") || typeof value.content !== "string") {
     throw malformed(message);
   }
-  return { id: value.id, projectId: value.projectId, userId: value.userId, role: value.role, content: value.content };
+  const images = parseChatMessageImages(value.images, message);
+  return {
+    id: value.id,
+    projectId: value.projectId,
+    userId: value.userId,
+    role: value.role,
+    content: value.content,
+    ...(images ? { images } : {})
+  };
+}
+
+function parseChatMessageImages(value: unknown, message: string): ChatMessageImage[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw malformed(message);
+  }
+  return value.map((entry) => {
+    if (!isRecord(entry) || typeof entry.src !== "string" || typeof entry.alt !== "string") {
+      throw malformed(message);
+    }
+    return {
+      src: entry.src,
+      alt: entry.alt,
+      ...(typeof entry.filename === "string" ? { filename: entry.filename } : {}),
+      ...(typeof entry.capturedAt === "string" ? { capturedAt: entry.capturedAt } : {}),
+      ...(typeof entry.source === "string" ? { source: entry.source } : {})
+    };
+  });
 }
 
 function parseProviderDiagnostics(value: unknown, fallbackUsed: boolean): ChatProviderDiagnostics {

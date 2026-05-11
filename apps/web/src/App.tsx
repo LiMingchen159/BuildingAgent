@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, LoadingSkeleton, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
+import { Markdown } from "./ui/Markdown";
+import { ChatImageGallery } from "./ui/ChatImageGallery";
 import {
   ApiClientError,
   getChat,
@@ -350,7 +352,8 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId }:
         {messages.map((message) => (
           <article className={`message message-${message.role}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
             <span>{message.role === "assistant" ? "Assistant" : message.userId}</span>
-            <p>{message.content}</p>
+            {message.role === "assistant" ? <Markdown source={message.content} /> : <p>{message.content}</p>}
+            {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
           </article>
         ))}
       </section>
