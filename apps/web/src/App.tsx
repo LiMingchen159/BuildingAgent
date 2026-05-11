@@ -653,7 +653,11 @@ function Workspace({
     <div className="workspace-center-block" aria-labelledby="workspace-title">
       <div className="workspace-heading">
         <div className="workspace-heading-title">
-          <button type="button" className="workspace-panel-toggle" aria-label="Project sidebar">|||</button>
+          <button type="button" className="workspace-panel-toggle" aria-label="Project sidebar">
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </button>
           <div>
             <h1 id="workspace-title">{project.name} workspace</h1>
             <p>Project id: <strong>{project.id}</strong></p>
@@ -665,7 +669,11 @@ function Workspace({
             <span aria-hidden="true">Project data only</span>
           </span>
           <button type="button" className="workspace-icon-button" aria-label="Workspace information">i</button>
-          <button type="button" className="workspace-icon-button" aria-label="Workspace details">||</button>
+          <button type="button" className="workspace-panel-toggle workspace-panel-toggle-right" aria-label="Workspace details">
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </button>
         </div>
       </div>
       <nav className="workspace-tabs" aria-label="Workspace panels">
