@@ -9,6 +9,7 @@ import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
 import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
 import { parseCancelCommand, parseListCommand, parseTimeExpression, nextCronTime } from "../scheduler.js";
+import type { ProcessRegistry } from "./processRegistry.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_READ_BYTES = 200_000;
@@ -39,7 +40,7 @@ function resolveSafePath(baseRoot: string, requested: string): string | null {
   return normalized;
 }
 
-export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService): AgentToolRegistry {
+export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService, processRegistry?: ProcessRegistry): AgentToolRegistry {
   const registry = new AgentToolRegistry();
   const tools: AgentTool[] = [
     {
@@ -738,6 +739,128 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           default:
             return { error: `Unknown action: ${action}. Supported: list, get, create, update, pause, resume, remove, trigger.` };
         }
+      }
+    },
+
+    // --- Background process management tools ---
+    {
+      name: "process_start",
+      category: "utility",
+      description: "Start a command in the background. Returns a process_id for status checking and control.",
+      schema: {
+        name: "process_start",
+        description: "Run a shell command in the background. Use for long-running tasks. Returns a process_id for use with process_status/process_kill.",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string", description: "Shell command to run in the background." }
+          },
+          required: ["command"]
+        }
+      },
+      async run(args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const command = textArg(args, "command");
+        if (!command) return { error: "command is required." };
+        const processId = processRegistry.spawn(command);
+        const info = processRegistry.status(processId);
+        return {
+          processId,
+          command,
+          status: info?.status ?? "running",
+          startedAt: info?.startedAt ?? new Date().toISOString()
+        };
+      }
+    },
+    {
+      name: "process_status",
+      category: "utility",
+      description: "Get the current status and output of a background process.",
+      schema: {
+        name: "process_status",
+        description: "Check the status of a background process. Returns stdout, stderr, exit code, and status.",
+        parameters: {
+          type: "object",
+          properties: {
+            process_id: { type: "string", description: "Process ID from process_start." }
+          },
+          required: ["process_id"]
+        }
+      },
+      async run(args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const processId = typeof args.process_id === "string" ? args.process_id : "";
+        if (!processId) return { error: "process_id is required." };
+        const info = processRegistry.status(processId);
+        if (!info) return { error: `Process not found: ${processId}` };
+        return {
+          processId: info.processId,
+          status: info.status,
+          command: info.command,
+          stdout: info.stdout.slice(-5000),
+          stderr: info.stderr.slice(-5000),
+          exitCode: info.exitCode,
+          startedAt: info.startedAt,
+          finishedAt: info.finishedAt
+        };
+      }
+    },
+    {
+      name: "process_kill",
+      category: "utility",
+      description: "Terminate a running background process.",
+      schema: {
+        name: "process_kill",
+        description: "Kill a background process by its process_id.",
+        parameters: {
+          type: "object",
+          properties: {
+            process_id: { type: "string", description: "Process ID from process_start." }
+          },
+          required: ["process_id"]
+        }
+      },
+      async run(args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const processId = typeof args.process_id === "string" ? args.process_id : "";
+        if (!processId) return { error: "process_id is required." };
+        const ok = processRegistry.kill(processId);
+        return ok
+          ? { killed: true, processId }
+          : { error: `Could not kill process: ${processId}. It may have already finished.` };
+      }
+    },
+    {
+      name: "process_list",
+      category: "utility",
+      description: "List all background processes (newest first).",
+      schema: {
+        name: "process_list",
+        description: "List all background processes and their statuses.",
+        parameters: { type: "object", properties: {} }
+      },
+      async run(_args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const processes = processRegistry.list();
+        return {
+          processes: processes.map((p) => ({
+            processId: p.processId,
+            command: p.command.slice(0, 100),
+            status: p.status,
+            exitCode: p.exitCode,
+            startedAt: p.startedAt,
+            finishedAt: p.finishedAt
+          })),
+          count: processes.length
+        };
       }
     }
   ];

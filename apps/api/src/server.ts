@@ -23,6 +23,7 @@ import {
 } from "./providers.js";
 import { createGenericToolRegistry } from "./agent/genericTools.js";
 import { AgentMemoryStore } from "./agent/memory.js";
+import { ProcessRegistry } from "./agent/processRegistry.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
@@ -207,7 +208,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   });
   scheduler.start();
 
-  const tools = createGenericToolRegistry(memory, scheduler);
+  const processRegistry = new ProcessRegistry();
+  const tools = createGenericToolRegistry(memory, scheduler, processRegistry);
   tools.enableLogging(path.join(knowledgeBaseRoot(env), "..", "data"));
   const agentRuntime = new AgentRuntime({ memory, tools, skills });
   const kbRoot = knowledgeBaseRoot(env);
