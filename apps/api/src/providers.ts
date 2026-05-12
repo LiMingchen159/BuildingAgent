@@ -1,8 +1,11 @@
-export type ChatRole = "system" | "user" | "assistant";
+export type ChatRole = "system" | "user" | "assistant" | "tool";
 
 export interface ProviderChatMessage {
   role: ChatRole;
-  content: string;
+  content: string | null;
+  tool_calls?: ChatToolCall[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface ProviderMetadata {
@@ -19,10 +22,48 @@ export interface ChatCompletionRequest {
   userId: string;
   requestId: string;
   signal?: AbortSignal;
+  tools?: ChatToolDefinition[];
+  toolChoice?: "auto" | "none" | "required";
+  stream?: boolean;
 }
 
 export interface ChatCompletionResult {
   text: string;
+  toolCalls?: ChatToolCall[];
+  provider: ProviderMetadata;
+  fallbackUsed: boolean;
+}
+
+export interface ChatToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+  };
+}
+
+export interface ChatToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface ChatCompletionDelta {
+  content?: string;
+  toolCalls?: ChatToolCall[];
+}
+
+export interface ChatCompletionStreamResult {
+  text: string;
+  toolCalls: ChatToolCall[];
   provider: ProviderMetadata;
   fallbackUsed: boolean;
 }
@@ -30,6 +71,7 @@ export interface ChatCompletionResult {
 export interface ChatProvider {
   metadata: ProviderMetadata;
   complete(request: ChatCompletionRequest): Promise<ChatCompletionResult>;
+  completeStream?(request: ChatCompletionRequest): AsyncIterable<ChatCompletionDelta>;
 }
 
 export interface ProviderErrorOptions {
@@ -134,6 +176,64 @@ export function createDeterministicMockProvider(reason = "local_default"): ChatP
   };
 }
 
+export function createDeterministicMockProviderWithTools(overrides: Partial<ChatProvider> = {}): ChatProvider {
+  const metadata: ProviderMetadata = {
+    id: "mock-with-tools",
+    mode: "mock",
+    model: MOCK_MODEL,
+    status: "configured"
+  };
+
+  let toolCallCounter = 0;
+
+  return {
+    metadata,
+    async complete(request) {
+      const lastUserMessage = [...request.messages].reverse().find((message) => message.role === "user")?.content ?? "";
+      const normalized = lastUserMessage.replace(/\s+/gu, " ").trim();
+
+      // If message starts with "tool:", simulate tool calls
+      if (normalized.startsWith("tool:") && request.tools && request.tools.length > 0) {
+        const toolName = request.tools[0]!.function.name;
+        toolCallCounter += 1;
+        const toolCall: ChatToolCall = {
+          id: `call_${String(toolCallCounter).padStart(4, "0")}`,
+          type: "function",
+          function: {
+            name: toolName,
+            arguments: JSON.stringify({ query: normalized.slice(5).trim() || "test" })
+          }
+        };
+        return {
+          text: "",
+          toolCalls: [toolCall],
+          provider: metadata,
+          fallbackUsed: false
+        };
+      }
+
+      // If we have tool result messages (role: "tool"), this is the second turn — return final answer
+      const hasToolResults = request.messages.some((m) => m.role === "tool");
+      if (hasToolResults) {
+        const toolMessages = request.messages.filter((m) => m.role === "tool");
+        const lastToolResult = toolMessages.at(-1)?.content ?? "no result";
+        return {
+          text: `After running the tools, here's my analysis: ${normalized}. Tool results: ${lastToolResult}`,
+          provider: metadata,
+          fallbackUsed: false
+        };
+      }
+
+      const text = normalized
+        ? `Mock assistant response for ${request.projectId}: ${normalized}`
+        : `Mock assistant response for ${request.projectId}.`;
+
+      return { text, provider: metadata, fallbackUsed: false };
+    },
+    ...overrides
+  };
+}
+
 export interface OpenAICompatibleProviderOptions {
   apiKey: string;
   baseUrl?: string;
@@ -159,6 +259,37 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     });
   }
 
+  function buildRequestBody(request: ChatCompletionRequest): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model,
+      messages: request.messages.map((message) => {
+        const mapped: Record<string, unknown> = { role: message.role };
+        if (message.content !== null) mapped.content = message.content;
+        if (message.tool_calls) mapped.tool_calls = message.tool_calls;
+        if (message.tool_call_id) mapped.tool_call_id = message.tool_call_id;
+        if (message.name) mapped.name = message.name;
+        return mapped;
+      }),
+      temperature: 0.2
+    };
+    if (request.tools && request.tools.length > 0) {
+      body.tools = request.tools;
+      body.tool_choice = request.toolChoice ?? "auto";
+    }
+    if (request.stream) {
+      body.stream = true;
+    }
+    return body;
+  }
+
+  function parseToolCalls(body: Record<string, unknown>): ChatToolCall[] | undefined {
+    const message = (body as { choices?: Array<{ message?: { tool_calls?: unknown } }> }).choices?.[0]?.message;
+    if (!message || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
+      return undefined;
+    }
+    return message.tool_calls as ChatToolCall[];
+  }
+
   return {
     metadata,
     async complete(request) {
@@ -170,11 +301,7 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
             authorization: `Bearer ${options.apiKey}`,
             "content-type": "application/json"
           },
-          body: JSON.stringify({
-            model,
-            messages: request.messages.map((message) => ({ role: message.role, content: message.content })),
-            temperature: 0.2
-          }),
+          body: JSON.stringify(buildRequestBody(request)),
           ...(request.signal ? { signal: request.signal } : {})
         });
       } catch (cause) {
@@ -204,16 +331,99 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
         });
       }
 
-      const text = normalizeProviderText(
-        (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content,
-        metadata
-      );
+      const bodyRecord = body as Record<string, unknown>;
+      const choice = (bodyRecord.choices as Array<Record<string, unknown>> | undefined)?.[0];
+      const message = choice?.message as Record<string, unknown> | undefined;
+      const text = (typeof message?.content === "string" ? message.content : "") || "";
+      const toolCalls = parseToolCalls(bodyRecord);
 
-      return {
-        text,
+      if (!text && !toolCalls) {
+        throw new ProviderError("Provider response did not include assistant text or tool calls.", {
+          code: "provider_malformed_response",
+          provider: metadata
+        });
+      }
+
+      const result: ChatCompletionResult = {
+        text: text || (toolCalls ? "Calling tools..." : ""),
         provider: metadata,
         fallbackUsed: false
       };
+      if (toolCalls) result.toolCalls = toolCalls;
+      return result;
+    },
+
+    async *completeStream(request) {
+      const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${options.apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(buildRequestBody({ ...request, stream: true })),
+        ...(request.signal ? { signal: request.signal } : {})
+      });
+
+      if (!response.ok) {
+        throw new ProviderError("Chat provider streaming request failed.", {
+          code: "provider_http_error",
+          status: response.status,
+          provider: { ...metadata, status: String(response.status) }
+        });
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new ProviderError("Chat provider streaming response had no body.", {
+          code: "provider_malformed_response",
+          provider: metadata
+        });
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith("data: ")) continue;
+            const data = trimmed.slice(6);
+            if (data === "[DONE]") return;
+
+            try {
+              const parsed = JSON.parse(data);
+              const delta = (parsed as Record<string, unknown>).choices as Array<Record<string, unknown>> | undefined;
+              if (!delta?.[0]) continue;
+
+              const deltaMsg = delta[0].delta as Record<string, unknown> | undefined;
+              if (!deltaMsg) continue;
+
+              const result: ChatCompletionDelta = {};
+              if (typeof deltaMsg.content === "string") {
+                result.content = deltaMsg.content;
+              }
+              if (Array.isArray(deltaMsg.tool_calls)) {
+                result.toolCalls = deltaMsg.tool_calls as ChatToolCall[];
+              }
+              if (result.content || result.toolCalls) {
+                yield result;
+              }
+            } catch {
+              // skip unparseable SSE lines
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
     }
   };
 }
