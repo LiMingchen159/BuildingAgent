@@ -681,11 +681,14 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
   );
 }
 
-function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
+function ChatWorkspace({ project, user, messages, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
   const [draft, setDraft] = useState("");
+  const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const wasEmptyRef = useRef(messages.length === 0);
   const canWrite = project.permissions.includes("chat:write");
   const hasMessages = messages.length > 0;
+  const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -694,6 +697,20 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, a
     const maxHeight = Math.floor(window.innerHeight / 3);
     textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
   }, [draft]);
+
+  useEffect(() => {
+    if (wasEmptyRef.current && hasMessages) {
+      setLeavingEmptyState(true);
+      const timeout = window.setTimeout(() => setLeavingEmptyState(false), 520);
+      wasEmptyRef.current = false;
+      return () => window.clearTimeout(timeout);
+    }
+    wasEmptyRef.current = !hasMessages;
+    if (!hasMessages) {
+      setLeavingEmptyState(false);
+    }
+    return undefined;
+  }, [hasMessages]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -706,7 +723,7 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, a
   }
 
   return (
-    <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}`} aria-labelledby="chat-title">
+    <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}${leavingEmptyState ? " chat-shell-leaving-empty" : ""}`} aria-labelledby="chat-title">
       <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
       {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
@@ -732,9 +749,10 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, a
         })}
       </section>
       <form className="composer" onSubmit={handleSubmit}>
+        {(!hasMessages || leavingEmptyState) ? <p className="composer-empty-greeting">{emptyChatGreeting}</p> : null}
         <div className="composer-box">
           <label className="visually-hidden" htmlFor="chat-message">Message</label>
-          <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? "Ask about this project, its knowledge base, or repository files..." : "This project is read-only for your account."} />
+          <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
           <div className="composer-actions">
             {busy ? (
               <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
@@ -1089,7 +1107,7 @@ function Workspace({
   useEffect(() => {
     if (project) {
       setLeftOpen(true);
-      setRightOpen(true);
+      setRightOpen(false);
     } else {
       setLeftOpen(false);
       setRightOpen(false);
@@ -1115,7 +1133,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1362,18 +1380,17 @@ export default function App() {
     setBusy(true);
     try {
       const selected = await selectProject(token, project.id);
-      const [chat, surfaces, convResponse] = await Promise.all([
-        getChat(token, project.id),
+      const [surfaces, convResponse] = await Promise.all([
         loadManagementSurfaces(token, project.id),
         getConversations(token, project.id).catch(() => ({ conversations: [], limit: 50, requestId: "" }))
       ]);
       setSession(selected.session);
       setSelectedProject(project);
-      setMessages(chat.messages);
+      setMessages([]);
       setConversations(convResponse.conversations);
       setProjectConversationCounts((current) => ({ ...current, [project.id]: convResponse.conversations.length }));
       setProjectAssetCounts((current) => ({ ...current, [project.id]: surfaces.kbResponse.documents.length + surfaces.repoResponse.artifacts.length }));
-      setActiveConversationId(chat.activeConversationId ?? null);
+      setActiveConversationId(null);
       setKnowledgeBaseDocuments(surfaces.kbResponse.documents.map(apiDocumentToUi));
       setRepositoryItems(surfaces.repoResponse.artifacts.map(artifactToRepositoryItem));
       setChatProviderDiagnostics(null);

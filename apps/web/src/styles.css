@@ -4473,16 +4473,57 @@ p {
   justify-content: center;
 }
 
+.chat-shell-leaving-empty {
+  align-items: stretch;
+}
+
 .chat-shell-empty .message-list {
   display: none;
 }
 
 .chat-shell-empty .composer {
+  border-top: 0;
   background: transparent;
+  gap: 1.75rem;
   max-width: 56rem;
   padding: 0 2rem;
   position: static;
   width: min(100%, 60rem);
+}
+
+.chat-shell-leaving-empty .composer {
+  animation: empty-composer-dock 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  background: transparent;
+  border-top: 0;
+  max-width: 56rem;
+  padding: 0 2rem;
+  position: fixed;
+  left: calc(50% + 140px);
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(calc(100vw - 360px), 60rem);
+  z-index: 3;
+}
+
+.chat-shell-leaving-empty .message-list {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.composer-empty-greeting {
+  animation: empty-composer-rise 520ms cubic-bezier(0.2, 0.8, 0.2, 1) 150ms both;
+  color: var(--workspace-text);
+  font-size: 1.55rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25;
+  margin: 0 auto;
+  max-width: 48rem;
+  text-align: center;
+}
+
+.chat-shell-leaving-empty .composer-empty-greeting {
+  animation: empty-greeting-fade-out 300ms ease both;
 }
 
 .cgpt-workspace-shell .empty-state-with-action {
@@ -4553,6 +4594,39 @@ p {
   }
 }
 
+@keyframes empty-composer-rise {
+  from {
+    opacity: 0;
+    transform: translateY(32px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes empty-composer-dock {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, calc(50vh - 6.25rem)) scale(1);
+  }
+}
+
+@keyframes empty-greeting-fade-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+  }
+}
+
 @keyframes thinking-dots {
   0% { content: ""; }
   25% { content: "."; }
@@ -4562,6 +4636,9 @@ p {
 
 @media (prefers-reduced-motion: reduce) {
   .cgpt-workspace-shell .message,
+  .chat-shell-empty .composer-box,
+  .chat-shell-leaving-empty .composer,
+  .composer-empty-greeting,
   .message-thinking .message-content::after {
     animation: none;
   }
@@ -4591,6 +4668,18 @@ p {
   min-height: 3rem;
   padding: 0.36rem 0.45rem 0.36rem 1rem;
   width: 100%;
+}
+
+.chat-shell-empty .composer {
+  background: transparent;
+}
+
+.chat-shell-leaving-empty .composer {
+  background: transparent;
+}
+
+.chat-shell-empty .composer-box {
+  animation: empty-composer-rise 520ms cubic-bezier(0.2, 0.8, 0.2, 1) 150ms both;
 }
 
 .cgpt-workspace-shell .composer textarea {
@@ -5035,6 +5124,7 @@ p {
   color: #4b5563;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
   width: auto;
 }
 
@@ -5056,20 +5146,22 @@ p {
 .workspace-sidebar-history-title {
   align-items: center;
   display: flex;
+  flex: 1;
   gap: 0.45rem;
   min-width: 0;
   overflow: hidden;
   position: relative;
   white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 2.25rem), rgba(0, 0, 0, 0.85) calc(100% - 1.65rem), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 2.25rem), rgba(0, 0, 0, 0.85) calc(100% - 1.65rem), transparent 100%);
 }
 
 .workspace-sidebar-history-title-text {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.8rem), transparent 100%);
-  mask-image: linear-gradient(to right, black calc(100% - 1.8rem), transparent 100%);
 }
 
 /* Conversation 3-dot menu */
