@@ -29,6 +29,59 @@ export class AgentRuntime {
     return { type, message, at: new Date().toISOString(), ...(metadata ? { metadata } : {}) };
   }
 
+  private async callProvider(
+    request: AgentTurnRequest,
+    messages: ProviderChatMessage[],
+    toolDefs: ChatToolDefinition[]
+  ): Promise<{ completion: ChatCompletionResult; thinking: AgentLifecycleEvent[] }> {
+    const thinking: AgentLifecycleEvent[] = [];
+
+    if (request.provider.completeStream) {
+      let streamText = "";
+      const streamToolCalls: ChatToolCall[] = [];
+
+      try {
+        for await (const delta of request.provider.completeStream({
+          projectId: request.projectId,
+          userId: request.userId,
+          requestId: request.requestId,
+          messages: messages.slice(),
+          tools: toolDefs,
+          toolChoice: "auto"
+        })) {
+          if (delta.content) {
+            streamText += delta.content;
+            thinking.push(this.makeEvent("thinking", delta.content));
+          }
+          if (delta.toolCalls) {
+            for (const tc of delta.toolCalls) {
+              const existing = streamToolCalls.find((t) => t.id === tc.id);
+              if (existing) {
+                if (tc.function.name) existing.function.name += tc.function.name;
+                if (tc.function.arguments) existing.function.arguments += tc.function.arguments;
+              } else {
+                streamToolCalls.push({ ...tc });
+              }
+            }
+          }
+        }
+      } catch {
+        // Stream failed, fall back to non-streaming
+        return { completion: await this.callProviderWithRetry(request, messages, toolDefs, 2), thinking: [] };
+      }
+
+      const result: ChatCompletionResult = {
+        text: streamText,
+        provider: request.provider.metadata,
+        fallbackUsed: false
+      };
+      if (streamToolCalls.length > 0) result.toolCalls = streamToolCalls;
+      return { completion: result, thinking };
+    }
+
+    return { completion: await this.callProviderWithRetry(request, messages, toolDefs, 2), thinking: [] };
+  }
+
   private async callProviderWithRetry(
     request: AgentTurnRequest,
     messages: ProviderChatMessage[],
@@ -139,7 +192,11 @@ export class AgentRuntime {
         toolCount: toolDefs.length
       }));
 
-      const completion = await this.callProviderWithRetry(request, conversationMessages, toolDefs, 2);
+      // Try streaming first for real-time token output; fall back to non-streaming
+      const { completion, thinking } = await this.callProvider(request, conversationMessages, toolDefs);
+      for (const thinkingEvent of thinking) {
+        yield yieldEvent(thinkingEvent);
+      }
 
       finalProvider = completion.provider;
       finalFallbackUsed = completion.fallbackUsed;

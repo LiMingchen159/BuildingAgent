@@ -872,7 +872,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         provider,
         knowledgeBaseDocuments
       })) {
-        sseWrite("lifecycle", JSON.stringify(event));
+        if (event.type === "thinking") {
+          sseWrite("token", JSON.stringify({ content: event.message }));
+        } else {
+          sseWrite("lifecycle", JSON.stringify(event));
+        }
 
         if (event.type === "turn_completed") {
           finalText = event.message || "";
@@ -900,7 +904,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             provider: fallbackProvider,
             knowledgeBaseDocuments
           })) {
-            sseWrite("lifecycle", JSON.stringify(event));
+            if (event.type === "thinking") {
+              sseWrite("token", JSON.stringify({ content: event.message }));
+            } else {
+              sseWrite("lifecycle", JSON.stringify(event));
+            }
 
             if (event.type === "turn_completed") {
               finalText = event.message || "";

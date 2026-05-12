@@ -1,4 +1,4 @@
-import { FormEvent, type SVGProps, useEffect, useMemo, useState } from "react";
+import { FormEvent, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
@@ -26,7 +26,6 @@ import {
   sendChatMessageStream,
   createProject,
   getConversations,
-  createConversation,
   selectConversation,
   deleteConversation,
   renameConversation,
@@ -160,7 +159,7 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     link: <><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" /></>,
     lock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
     message: <><path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" /></>,
-    more: <><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></>,
+    more: <><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="2.5" fill="currentColor" stroke="none" /><circle cx="5" cy="12" r="2.5" fill="currentColor" stroke="none" /></>,
     "panel-left": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>,
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
     paperclip: <path d="m21.4 11.6-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 1 1-2.8-2.8l8.5-8.5" />,
@@ -481,7 +480,7 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
   );
 }
 
-function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, activeTools }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[] }) {
+function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const canWrite = project.permissions.includes("chat:write");
   const quickActions = [
@@ -494,12 +493,12 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, a
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!draft.trim()) {
+    if (!draft.trim() || busy) {
       return;
     }
-    const message = draft;
-    await onSend(message);
+    const message = draft.trim();
     setDraft("");
+    await onSend(message);
   }
 
   return (
@@ -544,11 +543,19 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, a
         </ul>
         <div className="composer-box">
           <label className="visually-hidden" htmlFor="chat-message">Message</label>
-          <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project, its knowledge base, or repository files..." : "This project is read-only for your account."} />
+          <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? "Ask about this project, its knowledge base, or repository files..." : "This project is read-only for your account."} />
           <div className="composer-actions">
             <div className="composer-tools">
-              <button type="button" disabled aria-disabled="true" title="Attach file"><Icon name="paperclip" /></button>
-              <button type="button" disabled aria-disabled="true" title="Tools"><Icon name="grid" /></button>
+              {busy ? (
+                <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
+                  <Icon name="x" />
+                </button>
+              ) : (
+                <>
+                  <button type="button" disabled aria-disabled="true" title="Attach file"><Icon name="paperclip" /></button>
+                  <button type="button" disabled aria-disabled="true" title="Tools"><Icon name="grid" /></button>
+                </>
+              )}
             </div>
             <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy} aria-label={busy ? "Sending message" : "Send message"}>
               {busy ? <span className="button-spinner" aria-hidden="true" /> : <Icon name="arrow-up" />}
@@ -715,24 +722,23 @@ function WorkspaceSidebarBlock({
         ) : (
           <ul className="workspace-sidebar-history" aria-label="Recent conversations">
             {conversations.map((conversation) => (
-              <li key={conversation.id} className="workspace-sidebar-history-row">
+              <li key={conversation.id} className={`workspace-sidebar-history-row${conversation.id === activeConversationId ? " is-active" : ""}`}>
                 <button
                   type="button"
-                  className={`workspace-sidebar-history-item${conversation.id === activeConversationId ? " is-active" : ""}`}
+                  className="workspace-sidebar-history-item"
                   onClick={conversation.id === activeConversationId ? undefined : () => onSelectConversation(conversation.id)}
                   disabled={busy}
                   title={conversation.title}
                 >
                   <span className="workspace-sidebar-history-title"><Icon name="message" />{conversation.title}</span>
-                  {conversation.messageCount > 0 ? <small>{conversation.messageCount}</small> : null}
                 </button>
-                <details className="conversation-menu">
-                  <summary className="conversation-menu-trigger" aria-label="Conversation menu"><Icon name="more" /></summary>
-                  <ul className="conversation-menu-list">
+                <span className="conversation-menu">
+                  <button type="button" className="conversation-menu-trigger" aria-label="Conversation menu" popovertarget={`conv-menu-${conversation.id}`} style={{ anchorName: `--cm-${conversation.id.replace(/[^a-zA-Z0-9]/g, "")}` }}><Icon name="more" /></button>
+                  <ul className="conversation-menu-list" id={`conv-menu-${conversation.id}`} popover="auto" style={{ positionAnchor: `--cm-${conversation.id.replace(/[^a-zA-Z0-9]/g, "")}` }}>
                     <li><button type="button" className="conversation-menu-action" onClick={() => { const title = window.prompt("Rename conversation", conversation.title); if (title && title.trim() && title.trim() !== conversation.title) onRenameConversation(conversation.id, title.trim()); }} disabled={busy}>Rename</button></li>
                     <li><button type="button" className="conversation-menu-action conversation-menu-action-danger" onClick={() => { if (window.confirm(`Delete "${conversation.title}"?`)) onDeleteConversation(conversation.id); }} disabled={busy}>Delete</button></li>
                   </ul>
-                </details>
+                </span>
               </li>
             ))}
           </ul>
@@ -875,6 +881,7 @@ function Workspace({
   onDeleteConversation,
   onRenameConversation,
   onDeleteProject,
+  onStop,
   activeTools
 }: {
   project: ProjectSummary | null;
@@ -892,6 +899,7 @@ function Workspace({
   activeTab: WorkspaceTab;
   onTabChange: (tab: WorkspaceTab) => void;
   onSend: (message: string) => Promise<void>;
+  onStop: () => void;
   onNewChat: () => Promise<void>;
   onResetChat: () => Promise<void>;
   onSwitchProject: () => void;
@@ -947,7 +955,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} messages={messages} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1045,6 +1053,7 @@ export default function App() {
   const [activeTools, setActiveTools] = useState<Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>>([]);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   function clearAuth(nextBanner?: BannerState) {
     setToken("");
@@ -1240,6 +1249,10 @@ export default function App() {
       setBanner({ tone: "error", title: "Message required", message: "Enter a non-empty message before sending.", code: "chat_invalid" });
       return;
     }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
     setBusy(true);
     setActiveTools([]);
     const projectId = selectedProject.id;
@@ -1265,8 +1278,13 @@ export default function App() {
 
     try {
       await sendChatMessageStream(token, projectId, message.trim(), {
+        onToken(content: string) {
+          setMessages((current) =>
+            current.map((m) => (m.id === streamingId ? { ...m, content: m.content + content } : m))
+          );
+        },
         onLifecycle(event: ChatLifecycleEvent) {
-          // Update assistant content when turn_completed fires
+          // For non-streaming providers, set full text at turn_completed
           if (event.type === "turn_completed" && event.message) {
             setMessages((current) =>
               current.map((m) => (m.id === streamingId ? { ...m, content: event.message } : m))
@@ -1327,8 +1345,13 @@ export default function App() {
           setActiveTools([]);
           setBanner(null);
         }
-      }, activeConversationId ?? undefined);
+      }, activeConversationId ?? undefined, signal);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+        setBanner(null);
+        return;
+      }
       setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
@@ -1336,8 +1359,14 @@ export default function App() {
         setBanner(errorBanner(error, "Chat message failed"));
       }
     } finally {
+      abortControllerRef.current = null;
       setBusy(false);
     }
+  }
+
+  function handleStop() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
   }
 
   async function handleNewChat() {
@@ -1348,30 +1377,16 @@ export default function App() {
       setChatProviderRequestId(undefined);
       return;
     }
-    setBusy(true);
-    try {
-      const created = await createConversation(token, selectedProject.id);
-      setConversations((current) => [created.conversation, ...current]);
-      setActiveConversationId(created.conversation.id);
-      setMessages([]);
-      setChatProviderDiagnostics(null);
-      setChatProviderRequestId(undefined);
-      setActiveTab("chat");
-      setBanner({
-        tone: "success",
-        title: "New chat started",
-        message: "A new conversation is ready.",
-        requestId: created.requestId
-      });
-    } catch (error) {
-      if (isAuthFailure(error)) {
-        clearAuth(errorBanner(error, "Session expired"));
-      } else {
-        setBanner(errorBanner(error, "New chat failed"));
-      }
-    } finally {
-      setBusy(false);
-    }
+    setActiveConversationId(null);
+    setMessages([]);
+    setChatProviderDiagnostics(null);
+    setChatProviderRequestId(undefined);
+    setActiveTab("chat");
+    setBanner({
+      tone: "info",
+      title: "New chat ready",
+      message: "Send a message to start a new conversation."
+    });
   }
 
   async function handleSelectConversation(convId: string) {
@@ -1514,7 +1529,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} activeTools={activeTools} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );

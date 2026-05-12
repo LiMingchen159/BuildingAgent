@@ -104,6 +104,7 @@ export interface SendChatResponse {
 
 export interface StreamEventHandlers {
   onLifecycle?: (event: ChatLifecycleEvent) => void;
+  onToken?: (content: string) => void;
   onError?: (error: { code: string; message: string; requestId?: string }) => void;
   onDone?: (response: SendChatResponse) => void;
 }
@@ -177,6 +178,11 @@ export async function sendChatMessageStream(
               case "lifecycle":
                 if (isChatLifecycleEvent(parsed)) {
                   handlers.onLifecycle?.(parsed);
+                }
+                break;
+              case "token":
+                if (typeof (parsed as Record<string, unknown>).content === "string") {
+                  handlers.onToken?.((parsed as { content: string }).content);
                 }
                 break;
               case "error":
