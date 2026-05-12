@@ -2711,7 +2711,7 @@ p {
   display: flex;
   flex-direction: column;
   min-height: 100%;
-  overflow: auto;
+  overflow: visible;
   width: 100%;
 }
 
@@ -2775,9 +2775,9 @@ p {
 }
 
 .project-picker-body {
-  margin: 0 auto;
-  max-width: 46rem;
-  overflow-y: auto;
+  margin: 0;
+  max-width: none;
+  overflow: visible;
   padding: 1.2rem 1.5rem 2rem;
   width: 100%;
 }
@@ -2818,7 +2818,7 @@ p {
   gap: 0.6rem;
   grid-template-columns: minmax(0, 1fr) auto auto;
   margin: 0 auto 1rem;
-  max-width: 42rem;
+  max-width: none;
 }
 
 .project-picker-search,
@@ -2907,7 +2907,7 @@ p {
   animation: project-picker-rise 380ms ease-out both;
   display: grid;
   gap: 0.65rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
 }
 
 .project-picker-card,
@@ -4073,6 +4073,7 @@ p {
 .workspace-center-empty {
   align-items: stretch;
   justify-content: stretch;
+  overflow: visible;
 }
 
 .workspace-center-empty .project-picker {
