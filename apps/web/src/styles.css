@@ -2706,13 +2706,7 @@ p {
 }
 
 .project-picker {
-  background:
-    radial-gradient(circle at 50% 0%, rgba(219, 234, 254, 0.34), transparent 22rem),
-    linear-gradient(90deg, rgba(15, 23, 42, 0.028) 1px, transparent 1px),
-    linear-gradient(rgba(15, 23, 42, 0.028) 1px, transparent 1px),
-    #ffffff;
-  background-position: center top, 0 0, 0 0, 0 0;
-  background-size: auto, 18px 18px, 18px 18px, auto;
+  background: #ffffff;
   color: #0f1b35;
   display: flex;
   flex-direction: column;
@@ -2782,49 +2776,49 @@ p {
 
 .project-picker-body {
   margin: 0 auto;
-  max-width: 58rem;
+  max-width: 46rem;
   overflow-y: auto;
-  padding: 1.8rem 1.25rem 2.5rem;
+  padding: 1.2rem 1.5rem 2rem;
   width: 100%;
 }
 
 .project-picker-hero {
   animation: project-picker-rise 260ms ease-out both;
-  margin: 0 auto 1.6rem;
-  max-width: 38rem;
+  margin: 0 auto 1.15rem;
+  max-width: 34rem;
   text-align: center;
 }
 
 .project-picker-hero p {
   color: #52617d;
-  font-size: 0.96rem;
-  margin: 0 0 0.6rem;
+  font-size: 0.84rem;
+  margin: 0 0 0.35rem;
 }
 
 .project-picker-hero h1 {
   color: #0f1b35;
-  font-size: clamp(1.9rem, 3.3vw, 2.45rem);
+  font-size: clamp(1.45rem, 2.4vw, 1.9rem);
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1.1;
-  margin: 0 0 1rem;
+  margin: 0 0 0.55rem;
 }
 
 .project-picker-hero span {
   color: #52617d;
   display: block;
-  font-size: 1rem;
-  line-height: 1.65;
+  font-size: 0.85rem;
+  line-height: 1.5;
 }
 
 .project-picker-toolbar {
   animation: project-picker-rise 320ms ease-out both;
   align-items: center;
   display: grid;
-  gap: 0.9rem;
+  gap: 0.6rem;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  margin: 0 auto 1.65rem;
-  max-width: 50rem;
+  margin: 0 auto 1rem;
+  max-width: 42rem;
 }
 
 .project-picker-search,
@@ -2834,10 +2828,10 @@ p {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 0.85rem;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
   color: #40516f;
   display: flex;
-  min-height: 3.15rem;
+  min-height: 2.55rem;
 }
 
 .project-picker-search {
@@ -2889,10 +2883,10 @@ p {
   border-radius: 0.55rem;
   color: #52617d;
   display: inline-flex;
-  height: 2.35rem;
+  height: 1.95rem;
   justify-content: center;
   padding: 0;
-  width: 2.35rem;
+  width: 1.95rem;
 }
 
 .project-picker-view-toggle button.is-active {
@@ -2912,7 +2906,7 @@ p {
 .project-picker-results.is-cards {
   animation: project-picker-rise 380ms ease-out both;
   display: grid;
-  gap: 0.9rem;
+  gap: 0.65rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -2921,10 +2915,10 @@ p {
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 0.85rem;
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.055);
+  box-shadow: none;
   color: #0f1b35;
-  min-height: 12.2rem;
-  padding: 1rem;
+  min-height: 8.9rem;
+  padding: 0.75rem;
   transition:
     background 160ms ease,
     border-color 160ms ease,
@@ -2934,21 +2928,28 @@ p {
 
 .project-picker-card {
   display: grid;
-  gap: 1rem;
+  gap: 0.65rem;
   position: relative;
 }
 
 .project-picker-card-top {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
   justify-content: space-between;
+}
+
+.project-picker-card-identity {
+  align-items: center;
+  display: flex;
+  gap: 0.65rem;
+  min-width: 0;
 }
 
 .project-picker-card:hover,
 .project-picker-create-card:hover {
   background: var(--workspace-hover);
   border-color: rgba(17, 24, 39, 0.16);
-  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.075);
+  box-shadow: none;
   transform: translateY(-2px);
 }
 
@@ -2959,14 +2960,14 @@ p {
   border-radius: 0.65rem;
   color: var(--project-mark-fg);
   display: inline-flex;
-  height: 3.75rem;
+  height: 2.65rem;
   justify-content: center;
-  width: 3.75rem;
+  width: 2.65rem;
 }
 
 .project-picker-mark .workspace-icon {
-  height: 1.65rem;
-  width: 1.65rem;
+  height: 1.15rem;
+  width: 1.15rem;
 }
 
 .project-picker-more {
@@ -2979,20 +2980,23 @@ p {
 }
 
 .project-picker-title h2 {
-  font-size: 1rem;
-  margin: 0 0 0.28rem;
+  font-size: 0.92rem;
+  margin: 0 0 0.16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-picker-title p {
   color: #52617d;
   font-family: var(--font-family-mono);
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   margin: 0;
 }
 
 .project-picker-metrics {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
 }
@@ -3006,14 +3010,14 @@ p {
   align-items: center;
   color: #52617d;
   display: flex;
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   gap: 0.3rem;
   margin: 0;
 }
 
 .project-picker-metrics dd {
   color: #0f1b35;
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   font-weight: 800;
   margin: 0;
 }
@@ -3024,14 +3028,14 @@ p {
   display: grid;
   gap: 0.65rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  padding-top: 0.75rem;
+  padding-top: 0.55rem;
 }
 
 .project-picker-status {
   align-items: center;
   color: #24795d;
   display: inline-flex;
-  font-size: 0.74rem;
+  font-size: 0.68rem;
   font-weight: 700;
   gap: 0.35rem;
 }
@@ -3050,7 +3054,7 @@ p {
 
 .project-picker-zone {
   color: #52617d;
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3063,21 +3067,21 @@ p {
   border-radius: 999px;
   color: #0f1b35;
   display: inline-flex;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 800;
   gap: 0.4rem;
-  min-height: 2rem;
-  padding: 0.35rem 0.4rem 0.35rem 0.8rem;
+  min-height: 1.75rem;
+  padding: 0.28rem 0.35rem 0.28rem 0.65rem;
 }
 
 .project-picker-open .workspace-icon {
   background: #0f1b35;
   border-radius: 999px;
   color: #ffffff;
-  height: 1.4rem;
-  padding: 0.25rem;
+  height: 1.2rem;
+  padding: 0.22rem;
   transform: rotate(45deg);
-  width: 1.4rem;
+  width: 1.2rem;
 }
 
 .project-picker-create-card {
@@ -3096,9 +3100,9 @@ p {
   border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 999px;
   display: inline-flex;
-  height: 4.25rem;
+  height: 3.1rem;
   justify-content: center;
-  width: 4.25rem;
+  width: 3.1rem;
 }
 
 .project-picker-create-card strong {

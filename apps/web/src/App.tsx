@@ -356,14 +356,16 @@ function ProjectPickerCard({ project, conversationCount, assetCount, busy, onSel
   return (
     <article className="project-picker-card">
       <div className="project-picker-card-top">
-        <ProjectMark project={project} />
+        <div className="project-picker-card-identity">
+          <ProjectMark project={project} />
+          <div className="project-picker-title">
+            <h2>{project.name}</h2>
+            <p>{project.id}</p>
+          </div>
+        </div>
         <button type="button" className="project-picker-more" aria-label={`${project.name} actions`} disabled={busy}>
           <Icon name="more" />
         </button>
-      </div>
-      <div className="project-picker-title">
-        <h2>{project.name}</h2>
-        <p>{project.id}</p>
       </div>
       <dl className="project-picker-metrics" aria-label={`${project.name} project metrics`}>
         <div><dt><Icon name="message" />Conversations</dt><dd>{conversationCount}</dd></div>
@@ -1080,7 +1082,7 @@ function Workspace({
   useEffect(() => {
     if (project) {
       setLeftOpen(true);
-      setRightOpen(false);
+      setRightOpen(true);
     } else {
       setLeftOpen(false);
       setRightOpen(false);
@@ -1115,7 +1117,7 @@ function Workspace({
     </div>
   ) : (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
-      <ProjectPicker projects={projects} user={user} busy={busy} onSelect={onSelectProject} onCreate={onCreateProject} onSignOut={onSignOut} conversationCounts={projectConversationCounts} assetCounts={projectAssetCounts} />
+      <ProjectPicker projects={projects} user={user} busy={busy} onSelect={onSelectProject} onCreate={onCreateProject} onSignOut={onSignOut} conversationCounts={projectConversationCounts} assetCounts={projectAssetCounts} showChrome={false} />
     </div>
   );
 
