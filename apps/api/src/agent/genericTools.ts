@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec } from "node:child_process";
@@ -309,6 +309,74 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           output: result.slice(0, TERMINAL_MAX_OUTPUT),
           truncated: result.length > TERMINAL_MAX_OUTPUT
         };
+      }
+    },
+
+    // --- execute_code tool (dedicated Python execution) ---
+    {
+      name: "execute_code",
+      category: "utility",
+      description: "Execute Python code in a sandboxed subprocess. Writes code to a temp file, runs it with timeout, captures stdout/stderr. Use this instead of terminal for running Python snippets.",
+      schema: {
+        name: "execute_code",
+        description: "Execute Python code in a subprocess. Use this for data analysis, computations, or processing files in the Knowledge Base. The working directory is the project Knowledge Base root.",
+        parameters: {
+          type: "object",
+          properties: {
+            code: { type: "string", description: "Python source code to execute." },
+            timeout: { type: "number", description: "Timeout in seconds (default 30, max 120)." }
+          },
+          required: ["code"]
+        }
+      },
+      async run(args, context) {
+        const code = textArg(args, "code");
+        if (!code) {
+          return { error: "code is required" };
+        }
+        const timeout = Math.min(numArg(args, "timeout", 30), 120) * 1000;
+        const kbRoot = knowledgeBaseRoot();
+        const tempPath = path.join(kbRoot, "_hermes_tmp.py");
+
+        let stdout = "";
+        let stderr = "";
+        try {
+          await writeFile(tempPath, code, "utf8");
+          const result = await new Promise<string>((resolve, reject) => {
+            const child = exec(
+              `python "${tempPath}"`,
+              {
+                cwd: kbRoot,
+                timeout,
+                maxBuffer: TERMINAL_MAX_OUTPUT,
+                shell: process.platform === "win32" ? "cmd.exe" : "/bin/bash",
+                env: { ...process.env, PYTHONUNBUFFERED: "1" }
+              },
+              (error, out, err) => {
+                if (error && !out && !err) {
+                  reject(error);
+                  return;
+                }
+                stdout = (out || "").slice(0, TERMINAL_MAX_OUTPUT);
+                stderr = (err || "").slice(0, TERMINAL_MAX_OUTPUT);
+                resolve(stdout || stderr || "(no output)");
+              }
+            );
+          });
+          return {
+            stdout: stdout.slice(0, TERMINAL_MAX_OUTPUT),
+            stderr: stderr.slice(0, TERMINAL_MAX_OUTPUT),
+            truncated: stdout.length > TERMINAL_MAX_OUTPUT || stderr.length > TERMINAL_MAX_OUTPUT
+          };
+        } catch (error) {
+          return {
+            stdout: stdout.slice(0, TERMINAL_MAX_OUTPUT),
+            stderr: stderr.slice(0, TERMINAL_MAX_OUTPUT) || (error instanceof Error ? error.message : "Execution failed"),
+            error: error instanceof Error ? error.message : "Execution failed"
+          };
+        } finally {
+          try { await unlink(tempPath); } catch { /* best effort cleanup */ }
+        }
       }
     },
 
