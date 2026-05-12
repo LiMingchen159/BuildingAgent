@@ -3963,6 +3963,7 @@ p {
 
 .cgpt-workspace-shell .composer {
   background: linear-gradient(to top, #ffffff 78%, rgba(255, 255, 255, 0));
+  border-top: 0;
   bottom: 0;
   display: grid;
   gap: 0.5rem;
