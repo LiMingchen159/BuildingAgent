@@ -1,4 +1,4 @@
-import type { ChatCompletionResult, ChatProvider, ProviderChatMessage } from "../providers.js";
+import type { ChatCompletionResult, ChatProvider, ChatToolCall, ProviderChatMessage } from "../providers.js";
 import type { ChatMessage, KnowledgeBaseDocument } from "../seed.js";
 
 export type AgentLifecycleEventType =
@@ -9,7 +9,10 @@ export type AgentLifecycleEventType =
   | "tool_completed"
   | "provider_started"
   | "assistant_message_completed"
-  | "memory_synced";
+  | "memory_synced"
+  | "loop_started"
+  | "thinking"
+  | "turn_completed";
 
 export interface AgentLifecycleEvent {
   type: AgentLifecycleEventType;
@@ -33,6 +36,20 @@ export interface AgentTurnResult {
   events: AgentLifecycleEvent[];
 }
 
+export interface AgentLoopResult {
+  finalText: string;
+  events: AgentLifecycleEvent[];
+  toolCallHistory: Array<{ name: string; args: Record<string, unknown>; result: Record<string, unknown> }>;
+  iterations: number;
+}
+
+export interface AgentStreamEvent {
+  type: AgentLifecycleEventType;
+  message: string;
+  at: string;
+  metadata?: Record<string, string | number | boolean>;
+}
+
 export interface AgentToolSchema {
   name: string;
   description: string;
@@ -52,7 +69,7 @@ export interface AgentToolContext {
 
 export interface AgentTool {
   name: string;
-  category: "memory" | "session" | "utility" | "building";
+  category: "memory" | "session" | "utility" | "building" | "file";
   description: string;
   schema: AgentToolSchema;
   run(args: Record<string, unknown>, context: AgentToolContext): Promise<Record<string, unknown>>;

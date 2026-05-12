@@ -1,3 +1,4 @@
+import type { ChatToolDefinition } from "../providers.js";
 import type { AgentTool, AgentToolContext, AgentToolSchema } from "./types.js";
 
 export interface ToolDispatchResult {
@@ -21,6 +22,17 @@ export class AgentToolRegistry {
 
   schemas(): AgentToolSchema[] {
     return this.list().map((tool) => tool.schema);
+  }
+
+  toOpenAIToolDefinitions(): ChatToolDefinition[] {
+    return this.list().map((tool) => ({
+      type: "function" as const,
+      function: {
+        name: tool.schema.name,
+        description: tool.schema.description,
+        parameters: tool.schema.parameters
+      }
+    }));
   }
 
   async dispatch(name: string, args: Record<string, unknown>, context: AgentToolContext): Promise<ToolDispatchResult> {
