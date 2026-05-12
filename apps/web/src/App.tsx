@@ -482,14 +482,17 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
 
 function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
   const [draft, setDraft] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const canWrite = project.permissions.includes("chat:write");
-  const quickActions = [
-    { label: "Upload PDF", detail: "Add to knowledge base", icon: "upload" as IconName },
-    { label: "Search Knowledge Base", detail: "Find documents & insights", icon: "search" as IconName },
-    { label: "Open Repository", detail: "View generated outputs", icon: "folder" as IconName },
-    { label: "Analyze Energy Baseline", detail: "Compare & identify issues", icon: "bar-chart" as IconName }
-  ];
   const hasMessages = messages.length > 0;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const maxHeight = Math.floor(window.innerHeight / 3);
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+  }, [draft]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -528,38 +531,19 @@ function ChatWorkspace({ project, messages, onSend, busy, provider, requestId, a
         })}
       </section>
       <form className="composer" onSubmit={handleSubmit}>
-        <ul className="composer-quick-actions" aria-label="Quick actions (placeholder)">
-          {quickActions.map((action) => (
-            <li key={action.label}>
-              <button type="button" className="composer-quick-action" disabled aria-disabled="true" title="Quick action placeholder">
-                <Icon name={action.icon} />
-                <span>
-                  <strong>{action.label}</strong>
-                  <small>{action.detail}</small>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
         <div className="composer-box">
           <label className="visually-hidden" htmlFor="chat-message">Message</label>
-          <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? "Ask about this project, its knowledge base, or repository files..." : "This project is read-only for your account."} />
+          <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? "Ask about this project, its knowledge base, or repository files..." : "This project is read-only for your account."} />
           <div className="composer-actions">
-            <div className="composer-tools">
-              {busy ? (
-                <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
-                  <Icon name="x" />
-                </button>
-              ) : (
-                <>
-                  <button type="button" disabled aria-disabled="true" title="Attach file"><Icon name="paperclip" /></button>
-                  <button type="button" disabled aria-disabled="true" title="Tools"><Icon name="grid" /></button>
-                </>
-              )}
-            </div>
-            <button type="submit" disabled={!canWrite || busy || !draft.trim()} aria-busy={busy} aria-label={busy ? "Sending message" : "Send message"}>
-              {busy ? <span className="button-spinner" aria-hidden="true" /> : <Icon name="arrow-up" />}
-            </button>
+            {busy ? (
+              <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
+                <Icon name="x" />
+              </button>
+            ) : (
+              <button type="submit" disabled={!canWrite || !draft.trim()} aria-label="Send message">
+                <Icon name="arrow-up" />
+              </button>
+            )}
           </div>
         </div>
         {!canWrite ? <p className="field-error composer-readonly" role="status">This project does not grant chat write permission.</p> : null}
@@ -730,7 +714,10 @@ function WorkspaceSidebarBlock({
                   disabled={busy}
                   title={conversation.title}
                 >
-                  <span className="workspace-sidebar-history-title"><Icon name="message" />{conversation.title}</span>
+                  <span className="workspace-sidebar-history-title">
+                    <Icon name="message" />
+                    <span className="workspace-sidebar-history-title-text">{conversation.title}</span>
+                  </span>
                 </button>
                 <span className="conversation-menu">
                   <button type="button" className="conversation-menu-trigger" aria-label="Conversation menu" popovertarget={`conv-menu-${conversation.id}`} style={{ anchorName: `--cm-${conversation.id.replace(/[^a-zA-Z0-9]/g, "")}` }}><Icon name="more" /></button>
@@ -772,10 +759,10 @@ function WorkspaceSidebarBlock({
         <details className="workspace-sidebar-account-menu">
           <summary aria-label="Account menu">
             <div className="workspace-sidebar-account-row">
-              <Avatar name={user?.name ?? "Local user"} size="md" />
+              <Avatar name={user?.name ?? "Local user"} size="sm" />
               <div className="workspace-sidebar-account-info">
                 <strong>{user?.name ?? "Local user"}</strong>
-                <span>{user?.id ?? "local-user"}</span>
+                <span>{user?.id === "user_ada" ? "ada.lovelace@buildingagent.ai" : user?.id ?? "local-user"}</span>
               </div>
             </div>
           </summary>
@@ -805,14 +792,14 @@ function WorkspaceRightPanel({ registry, management, disabled }: { registry: Reg
         </summary>
         {disabled ? <p className="right-section-empty">Select a project to view tasks</p> : <ScheduledTasks />}
       </details>
-      <details className="workspace-right-section" open={!disabled}>
+      <details className="workspace-right-section">
         <summary>
           <span><Icon name="puzzle" />Skills</span>
           <span className="right-section-meta">{skillCount}</span>
         </summary>
         {disabled ? <p className="right-section-empty">Select a project to view skills</p> : <Skills />}
       </details>
-      <details className="workspace-right-section" open={!disabled}>
+      <details className="workspace-right-section">
         <summary>
           <span><Icon name="wrench" />Tools</span>
           <span className="right-section-meta">{toolCount}</span>
@@ -923,13 +910,13 @@ function Workspace({
   ];
 
   const [leftOpen, setLeftOpen] = useState(project !== null);
-  const [rightOpen, setRightOpen] = useState(project !== null);
+  const [rightOpen, setRightOpen] = useState(false);
   const [showNewProjectForm, setShowNewProjectForm] = useState(false);
 
   useEffect(() => {
     if (project) {
       setLeftOpen(true);
-      setRightOpen(true);
+      setRightOpen(false);
     } else {
       setLeftOpen(false);
       setRightOpen(false);
@@ -947,10 +934,10 @@ function Workspace({
   const center = project ? (
     <div className="workspace-center-block" aria-labelledby="workspace-title">
       <div className="workspace-floating-toggles">
-        <button type="button" className="workspace-icon-button" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
+        <button type="button" className="workspace-icon-button workspace-left-toggle" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
           <Icon name="panel-left" />
         </button>
-        <button type="button" className="workspace-icon-button" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
+        <button type="button" className="workspace-icon-button workspace-right-toggle" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
           <Icon name="panel-right" />
         </button>
       </div>
@@ -965,10 +952,10 @@ function Workspace({
   ) : (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
       <div className="workspace-floating-toggles">
-        <button type="button" className="workspace-icon-button" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
+        <button type="button" className="workspace-icon-button workspace-left-toggle" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
           <Icon name="panel-left" />
         </button>
-        <button type="button" className="workspace-icon-button" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
+        <button type="button" className="workspace-icon-button workspace-right-toggle" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
           <Icon name="panel-right" />
         </button>
       </div>
@@ -1024,7 +1011,7 @@ function Workspace({
           />
         )}
         center={center}
-        right={rightOpen ? <WorkspaceRightPanel registry={project ? registry : null} management={project ? management : null} disabled={!project} /> : null}
+        right={<WorkspaceRightPanel registry={project ? registry : null} management={project ? management : null} disabled={!project} />}
         className={shellClass}
       />
     </div>
