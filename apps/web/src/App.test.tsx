@@ -289,9 +289,8 @@ describe("BuildingAgent Web flow", () => {
 
     await user.click(screen.getByRole("button", { name: /new chat/i }));
 
-    const newConvoCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/conversations" && init?.method === "POST");
-    expect(newConvoCall).toBeTruthy();
-    expect(await screen.findByRole("status")).toHaveTextContent("New chat started");
+    // New chat no longer creates a server-side conversation; it clears local state only
+    expect(await screen.findByRole("status")).toHaveTextContent("New chat ready");
     expect(screen.queryByText("Existing context")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/provider diagnostics/i)).not.toBeInTheDocument();
   });

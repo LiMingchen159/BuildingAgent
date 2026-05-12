@@ -94,7 +94,9 @@ describe("auth, session, and project contract", () => {
     expect(projects.json()).toEqual({
       projects: [
         { id: "project_alpha", name: "Alpha Build", permissions: ["chat:read", "chat:write"] },
-        { id: "project_beta", name: "Beta Build", permissions: ["chat:read"] }
+        { id: "project_beta", name: "Beta Build", permissions: ["chat:read", "chat:write"] },
+        { id: "project_mortar", name: "Mortar", permissions: ["chat:read", "chat:write"] },
+        { id: "project_demo", name: "Demo Project", permissions: ["chat:read", "chat:write"] }
       ],
       limit: 50,
       requestId: expect.stringMatching(/^req_/)

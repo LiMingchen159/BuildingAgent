@@ -95,6 +95,14 @@ export interface RepositoryArtifact {
   content: string;
 }
 
+export interface Conversation {
+  id: string;
+  projectId: string;
+  title: string;
+  messageIds: string[];
+  createdAt: string;
+}
+
 export interface SessionState {
   userId: string;
   selectedProjectId: string | null;
@@ -106,6 +114,7 @@ export interface SeedStore {
   projects: SeedProject[];
   memberships: SeedMembership[];
   messagesByProject: Record<string, ChatMessage[]>;
+  conversationsByProject: Record<string, Conversation[]>;
   knowledgeBaseByProject: Record<string, KnowledgeBaseDocument[]>;
   repositoryByProject: Record<string, RepositoryArtifact[]>;
   runtimeProviders: PlaceholderRuntimeProvider[];
@@ -123,7 +132,9 @@ export function createSeedStore(): SeedStore {
   const projects: SeedProject[] = [
     { id: "project_alpha", name: "Alpha Build" },
     { id: "project_beta", name: "Beta Build" },
-    { id: "project_gamma", name: "Gamma Build" }
+    { id: "project_gamma", name: "Gamma Build" },
+    { id: "project_mortar", name: "Mortar" },
+    { id: "project_demo", name: "Demo Project" }
   ];
 
   const runtimeProviders: PlaceholderRuntimeProvider[] = [
@@ -264,6 +275,39 @@ export function createSeedStore(): SeedStore {
     ])
   );
 
+  const messagesByProject: Record<string, ChatMessage[]> = Object.fromEntries(projects.map((project) => [project.id, [] as ChatMessage[]]));
+  const conversationsByProject: Record<string, Conversation[]> = Object.fromEntries(projects.map((project) => [project.id, [] as Conversation[]]));
+
+  // Seed: Mortar project — Building 40 semantic model review
+  const mortarConversation: Conversation = {
+    id: "conv_seed_mortar_01",
+    projectId: "project_mortar",
+    title: "Building 40 Semantic Model Review",
+    messageIds: ["msg_seed_mortar_01", "msg_seed_mortar_02", "msg_seed_mortar_03", "msg_seed_mortar_04"],
+    createdAt: "2026-05-10T08:30:00.000Z"
+  };
+  conversationsByProject["project_mortar"] = [mortarConversation];
+  messagesByProject["project_mortar"] = [
+    { id: "msg_seed_mortar_01", projectId: "project_mortar", userId: "user_ada", role: "user", content: "Review the Brick TTL schema for Building 40 and identify any missing sensor relationships." },
+    { id: "msg_seed_mortar_02", projectId: "project_mortar", userId: "user_ada", role: "assistant", content: "I've analyzed the bldg40.ttl Brick model. The semantic graph covers 12 zones, 8 air-handling units, and 3 chillers. However, I noticed that the VAV boxes in zones 4 and 7 lack discharge air temperature sensor relationships. The energy meter for the east wing is also missing its electrical panel association. I recommend adding `brick:hasPoint` edges for those sensors. The temperature setpoint deviations on the 3rd floor AHU are within normal range (±0.3°C), but the pressure sensor on VAV-4B shows intermittent readings that may indicate a faulty transducer." },
+    { id: "msg_seed_mortar_03", projectId: "project_mortar", userId: "user_ada", role: "user", content: "Great analysis. Also check if there are any historical energy patterns that correlate with the VAV issues." },
+    { id: "msg_seed_mortar_04", projectId: "project_mortar", userId: "user_ada", role: "assistant", content: "Cross-referencing the energy data with VAV performance: the east wing energy consumption spikes 12% on weekdays between 14:00-16:00, which correlates with the VAV-4B pressure anomalies. This suggests the faulty transducer may be causing the VAV to over-compensate, driving up fan energy. I'd recommend prioritizing the VAV-4B transducer replacement — estimated energy savings of 8-10% on the east wing AHU. The Brick model already has the replacement part reference (`bldg:VAV-4B-PT-01`) linked in the maintenance schedule." }
+  ];
+
+  // Seed: Demo project — generic test conversation
+  const demoConversation: Conversation = {
+    id: "conv_seed_demo_01",
+    projectId: "project_demo",
+    title: "Welcome to Demo Project",
+    messageIds: ["msg_seed_demo_01", "msg_seed_demo_02"],
+    createdAt: "2026-05-11T14:00:00.000Z"
+  };
+  conversationsByProject["project_demo"] = [demoConversation];
+  messagesByProject["project_demo"] = [
+    { id: "msg_seed_demo_01", projectId: "project_demo", userId: "user_ada", role: "user", content: "This is a test project to verify project switching isolation works correctly." },
+    { id: "msg_seed_demo_02", projectId: "project_demo", userId: "user_ada", role: "assistant", content: "Understood! This Demo Project is isolated from Mortar and other projects. Conversations, knowledge base documents, and repository artifacts are all scoped to this project. You can switch between projects using the sidebar dropdown, and each will maintain its own context. I'll remember that this is purely for testing project switching behavior." }
+  ];
+
   return {
     users: [
       { id: "user_ada", name: "Ada Lovelace", email: "ada@example.test", password: "local-dev-password" },
@@ -276,10 +320,13 @@ export function createSeedStore(): SeedStore {
     projects,
     memberships: [
       { userId: "user_ada", projectId: "project_alpha", permissions: ["chat:read", "chat:write"] },
-      { userId: "user_ada", projectId: "project_beta", permissions: ["chat:read"] },
+      { userId: "user_ada", projectId: "project_beta", permissions: ["chat:read", "chat:write"] },
+      { userId: "user_ada", projectId: "project_mortar", permissions: ["chat:read", "chat:write"] },
+      { userId: "user_ada", projectId: "project_demo", permissions: ["chat:read", "chat:write"] },
       { userId: "user_grace", projectId: "project_gamma", permissions: ["chat:read", "chat:write"] }
     ],
-    messagesByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ChatMessage[]])),
+    messagesByProject,
+    conversationsByProject,
     knowledgeBaseByProject: Object.fromEntries(projects.map((project) => [project.id, [] as KnowledgeBaseDocument[]])),
     repositoryByProject: Object.fromEntries(projects.map((project) => [project.id, [] as RepositoryArtifact[]])),
     runtimeProviders,
@@ -304,6 +351,12 @@ export function cloneStore(store: SeedStore): SeedStore {
       Object.entries(store.messagesByProject).map(([projectId, messages]) => [
         projectId,
         messages.map((message) => ({ ...message }))
+      ])
+    ),
+    conversationsByProject: Object.fromEntries(
+      Object.entries(store.conversationsByProject).map(([projectId, conversations]) => [
+        projectId,
+        conversations.map((conversation) => ({ ...conversation, messageIds: [...conversation.messageIds] }))
       ])
     ),
     knowledgeBaseByProject: Object.fromEntries(

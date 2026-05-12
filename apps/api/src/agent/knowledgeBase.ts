@@ -1,8 +1,25 @@
+import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { KnowledgeBaseDocument } from "../seed.js";
 
-const DEFAULT_KNOWLEDGE_BASE_DIR = path.resolve(process.cwd(), "../../Knowledge Base");
+function resolveKnowledgeBaseDefault(): string {
+  const sourceDir = path.dirname(fileURLToPath(import.meta.url));
+  const projectRoot = path.resolve(sourceDir, "../../../..");
+  const candidates = [
+    path.join(projectRoot, "Knowledge Base"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0]!;
+}
+
+const DEFAULT_KNOWLEDGE_BASE_DIR = resolveKnowledgeBaseDefault();
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".ttl", ".rdf", ".csv", ".json", ".yaml", ".yml"]);
 const MAX_DOCUMENTS = 80;
 const MAX_EXCERPT_BYTES = 2400;
@@ -12,7 +29,11 @@ export interface KnowledgeBaseIndexOptions {
 }
 
 export function knowledgeBaseRoot(env: Record<string, string | undefined> = process.env): string {
-  return env.BUILDING_AGENT_KNOWLEDGE_BASE_DIR?.trim() || env.KNOWLEDGE_BASE_DIR?.trim() || DEFAULT_KNOWLEDGE_BASE_DIR;
+  const configured = env.BUILDING_AGENT_KNOWLEDGE_BASE_DIR?.trim() || env.KNOWLEDGE_BASE_DIR?.trim();
+  if (configured) {
+    return path.isAbsolute(configured) ? configured : path.resolve(PROJECT_ROOT, configured);
+  }
+  return DEFAULT_KNOWLEDGE_BASE_DIR;
 }
 
 export async function indexKnowledgeBase(projectId: string, options: KnowledgeBaseIndexOptions = {}): Promise<KnowledgeBaseDocument[]> {
