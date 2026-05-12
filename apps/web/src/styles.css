@@ -2782,8 +2782,8 @@ p {
 }
 
 .project-picker-body {
-  margin: 0;
-  max-width: none;
+  margin: 0 auto;
+  max-width: min(100%, 58rem);
   overflow: visible;
   padding: 1.95rem 1.5rem 2rem;
   width: 100%;
@@ -2825,7 +2825,8 @@ p {
   gap: 0.6rem;
   grid-template-columns: minmax(0, 1fr) auto auto;
   margin: 0 auto 1rem;
-  max-width: none;
+  max-width: 48rem;
+  width: 100%;
 }
 
 .project-picker-search,
@@ -2915,6 +2916,9 @@ p {
   display: grid;
   gap: 0.65rem;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  margin: 0 auto;
+  max-width: 58rem;
+  width: 100%;
 }
 
 .project-picker-card,
