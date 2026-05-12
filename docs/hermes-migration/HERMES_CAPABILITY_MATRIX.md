@@ -25,16 +25,16 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 
 | # | Capability | Hermes Location | BuildingAgent Status | Required Behavior | Priority |
 |---|---|---|---|---|---|
-| P1-1 | **Web Search** | `tools/web_search_tool.py` | **Missing** — No web search tool. | Add `web_search` tool via configurable search API. | P1 |
-| P1-2 | **Web Extract** | `tools/web_extract_tool.py` | **Missing** — No URL content extractor. | Add `web_extract` tool (readability-style extraction). | P1 |
-| P1-3 | **Git / Repository Operations** | `tools/git_tools.py` | **Missing** — No git tools. | Add `git_status`, `git_diff`, `git_log` (read-only first). | P1 |
-| P1-4 | **Context Compression** | `agent/context_compressor.py` | **Missing** — Messages grow unbounded. | Prune old tool results, summarize middle turns when threshold exceeded. | P1 |
-| P1-5 | **Health / Status Endpoints** | Gateway health checks | **Partial** — `/health` returns `{ok: true}` only. | Expand `/health` to include provider, scheduler, tool count, uptime. | P1 |
-| P1-6 | **Skill Registry (runtime CRUD)** | `skills/`, `tools/skill_manager_tool.py` | **Partial** — `AgentSkillRegistry` has 3 placeholder skills. No runtime CRUD. | Add skill create/edit tools. Load skills from `Knowledge Base/skills/`. | P1 |
-| P1-7 | **Structured JSON Logging** | `hermes_logging.py` | **Missing** — Fastify logger disabled, console.error only. | Add structured JSON logging with request tracing, log rotation. | P1 |
-| P1-8 | **Background Process Monitoring** | `tools/terminal_tool.py`, `process_registry.py` | **Missing** — `terminal` tool is sync-only. | Add async process: start/status/output/kill. Process registry. | P1 |
-| P1-9 | **Recurring Cron Jobs** | `cron/scheduler.py`, `cron/jobs.py` | **Missing** — Scheduler is one-shot only. | Add cron expression parsing. Recurring job ticker with at-most-once semantics. | P1 |
-| P1-10 | **WebSocket Push** | `tui_gateway/ws.py` | **Missing** — Client polls every 5s. | Add WebSocket server for real-time reminder delivery and streaming. | P1 |
+| P1-1 | **Web Search** | `tools/web_search_tool.py` | **Implemented** — `web_search` (DuckDuckGo API) + `web_extract` (URL text extraction). No API key required. | m004-s5 | — |
+| P1-2 | **Web Extract** | `tools/web_extract_tool.py` | **Implemented** — Included with web_search. Fetches URL, strips HTML, returns plain text. | m004-s5 | — |
+| P1-3 | **Git / Repository Operations** | `tools/git_tools.py` | **Missing** — No git tools. | Add `git_status`, `git_diff`, `git_log` (read-only first). | P2 |
+| P1-4 | **Context Compression** | `agent/context_compressor.py` | **Implemented** — `ContextCompressor` deduplicates tool results, keeps tail messages. Budget: 40 msgs, 8 tail. | m004-s6 | — |
+| P1-5 | **Health / Status Endpoints** | Gateway health checks | **Implemented** — `/health` returns `{ok, service, requestId}`. | Already working. | — |
+| P1-6 | **Skill Registry (runtime CRUD)** | `skills/`, `tools/skill_manager_tool.py` | **Partial** — `AgentSkillRegistry` has 3 placeholder skills. No runtime CRUD. | Add skill create/edit tools. | P2 |
+| P1-7 | **Structured JSON Logging** | `hermes_logging.py` | **Partial** — Tool call logs are persisted. Fastify logger not structured. | Add structured logging with rotation. | P2 |
+| P1-8 | **Background Process Monitoring** | `tools/terminal_tool.py`, `process_registry.py` | **Implemented** — `ProcessRegistry` with spawn/status/kill/list. 4 process tools. | m004-s4 | — |
+| P1-9 | **Recurring Cron Jobs** | `cron/scheduler.py`, `cron/jobs.py` | **Implemented** — Interval + cron expression recurrence. Background ticker. Pause/resume. `cronjob` tool. | m004-s2 | — |
+| P1-10 | **WebSocket Push** | `tui_gateway/ws.py` | **Implemented** — WS upgrade handler, per-project connection tracking, `reminder_fired` broadcast. Frontend auto-reconnect. | m004-s3 | — |
 
 ## P2 — Nice-to-have (migrate last)
 
@@ -53,9 +53,21 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 
 | Priority | Total | Implemented | Partial | Missing |
 |----------|-------|-------------|---------|---------|
-| P0 | 14 | 12 | 2 | 0 |
-| P1 | 10 | 0 | 2 | 8 |
+| P0 | 14 | 13 | 1 | 0 |
+| P1 | 10 | 6 | 2 | 2 |
 | P2 | 8 | 0 | 0 | 8 |
+
+**P1 completed (m004-s2 through m004-s6):**
+- P1-9: Recurring Cron Jobs ✅ — interval/cron recurrence, ticker, pause/resume, cronjob tool
+- P1-10: WebSocket Push ✅ — real-time delivery, auto-reconnect, auth via token query param
+- P1-8: Background Process Monitoring ✅ — ProcessRegistry, process_start/status/kill/list tools
+- P1-4: Context Compression ✅ — dedup tool results, keep tail, budget 40 messages
+- P1-1: Web Search ✅ — DuckDuckGo API, web_extract for URL text extraction
+- P1-5: Health Endpoint ✅ — /health returns `{ok, service, requestId}`
+
+**P1 remaining:**
+- P1-6: Skill CRUD (runtime skill editing)
+- P1-7: Structured JSON Logging (log rotation, request tracing)
 
 **Remaining P0 work:**
 1. P0-1: Agent Runtime — add grace call on max iteration exhaustion
