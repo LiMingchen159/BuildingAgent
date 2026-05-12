@@ -93,10 +93,145 @@ export interface ChatLifecycleEvent {
 export interface SendChatResponse {
   message: ChatMessage;
   assistantMessage: ChatMessage;
+  conversationId?: string | undefined;
+  conversationTitle?: string | undefined;
   artifact?: RepositoryArtifact | undefined;
   provider: ChatProviderDiagnostics;
   fallbackUsed: boolean;
   lifecycle?: ChatLifecycleEvent[] | undefined;
+  requestId: string;
+}
+
+export interface StreamEventHandlers {
+  onLifecycle?: (event: ChatLifecycleEvent) => void;
+  onError?: (error: { code: string; message: string }) => void;
+  onDone?: (response: SendChatResponse) => void;
+}
+
+export async function sendChatMessageStream(
+  token: string,
+  projectId: string,
+  message: string,
+  handlers: StreamEventHandlers,
+  conversationId?: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const url = apiUrl(`/api/projects/${encodeURIComponent(projectId)}/chat/stream`);
+
+  const fetchInit: RequestInit = {
+    method: "POST",
+    headers: {
+      ...authHeaders(token),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ message, ...(conversationId ? { conversationId } : {}) })
+  };
+  if (signal) {
+    fetchInit.signal = signal;
+  }
+
+  const response = await fetch(url, fetchInit);
+
+  if (!response.ok) {
+    const detail = parseApiError(await readJson(response));
+    handlers.onError?.(detail ?? { code: "stream_failed", message: "Stream connection failed" });
+    return;
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    handlers.onError?.({ code: "stream_unsupported", message: "No response body available for streaming" });
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let currentEventType = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          currentEventType = line.slice(7).trim();
+          continue;
+        }
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          try {
+            const parsed = JSON.parse(data);
+
+            switch (currentEventType) {
+              case "lifecycle":
+                if (isChatLifecycleEvent(parsed)) {
+                  handlers.onLifecycle?.(parsed);
+                }
+                break;
+              case "error":
+                handlers.onError?.({
+                  code: typeof parsed.code === "string" ? parsed.code : "stream_error",
+                  message: typeof parsed.message === "string" ? parsed.message : "Stream error"
+                });
+                break;
+              case "done":
+                handlers.onDone?.(parsed as SendChatResponse);
+                break;
+            }
+          } catch {
+            // skip unparseable lines
+          }
+          currentEventType = "";
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function isChatLifecycleEvent(value: unknown): value is ChatLifecycleEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).type === "string" &&
+    typeof (value as Record<string, unknown>).message === "string" &&
+    typeof (value as Record<string, unknown>).at === "string"
+  );
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+  createdAt: string;
+}
+
+export interface ConversationsResponse {
+  conversations: ConversationSummary[];
+  limit: number;
+  requestId: string;
+}
+
+export interface CreateConversationResponse {
+  conversation: ConversationSummary;
+  requestId: string;
+}
+
+export interface SelectConversationResponse {
+  conversation: ConversationSummary;
+  messages: ChatMessage[];
+  requestId: string;
+}
+
+export interface CreateProjectResponse {
+  project: ProjectSummary;
+  session: SessionSummary;
   requestId: string;
 }
 
@@ -367,15 +502,23 @@ export async function selectProject(token: string, projectId: string): Promise<{
   };
 }
 
-export async function getChat(token: string, projectId: string): Promise<{ messages: ChatMessage[]; requestId: string }> {
-  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/chat`, { headers: authHeaders(token) });
+export async function getChat(token: string, projectId: string, conversationId?: string): Promise<{ messages: ChatMessage[]; activeConversationId?: string | null; requestId: string }> {
+  let url = `/api/projects/${encodeURIComponent(projectId)}/chat`;
+  if (conversationId) {
+    url += `?conversationId=${encodeURIComponent(conversationId)}`;
+  }
+  const payload = await requestJson(url, { headers: authHeaders(token) });
   if (!isRecord(payload) || !Array.isArray(payload.messages) || typeof payload.requestId !== "string") {
     throw malformed("Chat returned an unexpected response.");
   }
-  return {
+  const result: { messages: ChatMessage[]; activeConversationId?: string | null; requestId: string } = {
     messages: payload.messages.map((message) => parseChatMessage(message, "Chat returned an unexpected message.")),
     requestId: payload.requestId
   };
+  if (typeof payload.activeConversationId === "string" || payload.activeConversationId === null) {
+    result.activeConversationId = payload.activeConversationId;
+  }
+  return result;
 }
 
 export async function getRegistry(token: string): Promise<RegistryResponse> {
@@ -524,11 +667,15 @@ function parseLifecycleEvents(value: unknown): ChatLifecycleEvent[] | undefined 
   });
 }
 
-export async function sendChatMessage(token: string, projectId: string, message: string): Promise<SendChatResponse> {
+export async function sendChatMessage(token: string, projectId: string, message: string, conversationId?: string): Promise<SendChatResponse> {
+  const body: Record<string, unknown> = { message };
+  if (conversationId) {
+    body.conversationId = conversationId;
+  }
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/chat`, {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ message })
+    body: JSON.stringify(body)
   });
   if (!isRecord(payload) || typeof payload.requestId !== "string" || typeof payload.fallbackUsed !== "boolean") {
     throw malformed("Chat post returned an unexpected response.");
@@ -549,6 +696,8 @@ export async function sendChatMessage(token: string, projectId: string, message:
   return {
     message: userMessage,
     assistantMessage,
+    ...(typeof payload.conversationId === "string" ? { conversationId: payload.conversationId } : {}),
+    ...(typeof payload.conversationTitle === "string" ? { conversationTitle: payload.conversationTitle } : {}),
     ...(artifact ? { artifact } : {}),
     provider: parseProviderDiagnostics(payload.provider, payload.fallbackUsed),
     fallbackUsed: payload.fallbackUsed,
@@ -591,8 +740,12 @@ export async function getRepository(token: string, projectId: string): Promise<{
   };
 }
 
-export async function resetChat(token: string, projectId: string): Promise<ResetChatResponse> {
-  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/chat`, {
+export async function resetChat(token: string, projectId: string, conversationId?: string): Promise<ResetChatResponse> {
+  let url = `/api/projects/${encodeURIComponent(projectId)}/chat`;
+  if (conversationId) {
+    url += `?conversationId=${encodeURIComponent(conversationId)}`;
+  }
+  const payload = await requestJson(url, {
     method: "DELETE",
     headers: authHeaders(token)
   });
@@ -603,6 +756,155 @@ export async function resetChat(token: string, projectId: string): Promise<Reset
     projectId: payload.projectId,
     clearedMessages: payload.clearedMessages,
     clearedMemories: payload.clearedMemories,
+    requestId: payload.requestId
+  };
+}
+
+export async function createProject(token: string, name: string): Promise<CreateProjectResponse> {
+  const payload = await requestJson("/api/projects", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ name })
+  });
+  if (!isRecord(payload) || !isRecord(payload.project) || typeof payload.project.id !== "string" || typeof payload.project.name !== "string" || !Array.isArray(payload.project.permissions) || !isRecord(payload.session) || typeof payload.session.userId !== "string" || typeof payload.session.projectId !== "string" || !Array.isArray(payload.session.permissions) || typeof payload.requestId !== "string") {
+    throw malformed("Create project returned an unexpected response.");
+  }
+  return {
+    project: {
+      id: payload.project.id,
+      name: payload.project.name,
+      permissions: payload.project.permissions.filter((p): p is string => typeof p === "string")
+    },
+    session: {
+      userId: payload.session.userId,
+      projectId: payload.session.projectId,
+      permissions: payload.session.permissions.filter((p): p is string => typeof p === "string")
+    },
+    requestId: payload.requestId
+  };
+}
+
+export async function getConversations(token: string, projectId: string): Promise<ConversationsResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/conversations`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || !Array.isArray(payload.conversations) || typeof payload.requestId !== "string") {
+    throw malformed("Conversations returned an unexpected response.");
+  }
+  return {
+    conversations: payload.conversations.map((c) => {
+      if (!isRecord(c) || typeof c.id !== "string" || typeof c.title !== "string" || typeof c.messageCount !== "number" || typeof c.createdAt !== "string") {
+        throw malformed("Conversations returned an unexpected entry.");
+      }
+      return { id: c.id, title: c.title, messageCount: c.messageCount, createdAt: c.createdAt };
+    }),
+    limit: typeof payload.limit === "number" ? payload.limit : 50,
+    requestId: payload.requestId
+  };
+}
+
+export async function createConversation(token: string, projectId: string): Promise<CreateConversationResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/conversations`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || !isRecord(payload.conversation) || typeof payload.conversation.id !== "string" || typeof payload.conversation.title !== "string" || typeof payload.conversation.messageCount !== "number" || typeof payload.conversation.createdAt !== "string" || typeof payload.requestId !== "string") {
+    throw malformed("Create conversation returned an unexpected response.");
+  }
+  return {
+    conversation: {
+      id: payload.conversation.id,
+      title: payload.conversation.title,
+      messageCount: payload.conversation.messageCount,
+      createdAt: payload.conversation.createdAt
+    },
+    requestId: payload.requestId
+  };
+}
+
+export async function selectConversation(token: string, projectId: string, convId: string): Promise<SelectConversationResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(convId)}/select`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || !isRecord(payload.conversation) || typeof payload.conversation.id !== "string" || typeof payload.conversation.title !== "string" || typeof payload.conversation.messageCount !== "number" || typeof payload.conversation.createdAt !== "string" || !Array.isArray(payload.messages) || typeof payload.requestId !== "string") {
+    throw malformed("Select conversation returned an unexpected response.");
+  }
+  return {
+    conversation: {
+      id: payload.conversation.id,
+      title: payload.conversation.title,
+      messageCount: payload.conversation.messageCount,
+      createdAt: payload.conversation.createdAt
+    },
+    messages: payload.messages.map((message) => parseChatMessage(message, "Select conversation returned an unexpected message.")),
+    requestId: payload.requestId
+  };
+}
+
+export interface RenameConversationResponse {
+  conversation: ConversationSummary;
+  requestId: string;
+}
+
+export interface DeleteConversationResponse {
+  deleted: boolean;
+  conversationId: string;
+  removedMessages: number;
+  requestId: string;
+}
+
+export interface DeleteProjectResponse {
+  deleted: boolean;
+  projectId: string;
+  requestId: string;
+}
+
+export async function renameConversation(token: string, projectId: string, convId: string, title: string): Promise<RenameConversationResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(convId)}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ title })
+  });
+  if (!isRecord(payload) || !isRecord(payload.conversation) || typeof payload.conversation.id !== "string" || typeof payload.conversation.title !== "string" || typeof payload.requestId !== "string") {
+    throw malformed("Rename conversation returned an unexpected response.");
+  }
+  return {
+    conversation: {
+      id: payload.conversation.id,
+      title: payload.conversation.title,
+      messageCount: typeof payload.conversation.messageCount === "number" ? payload.conversation.messageCount : 0,
+      createdAt: typeof payload.conversation.createdAt === "string" ? payload.conversation.createdAt : ""
+    },
+    requestId: payload.requestId
+  };
+}
+
+export async function deleteConversation(token: string, projectId: string, convId: string): Promise<DeleteConversationResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(convId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.deleted !== "boolean" || typeof payload.conversationId !== "string" || typeof payload.removedMessages !== "number" || typeof payload.requestId !== "string") {
+    throw malformed("Delete conversation returned an unexpected response.");
+  }
+  return {
+    deleted: payload.deleted,
+    conversationId: payload.conversationId,
+    removedMessages: payload.removedMessages,
+    requestId: payload.requestId
+  };
+}
+
+export async function deleteProject(token: string, projectId: string): Promise<DeleteProjectResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.deleted !== "boolean" || typeof payload.projectId !== "string" || typeof payload.requestId !== "string") {
+    throw malformed("Delete project returned an unexpected response.");
+  }
+  return {
+    deleted: payload.deleted,
+    projectId: payload.projectId,
     requestId: payload.requestId
   };
 }
