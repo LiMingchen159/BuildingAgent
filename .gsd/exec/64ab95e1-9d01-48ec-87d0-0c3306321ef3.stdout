@@ -1,5 +1,0 @@
-
-> @building-agent/cli@0.1.0 typecheck
-> tsc -p tsconfig.json --noEmit
-
-duration_ms=4463

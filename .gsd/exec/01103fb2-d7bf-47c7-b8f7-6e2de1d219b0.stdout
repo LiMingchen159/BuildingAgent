@@ -1,5 +1,0 @@
-package-lock.json: exists=True dir=False
-node_modules: exists=True dir=True
-apps/api/node_modules: exists=True dir=True
-apps/api/package-lock.json: exists=False dir=False
-apps/web: exists=True dir=True

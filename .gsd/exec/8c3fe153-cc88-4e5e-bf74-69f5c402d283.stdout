@@ -1,7 +1,0 @@
-apps/web/src/App.test.tsx:113 openai_like_key provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "sk-should-not-render" },
-apps/web/src/App.test.tsx:189 openai_like_key expect(diagnostics).not.toHaveTextContent(/sk-should-not-render|apiKey/i);
-apps/web/src/App.test.tsx:502 openai_like_key provider: { id: "deterministic-mock", mode: "mock", model: 123, fallbackUsed: true, apiKey: "sk-should-not-render" },
-apps/web/src/App.test.tsx:524 openai_like_key expect(alert).not.toHaveTextContent(/sk-should-not-render|apiKey/i);
-apps/cli/src/commands.test.ts:165 openai_like_key apiKey: "sk-should-not-print"
-apps/cli/src/commands.test.ts:176 openai_like_key expect(malformedIo.stderrText()).not.toMatch(/sk-should-not-print|seed-token-ada|Bearer\s+[A-Za-z0-9._-]+|local-dev-password/u);
-S04_REDACTION_SCAN exit=1 duration_ms=63

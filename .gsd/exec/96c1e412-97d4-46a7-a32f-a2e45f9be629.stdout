@@ -1,4 +1,0 @@
-scripts/smoke-local.cjs: no obvious token fixture leaks
-README.md: no obvious token fixture leaks
-apps/cli/src/config.ts: leaks token:
-apps/cli/src/commands.ts: leaks token:

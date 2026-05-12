@@ -1,2 +1,0 @@
-Matches for registry/gateway/management/building-domain/tool/skill/provider in apps:
-apps/web/src/App.tsx:179:        <textarea id="chat-message" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={canWrite ? "Ask about this project…" : "This project is read-only for your account."} />

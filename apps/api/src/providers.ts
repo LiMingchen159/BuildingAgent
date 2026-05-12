@@ -1,8 +1,11 @@
-export type ChatRole = "system" | "user" | "assistant";
+export type ChatRole = "system" | "user" | "assistant" | "tool";
 
 export interface ProviderChatMessage {
   role: ChatRole;
-  content: string;
+  content: string | null;
+  tool_calls?: ChatToolCall[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface ProviderMetadata {
@@ -19,10 +22,48 @@ export interface ChatCompletionRequest {
   userId: string;
   requestId: string;
   signal?: AbortSignal;
+  tools?: ChatToolDefinition[];
+  toolChoice?: "auto" | "none" | "required";
+  stream?: boolean;
 }
 
 export interface ChatCompletionResult {
   text: string;
+  toolCalls?: ChatToolCall[];
+  provider: ProviderMetadata;
+  fallbackUsed: boolean;
+}
+
+export interface ChatToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+  };
+}
+
+export interface ChatToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface ChatCompletionDelta {
+  content?: string;
+  toolCalls?: ChatToolCall[];
+}
+
+export interface ChatCompletionStreamResult {
+  text: string;
+  toolCalls: ChatToolCall[];
   provider: ProviderMetadata;
   fallbackUsed: boolean;
 }
@@ -30,6 +71,7 @@ export interface ChatCompletionResult {
 export interface ChatProvider {
   metadata: ProviderMetadata;
   complete(request: ChatCompletionRequest): Promise<ChatCompletionResult>;
+  completeStream?(request: ChatCompletionRequest): AsyncIterable<ChatCompletionDelta>;
 }
 
 export interface ProviderErrorOptions {
@@ -134,6 +176,154 @@ export function createDeterministicMockProvider(reason = "local_default"): ChatP
   };
 }
 
+export function createDeterministicMockProviderWithTools(overrides: Partial<ChatProvider> = {}): ChatProvider {
+  const metadata: ProviderMetadata = {
+    id: "mock-with-tools",
+    mode: "mock",
+    model: MOCK_MODEL,
+    status: "configured"
+  };
+
+  let toolCallCounter = 0;
+
+  function pickTools(request: ChatCompletionRequest): ChatToolCall[] {
+    const userMsg = [...request.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+    const lowered = userMsg.toLowerCase();
+    const available = request.tools ?? [];
+    const byName = (name: string) => available.find((t) => t.function.name === name);
+
+    const calls: ChatToolCall[] = [];
+    toolCallCounter += 1;
+
+    // Always search knowledge base first for relevant info
+    if (byName("search_files") && (lowered.includes("ttl") || lowered.includes("brick") || lowered.includes("schema") || lowered.includes("file") || lowered.includes("knowledge"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "search_files", arguments: JSON.stringify({ pattern: "ttl", mode: "files", glob: "*.ttl" }) }
+      });
+    }
+
+    // Read a file if path mentioned
+    if (byName("read_file") && (lowered.includes("read") || lowered.includes("check") || lowered.includes("inspect") || lowered.includes("look at"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 1).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "read_file", arguments: JSON.stringify({ path: "README.md" }) }
+      });
+    }
+
+    // Terminal for analysis
+    if (byName("terminal") && (lowered.includes("analyze") || lowered.includes("run") || lowered.includes("calculate") || lowered.includes("python"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 2).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "terminal", arguments: JSON.stringify({ command: "echo 'Analysis placeholder'" }) }
+      });
+    }
+
+    // Reminder / scheduler patterns
+    if (byName("schedule_reminder") && (lowered.includes("remind") || lowered.includes("reminder") || lowered.includes("提醒") || lowered.includes("秒") || lowered.includes("分钟") || lowered.includes("小时"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 3).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "schedule_reminder", arguments: JSON.stringify({ delay_seconds: 30, message: "Reminder from chat" }) }
+      });
+    }
+
+    // Cancel reminder
+    if (byName("cancel_reminder") && (lowered.includes("cancel") || lowered.includes("取消"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 4).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "cancel_reminder", arguments: JSON.stringify({ action: "cancel_recent" }) }
+      });
+    }
+
+    // List reminders
+    if (byName("list_reminders") && (lowered.includes("list") && (lowered.includes("remind") || lowered.includes("提醒")))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 5).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "list_reminders", arguments: JSON.stringify({}) }
+      });
+    }
+
+    // Fallback: use session_summary to show we're doing something
+    if (calls.length === 0 && byName("session_summary")) {
+      calls.push({
+        id: `call_${String(toolCallCounter).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "session_summary", arguments: JSON.stringify({}) }
+      });
+    }
+
+    return calls;
+  }
+
+  return {
+    metadata,
+    async complete(request) {
+      const lastUserMessage = [...request.messages].reverse().find((message) => message.role === "user")?.content ?? "";
+      const normalized = lastUserMessage.replace(/\s+/gu, " ").trim();
+
+      // If we already have tool results, this is a follow-up turn — synthesize a final answer
+      const hasToolResults = request.messages.some((m) => m.role === "tool");
+      if (hasToolResults) {
+        const toolMessages = request.messages.filter((m) => m.role === "tool");
+        const toolSummary = toolMessages.map((m) => {
+          const content = m.content ?? "";
+          try {
+            const parsed = JSON.parse(content);
+            if (parsed.matches) return `Found ${parsed.count ?? parsed.matches.length} matches in knowledge base`;
+            if (parsed.content) return `Read file (${parsed.totalLines ?? "?"} lines)`;
+            if (parsed.output) return `Command output: ${parsed.output.slice(0, 200)}`;
+            if (parsed.projectId) return `Session summary for ${parsed.projectId}`;
+            return JSON.stringify(parsed).slice(0, 150);
+          } catch {
+            return content.slice(0, 150);
+          }
+        }).join("; ");
+
+        return {
+          text: [
+            `Here's what I found after running my analysis tools:\n\n`,
+            `**Tool Results:** ${toolSummary}\n\n`,
+            `Based on the data I gathered, here's my comprehensive analysis:\n\n`,
+            `Your request was: "${normalized}"\n\n`,
+            `I've completed the following steps:\n`,
+            `1. Searched the knowledge base for relevant files and schemas\n`,
+            `2. Read the relevant configuration and data files\n`,
+            `3. Analyzed the results to provide actionable insights\n\n`,
+            `This is a mock analysis — connect a real LLM provider (set BUILDING_AGENT_LLM_API_KEY) for actual AI-powered multi-turn agent behavior with real-time data analysis.`,
+          ].join(""),
+          provider: metadata,
+          fallbackUsed: false
+        };
+      }
+
+      // First turn: plan + execute tools
+      const toolCalls = pickTools(request);
+      if (toolCalls.length > 0) {
+        const toolNames = toolCalls.map((t) => t.function.name).join(", ");
+        return {
+          text: `Let me analyze your request: "${normalized}"\n\nI'll start by gathering information using these tools: ${toolNames}. One moment...`,
+          toolCalls,
+          provider: metadata,
+          fallbackUsed: false
+        };
+      }
+
+      const text = normalized
+        ? `Mock assistant response for ${request.projectId}: ${normalized}`
+        : `Mock assistant response for ${request.projectId}.`;
+
+      return { text, provider: metadata, fallbackUsed: false };
+    },
+    ...overrides
+  };
+}
+
 export interface OpenAICompatibleProviderOptions {
   apiKey: string;
   baseUrl?: string;
@@ -159,6 +349,37 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     });
   }
 
+  function buildRequestBody(request: ChatCompletionRequest): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model,
+      messages: request.messages.map((message) => {
+        const mapped: Record<string, unknown> = { role: message.role };
+        if (message.content !== null) mapped.content = message.content;
+        if (message.tool_calls) mapped.tool_calls = message.tool_calls;
+        if (message.tool_call_id) mapped.tool_call_id = message.tool_call_id;
+        if (message.name) mapped.name = message.name;
+        return mapped;
+      }),
+      temperature: 0.2
+    };
+    if (request.tools && request.tools.length > 0) {
+      body.tools = request.tools;
+      body.tool_choice = request.toolChoice ?? "auto";
+    }
+    if (request.stream) {
+      body.stream = true;
+    }
+    return body;
+  }
+
+  function parseToolCalls(body: Record<string, unknown>): ChatToolCall[] | undefined {
+    const message = (body as { choices?: Array<{ message?: { tool_calls?: unknown } }> }).choices?.[0]?.message;
+    if (!message || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
+      return undefined;
+    }
+    return message.tool_calls as ChatToolCall[];
+  }
+
   return {
     metadata,
     async complete(request) {
@@ -170,11 +391,7 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
             authorization: `Bearer ${options.apiKey}`,
             "content-type": "application/json"
           },
-          body: JSON.stringify({
-            model,
-            messages: request.messages.map((message) => ({ role: message.role, content: message.content })),
-            temperature: 0.2
-          }),
+          body: JSON.stringify(buildRequestBody(request)),
           ...(request.signal ? { signal: request.signal } : {})
         });
       } catch (cause) {
@@ -204,25 +421,114 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
         });
       }
 
-      const text = normalizeProviderText(
-        (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content,
-        metadata
-      );
+      const bodyRecord = body as Record<string, unknown>;
+      const choice = (bodyRecord.choices as Array<Record<string, unknown>> | undefined)?.[0];
+      const message = choice?.message as Record<string, unknown> | undefined;
+      const rawContent = typeof message?.content === "string" ? message.content : null;
+      const toolCalls = parseToolCalls(bodyRecord);
 
-      return {
+      // Validate text content when present (only when no tool calls, to allow tool-only responses)
+      let text: string;
+      if (rawContent !== null && rawContent !== undefined) {
+        text = normalizeProviderText(rawContent, metadata);
+      } else if (toolCalls) {
+        text = "Calling tools...";
+      } else {
+        throw new ProviderError("Provider response did not include assistant text or tool calls.", {
+          code: "provider_malformed_response",
+          provider: metadata
+        });
+      }
+
+      const result: ChatCompletionResult = {
         text,
         provider: metadata,
         fallbackUsed: false
       };
+      if (toolCalls) result.toolCalls = toolCalls;
+      return result;
+    },
+
+    async *completeStream(request) {
+      const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${options.apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(buildRequestBody({ ...request, stream: true })),
+        ...(request.signal ? { signal: request.signal } : {})
+      });
+
+      if (!response.ok) {
+        throw new ProviderError("Chat provider streaming request failed.", {
+          code: "provider_http_error",
+          status: response.status,
+          provider: { ...metadata, status: String(response.status) }
+        });
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new ProviderError("Chat provider streaming response had no body.", {
+          code: "provider_malformed_response",
+          provider: metadata
+        });
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith("data: ")) continue;
+            const data = trimmed.slice(6);
+            if (data === "[DONE]") return;
+
+            try {
+              const parsed = JSON.parse(data);
+              const delta = (parsed as Record<string, unknown>).choices as Array<Record<string, unknown>> | undefined;
+              if (!delta?.[0]) continue;
+
+              const deltaMsg = delta[0].delta as Record<string, unknown> | undefined;
+              if (!deltaMsg) continue;
+
+              const result: ChatCompletionDelta = {};
+              if (typeof deltaMsg.content === "string") {
+                result.content = deltaMsg.content;
+              }
+              if (Array.isArray(deltaMsg.tool_calls)) {
+                result.toolCalls = deltaMsg.tool_calls as ChatToolCall[];
+              }
+              if (result.content || result.toolCalls) {
+                yield result;
+              }
+            } catch {
+              // skip unparseable SSE lines
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
     }
   };
 }
 
 export function resolveChatProvider(env: ProviderEnv, options: ResolveChatProviderOptions = {}): ChatProvider {
   const provider = nonEmpty(env.BUILDING_AGENT_LLM_PROVIDER);
-  const apiKey = nonEmpty(env.BUILDING_AGENT_LLM_API_KEY ?? env.OPENAI_API_KEY ?? env.CHAT_PROVIDER_API_KEY);
-  const model = nonEmpty(env.BUILDING_AGENT_LLM_MODEL ?? env.OPENAI_MODEL ?? env.CHAT_PROVIDER_MODEL) ?? DEFAULT_OPENAI_MODEL;
-  const baseUrl = nonEmpty(env.BUILDING_AGENT_LLM_BASE_URL ?? env.OPENAI_BASE_URL ?? env.CHAT_PROVIDER_BASE_URL) ?? DEFAULT_OPENAI_BASE_URL;
+  const apiKey = nonEmpty(env.BUILDING_AGENT_LLM_API_KEY ?? env.LLM_API_KEY ?? env.OPENAI_API_KEY ?? env.CHAT_PROVIDER_API_KEY);
+  const model = nonEmpty(env.BUILDING_AGENT_LLM_MODEL ?? env.LLM_MODEL ?? env.OPENAI_MODEL ?? env.CHAT_PROVIDER_MODEL) ?? DEFAULT_OPENAI_MODEL;
+  const baseUrl = nonEmpty(env.BUILDING_AGENT_LLM_BASE_URL ?? env.LLM_BASE_URL ?? env.OPENAI_BASE_URL ?? env.CHAT_PROVIDER_BASE_URL) ?? DEFAULT_OPENAI_BASE_URL;
 
   if (provider && provider !== "mock" && provider !== "openai-compatible") {
     throw new ProviderError("Unsupported chat provider configured.", {
@@ -239,7 +545,7 @@ export function resolveChatProvider(env: ProviderEnv, options: ResolveChatProvid
 }
 
 export function shouldAllowProviderFallback(env: ProviderEnv, explicit?: boolean): boolean {
-  return explicit ?? envFlag(env.BUILDING_AGENT_LLM_ALLOW_FALLBACK ?? env.CHAT_PROVIDER_ALLOW_FALLBACK ?? env.ALLOW_PROVIDER_FALLBACK);
+  return explicit ?? envFlag(env.BUILDING_AGENT_LLM_ALLOW_FALLBACK ?? env.LLM_ALLOW_FALLBACK ?? env.CHAT_PROVIDER_ALLOW_FALLBACK ?? env.ALLOW_PROVIDER_FALLBACK);
 }
 
 export function redactedProviderError(error: unknown): { code: string; status?: number; provider?: ProviderMetadata } {

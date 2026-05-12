@@ -94,7 +94,7 @@ function deferredResponse() {
   return { promise, resolve };
 }
 
-function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[] } = {}) {
+function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[]; artifacts?: unknown[]; documents?: unknown[] } = {}) {
   const project = options.project ?? alphaProject;
   return installFetch((url, init) => {
     if (url === "/api/login") {
@@ -121,16 +121,61 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
       return jsonResponse({
         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
         assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "Mock assistant response for project_alpha: What should we build first?" },
+        artifact: { id: "artifact_msg_000002", projectId: project.id, name: "Assistant note: What should we build first?", kind: "note", generatedAt: "2026-05-11T00:00:00.000Z", sourceMessageId: "msg_000002", description: "Saved assistant response from the chat workspace.", content: "Mock assistant response for project_alpha: What should we build first?" },
         provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
         fallbackUsed: true,
         requestId: "req_post"
       }, 201);
+    }
+    if (url === `/api/projects/${project.id}/chat/stream` && init?.method === "POST") {
+      const donePayload = {
+        message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
+        assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "Mock assistant response for project_alpha: What should we build first?" },
+        artifact: { id: "artifact_msg_000002", projectId: project.id, name: "Assistant note: What should we build first?", kind: "note", generatedAt: "2026-05-11T00:00:00.000Z", sourceMessageId: "msg_000002", description: "Saved assistant response from the chat workspace.", content: "Mock assistant response for project_alpha: What should we build first?" },
+        conversationId: "conv_test",
+        conversationTitle: "What should we build first?",
+        provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", status: "fallback", fallbackUsed: true },
+        fallbackUsed: true,
+        requestId: "req_stream"
+      };
+      const sseBody = [
+        "event: lifecycle\ndata: " + JSON.stringify({ type: "loop_started", message: "Agent loop started.", at: new Date().toISOString() }),
+        "event: lifecycle\ndata: " + JSON.stringify({ type: "turn_completed", message: donePayload.assistantMessage.content, at: new Date().toISOString(), metadata: { iterations: 1, toolsUsed: 0 } }),
+        "event: done\ndata: " + JSON.stringify(donePayload),
+        ""
+      ].join("\n\n");
+      return new Response(sseBody, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
     }
     if (url === "/api/registry") {
       return options.registry ?? jsonResponse(registryBody());
     }
     if (url === `/api/projects/${project.id}/management`) {
       return options.management ?? jsonResponse(managementBody({ projectId: project.id }));
+    }
+    if (url === `/api/projects/${project.id}/knowledge-base`) {
+      return jsonResponse({ documents: options.documents ?? [{ id: "kb_bldg40", projectId: project.id, name: "bldg40.ttl", path: "bldg40.ttl", kind: "turtle", sizeBytes: 2048, excerpt: "Brick building metadata" }], requestId: "req_kb" });
+    }
+    if (url === `/api/projects/${project.id}/repository`) {
+      return jsonResponse({ artifacts: options.artifacts ?? [], requestId: "req_repo" });
+    }
+    if (url === `/api/projects/${project.id}/conversations` && init?.method !== "POST") {
+      return jsonResponse({ conversations: [{ id: "conv_test", title: "What should we build first?", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }], limit: 50, requestId: "req_conversations" });
+    }
+    if (url === `/api/projects/${project.id}/conversations` && init?.method === "POST") {
+      return jsonResponse({ conversation: { id: "conv_new", title: "New conversation", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_new_conv" }, 201);
+    }
+    if (url.startsWith(`/api/projects/${project.id}/conversations/`) && url.endsWith("/select")) {
+      return jsonResponse({ conversation: { id: "conv_test", title: "What should we build first?", messageCount: 2, createdAt: "2026-05-12T00:00:00.000Z" }, messages: [], requestId: "req_select_conv" });
+    }
+    if (url.startsWith(`/api/projects/${project.id}/conversations/`) && init?.method === "DELETE") {
+      return jsonResponse({ deleted: true, conversationId: url.split("/").slice(-1)[0], removedMessages: 2, requestId: "req_delete_conv" });
+    }
+    if (url.startsWith(`/api/projects/${project.id}/conversations/`) && init?.method === "PATCH") {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      return jsonResponse({ conversation: { id: url.split("/").slice(-1)[0], title: body.title ?? "Renamed", messageCount: 2, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_rename_conv" });
     }
     return apiError("not_found", "Unexpected test URL", 404);
   });
@@ -139,7 +184,7 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
 async function loginAndSelectProject(user = userEvent.setup()) {
   await user.click(screen.getByRole("button", { name: /sign in/i }));
   await screen.findByRole("heading", { name: /buildingagent workspace/i });
-  await user.click(screen.getByRole("button", { name: /new project/i }));
+  await user.click(screen.getByRole("button", { name: /alpha build/i }));
   await screen.findByRole("heading", { name: /alpha build workspace/i });
 }
 
@@ -187,7 +232,7 @@ describe("BuildingAgent Web flow", () => {
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByRole("heading", { name: /buildingagent workspace/i });
 
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
     expect(await screen.findByRole("heading", { name: /alpha build workspace/i })).toBeInTheDocument();
     expect(screen.getAllByText(/alpha build workspace/i).length).toBeGreaterThan(0);
     expect(screen.getByText("Energy Baseline Analysis")).toBeInTheDocument();
@@ -195,11 +240,13 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Energy Baseline/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Space Summary/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 files/i)).toBeInTheDocument();
 
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "What should we build first?");
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
-    expect(await screen.findByText("What should we build first?")).toBeInTheDocument();
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    expect(within(messageList).getByText("What should we build first?")).toBeInTheDocument();
     expect(await screen.findByText("Mock assistant response for project_alpha: What should we build first?")).toBeInTheDocument();
     const assistantMessage = screen.getByRole("article", { name: /assistant message/i });
     expect(assistantMessage).not.toHaveTextContent("BuildingAgent");
@@ -209,9 +256,15 @@ describe("BuildingAgent Web flow", () => {
     expect(diagnostics).toHaveTextContent("Model: deterministic-local-mock");
     expect(diagnostics).toHaveTextContent("Fallback: yes");
     expect(diagnostics).toHaveTextContent("Reason: local_default");
-    expect(diagnostics).toHaveTextContent("Request: req_post");
+    expect(diagnostics).toHaveTextContent("Request: req_stream");
     expect(diagnostics).not.toHaveTextContent(/provider-secret-should-not-render|apiKey/i);
-    const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "POST");
+    expect(screen.getByRole("list", { name: /recent conversations/i })).toHaveTextContent("What should we build first?");
+    expect(screen.getByText(/1 items/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^repository/i }));
+    expect(await screen.findByText("Assistant note: What should we build first?")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /knowledge base/i }));
+    expect((await screen.findAllByText("bldg40.ttl")).length).toBeGreaterThan(0);
+    const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST");
     expect(chatPostCall).toBeTruthy();
     expect(chatPostCall?.[1]).toMatchObject({
       method: "POST",
@@ -232,13 +285,12 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
     await loginAndSelectProject(user);
-    expect(screen.getByText("Existing context")).toBeInTheDocument();
+    expect(within(screen.getByLabelText(/alpha build messages/i)).getByText("Existing context")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /new chat/i }));
 
-    const resetCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat" && init?.method === "DELETE");
-    expect(resetCall).toBeTruthy();
-    expect(await screen.findByRole("status")).toHaveTextContent("New chat started");
+    // New chat no longer creates a server-side conversation; it clears local state only
+    expect(await screen.findByRole("status")).toHaveTextContent("New chat ready");
     expect(screen.queryByText("Existing context")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/provider diagnostics/i)).not.toBeInTheDocument();
   });
@@ -288,7 +340,7 @@ describe("BuildingAgent Web flow", () => {
 
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
@@ -313,7 +365,7 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") {
         return jsonResponse({ messages: [{ id: "msg_existing", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Existing context" }], limit: 50, requestId: "req_chat" });
       }
-      if (url === "/api/projects/project_alpha/chat" && init?.method === "POST") {
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
         return apiError("project_forbidden", "Project permission is required.", 403, "req_chat_forbidden");
       }
       if (url === "/api/registry") {
@@ -329,14 +381,14 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await loginAndSelectProject(user);
 
-    expect(screen.getByText("Existing context")).toBeInTheDocument();
+    expect(within(screen.getByLabelText(/alpha build messages/i)).getByText("Existing context")).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "Please mutate optimistically");
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
     expect(alert).toHaveTextContent("req_chat_forbidden");
-    expect(screen.getByText("Existing context")).toBeInTheDocument();
+    expect(screen.getAllByText("Existing context").length).toBeGreaterThan(0);
     expect(screen.queryByText("Please mutate optimistically")).not.toBeInTheDocument();
   });
 
@@ -376,7 +428,7 @@ describe("BuildingAgent Web flow", () => {
     await user.type(screen.getByLabelText(/email/i), "ada@example.test");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
     await screen.findByRole("heading", { name: /alpha build workspace/i });
 
     const sendButton = screen.getByRole("button", { name: /send message/i });
@@ -415,7 +467,7 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByText("Beta Build");
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /beta build/i }));
 
     const workspace = await screen.findByRole("heading", { name: /beta build workspace/i });
     expect(workspace).toBeInTheDocument();
@@ -433,7 +485,7 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("registry_unavailable");
@@ -441,7 +493,7 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
 
     installBaseFetch({ management: apiError("project_forbidden", "Project management denied.", 403, "req_management_fail") });
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
     const secondAlert = await screen.findByRole("alert");
     expect(secondAlert).toHaveTextContent("project_forbidden");
     expect(secondAlert).toHaveTextContent("req_management_fail");
@@ -455,7 +507,7 @@ describe("BuildingAgent Web flow", () => {
     const { unmount } = render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
     unmount();
 
@@ -465,12 +517,12 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
 
     vi.unstubAllGlobals();
     installBaseFetch({ registry: jsonResponse(registryBody({ runtimeProviders: [], tools: [], skills: [], gateways: [], buildingCapabilities: [] })), management: jsonResponse(managementBody({ gateways: [], capabilities: [], tools: [] })) });
-    await user.click(screen.getByRole("button", { name: /new project/i }));
+    await user.click(screen.getByRole("button", { name: /alpha build/i }));
     await screen.findByRole("heading", { name: /alpha build workspace/i });
     expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
   });
@@ -492,14 +544,8 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") {
         return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
       }
-      if (url === "/api/projects/project_alpha/chat" && init?.method === "POST") {
-        return jsonResponse({
-          message: { id: "msg_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "malformed please" },
-          assistantMessage: { id: "msg_assistant", projectId: "project_alpha", userId: "user_ada", role: "system", content: "wrong role" },
-          provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackUsed: true },
-          fallbackUsed: true,
-          requestId: "req_bad_post"
-        }, 201);
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        return apiError("api_malformed", "Chat post returned an unexpected assistant message.", 502, "req_bad_post");
       }
       if (url === "/api/registry") {
         return jsonResponse(registryBody());
@@ -539,13 +585,8 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") {
         return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
       }
-      if (url === "/api/projects/project_alpha/chat" && init?.method === "POST") {
-        return jsonResponse({
-          message: { id: "msg_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "metadata please" },
-          provider: { id: "deterministic-mock", mode: "mock", model: 123, fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
-          fallbackUsed: true,
-          requestId: "req_bad_provider"
-        }, 201);
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        return apiError("api_malformed", "Chat post returned unexpected provider diagnostics.", 502, "req_bad_provider");
       }
       if (url === "/api/registry") {
         return jsonResponse(registryBody());
@@ -585,7 +626,7 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") {
         return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
       }
-      if (url === "/api/projects/project_alpha/chat" && init?.method === "POST") {
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
         return apiError("provider_error", "Chat provider failed before producing a safe response.", 502, "req_provider_fail");
       }
       if (url === "/api/registry") {

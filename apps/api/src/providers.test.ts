@@ -77,6 +77,34 @@ describe("chat provider resolution and adapters", () => {
     expect(mock.metadata).toMatchObject({ id: "deterministic-mock", mode: "mock", fallbackReason: "local_default" });
   });
 
+  it("accepts existing LLM_* environment aliases", async () => {
+    const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = [];
+    const provider = resolveChatProvider(
+      {
+        LLM_API_KEY: "provider-test-key",
+        LLM_BASE_URL: "https://provider.example/v1",
+        LLM_MODEL: "alias-model"
+      },
+      {
+        fetch: async (input, init) => {
+          calls.push(init === undefined ? { input } : { input, init });
+          return jsonResponse({ choices: [{ message: { content: "Alias answer" } }] });
+        }
+      }
+    );
+
+    const result = await provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_test",
+      messages: [{ role: "user", content: "Hello" }]
+    });
+
+    expect(String(calls[0]?.input)).toBe("https://provider.example/v1/chat/completions");
+    expect(JSON.parse(String(calls[0]?.init?.body)).model).toBe("alias-model");
+    expect(result.provider).toEqual({ id: "openai-compatible", mode: "real", model: "alias-model", status: "configured" });
+  });
+
   it("prefers a configured OpenAI-compatible provider and sends only chat messages to fetch", async () => {
     const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = [];
     const provider = createOpenAICompatibleProvider({

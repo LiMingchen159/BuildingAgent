@@ -1,3 +1,0 @@
-root deps (none)
-apps/api deps @fastify/cors, fastify dev @types/node, tsx, typescript, vitest
-apps/web deps @vitejs/plugin-react, vite, react, react-dom dev @testing-library/jest-dom, @testing-library/react, @testing-library/user-event, @types/react, @types/react-dom, jsdom, typescript, vitest

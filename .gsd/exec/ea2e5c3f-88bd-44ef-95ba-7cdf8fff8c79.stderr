@@ -1,7 +1,0 @@
-Missing script: "apps/api/src/auth.test.ts" for /mnt/d/Git_Project/BuildingAgent/package.json
-
-Available scripts are:
-  dev: npm --workspace @building-agent/api run dev
-  build: npm --workspace @building-agent/api run build
-  test: node -e "const { spawnSync } = require('node:child_process'); const args = process.argv.slice(1).filter((arg) => arg !== '--').map((arg) => arg.replace(/^apps\/api\//, '')); const result = spawnSync('npm', ['--workspace', '@building-agent/api', 'exec', '--', 'vitest', 'run', ...args], { stdio: 'inherit' }); process.exit(result.status ?? 1);"
-  typecheck: npm --workspace @building-agent/api run typecheck

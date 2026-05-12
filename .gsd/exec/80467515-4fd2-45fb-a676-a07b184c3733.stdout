@@ -1,3 +1,0 @@
-apps/web/src/App.test.tsx:113 openai_like_key provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "sk-should-not-render" },
-apps/web/src/App.test.tsx:189 openai_like_key expect(diagnostics).not.toHaveTextContent(/sk-should-not-render|apiKey/i);
-S04_REDACTION_SCAN exit=1 duration_ms=60
