@@ -30,6 +30,8 @@ import { loadStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { WebSocketServer } from "ws";
+import type { WebSocket } from "ws";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -195,6 +197,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     store.messagesByProject[job.projectId] = msgs;
     scheduleSave(store);
+
+    // Broadcast via WebSocket for real-time delivery
+    broadcastToProject(job.projectId, {
+      type: "reminder_fired",
+      message: assistantMsg,
+      jobId: job.jobId
+    });
   });
   scheduler.start();
 
@@ -212,6 +221,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
     })()
   });
+
+  // WebSocket connection tracking per project
+  const wsConnections = new Map<string, Set<WebSocket>>();
+
+  function broadcastToProject(projectId: string, data: Record<string, unknown>): void {
+    const sockets = wsConnections.get(projectId);
+    if (!sockets || sockets.size === 0) return;
+    const payload = JSON.stringify(data);
+    for (const ws of sockets) {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(payload);
+      }
+    }
+  }
 
   void app.register(cors, { origin: true });
 
@@ -1401,6 +1424,50 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     request.log.error({ err: error, requestId: requestIdFor(request) }, "Unhandled API error");
     return sendError(request, reply, 500, "internal_error", "Unexpected API error.");
+  });
+
+  // WebSocket server for real-time push notifications
+  const wss = new WebSocketServer({ noServer: true });
+
+  app.server.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    const match = /^\/api\/projects\/([^/]+)\/ws$/.exec(url.pathname);
+    if (!match) return;
+
+    const projectId = match[1]!;
+    const token = url.searchParams.get("token");
+    if (!token || !store.tokens[token]) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    const userId = store.tokens[token]!;
+    const member = store.memberships.find((m) => m.projectId === projectId && m.userId === userId);
+    if (!member || !member.permissions.includes("chat:read")) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      let sockets = wsConnections.get(projectId);
+      if (!sockets) {
+        sockets = new Set();
+        wsConnections.set(projectId, sockets);
+      }
+      sockets.add(ws);
+
+      ws.send(JSON.stringify({ type: "connected", projectId }));
+
+      ws.on("close", () => {
+        const set = wsConnections.get(projectId);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) wsConnections.delete(projectId);
+        }
+      });
+    });
   });
 
   return app;
