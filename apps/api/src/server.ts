@@ -199,6 +199,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   scheduler.start();
 
   const tools = createGenericToolRegistry(memory, scheduler);
+  tools.enableLogging(path.join(knowledgeBaseRoot(env), "..", "data"));
   const agentRuntime = new AgentRuntime({ memory, tools, skills });
   const kbRoot = knowledgeBaseRoot(env);
   const app = Fastify({
@@ -468,6 +469,40 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       messages: bounded(messages, store.maxListSize),
       activeConversationId,
       limit: store.maxListSize,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams; Querystring: { tool?: string; limit?: string } }>("/api/projects/:projectId/tool-logs", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) {
+      return membership;
+    }
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) {
+      return selected;
+    }
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) {
+      return readable;
+    }
+
+    const toolFilter = typeof request.query?.tool === "string" ? request.query.tool : undefined;
+    const limit = typeof request.query?.limit === "string" ? Math.min(parseInt(request.query.limit, 10) || 50, 200) : 50;
+    const logs = tools.queryLogs({ projectId: request.params.projectId, ...(toolFilter ? { tool: toolFilter } : {}), limit });
+
+    return {
+      projectId: request.params.projectId,
+      logs,
+      count: logs.length,
+      totalCount: tools.logCount(),
       requestId: requestIdFor(request)
     };
   });
