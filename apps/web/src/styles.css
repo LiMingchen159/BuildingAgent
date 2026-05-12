@@ -297,7 +297,8 @@ button {
 
 button:hover:not(:disabled),
 button:focus-visible:not(:disabled) {
-  background: #2f3744;
+  background: #ebedf0;
+  color: var(--color-text-primary);
   transform: translateY(-1px);
 }
 
