@@ -104,7 +104,7 @@ export interface SendChatResponse {
 
 export interface StreamEventHandlers {
   onLifecycle?: (event: ChatLifecycleEvent) => void;
-  onError?: (error: { code: string; message: string }) => void;
+  onError?: (error: { code: string; message: string; requestId?: string }) => void;
   onDone?: (response: SendChatResponse) => void;
 }
 
@@ -118,19 +118,25 @@ export async function sendChatMessageStream(
 ): Promise<void> {
   const url = apiUrl(`/api/projects/${encodeURIComponent(projectId)}/chat/stream`);
 
+  const streamHeaders = new Headers(authHeaders(token));
+  streamHeaders.set("Content-Type", "application/json");
+
   const fetchInit: RequestInit = {
     method: "POST",
-    headers: {
-      ...authHeaders(token),
-      "Content-Type": "application/json"
-    },
+    headers: streamHeaders,
     body: JSON.stringify({ message, ...(conversationId ? { conversationId } : {}) })
   };
   if (signal) {
     fetchInit.signal = signal;
   }
 
-  const response = await fetch(url, fetchInit);
+  let response: Response;
+  try {
+    response = await fetch(url, fetchInit);
+  } catch {
+    handlers.onError?.({ code: "api_unavailable", message: "Local API is unavailable. Check that the API dev server is running, then retry." });
+    return;
+  }
 
   if (!response.ok) {
     const detail = parseApiError(await readJson(response));
