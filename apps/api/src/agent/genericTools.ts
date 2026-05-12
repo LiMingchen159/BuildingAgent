@@ -438,7 +438,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         }
         const job = scheduler.schedule({
           projectId: context.projectId,
-          conversationId: "",
+          conversationId: context.conversationId,
           userId: context.userId,
           message,
           triggerAt: Date.now() + delay * 1000

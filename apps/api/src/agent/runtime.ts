@@ -272,7 +272,18 @@ export class AgentRuntime {
     }
 
     if (iterations >= maxIterations && !finalText) {
-      finalText = "I've completed the maximum number of analysis steps. Here's what I found so far.";
+      yield yieldEvent(this.makeEvent("provider_started", "Max iterations reached. Making final summary call without tools.", {
+        iteration: iterations + 1,
+        grace: true
+      }));
+      try {
+        const { completion: graceCompletion } = await this.callProvider(request, conversationMessages, []);
+        finalText = graceCompletion.text || "I've completed the maximum number of analysis steps.";
+        finalProvider = graceCompletion.provider;
+        finalFallbackUsed = graceCompletion.fallbackUsed;
+      } catch {
+        finalText = "I've completed the maximum number of analysis steps. Here's what I found so far.";
+      }
     }
 
     yield yieldEvent(this.makeEvent("assistant_message_completed", "Assistant message completed.", {
