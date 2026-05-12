@@ -1,4 +1,4 @@
-import { FormEvent, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
@@ -100,6 +100,29 @@ interface StoredSession {
 }
 
 type BannerState = BannerProps;
+type ProjectPickerView = "cards" | "list";
+
+const PROJECT_COLOR_PRESETS = [
+  { id: "mint", label: "Mint", bg: "#eefbf5", fg: "#13855f", border: "#9edec2" },
+  { id: "sky", label: "Sky", bg: "#edf5ff", fg: "#2563eb", border: "#b9d5ff" },
+  { id: "violet", label: "Violet", bg: "#f3efff", fg: "#7c3aed", border: "#d8c9ff" },
+  { id: "amber", label: "Amber", bg: "#fff7e6", fg: "#b7791f", border: "#f2d39a" },
+  { id: "slate", label: "Slate", bg: "#eef1f5", fg: "#334155", border: "#cbd5e1" }
+] as const;
+
+const PROJECT_LOGO_PRESETS = [
+  { id: "building", label: "Building", icon: "building" },
+  { id: "folder", label: "Folder", icon: "folder" },
+  { id: "snowflake", label: "Cooling", icon: "snowflake" },
+  { id: "activity", label: "Energy", icon: "activity" },
+  { id: "shield", label: "Secure", icon: "shield-check" }
+] as const satisfies ReadonlyArray<{ id: string; label: string; icon: IconName }>;
+
+const PROJECT_FILTERS = ["All projects", "Active", "Paused"] as const;
+type ProjectColorId = (typeof PROJECT_COLOR_PRESETS)[number]["id"];
+type ProjectLogoId = (typeof PROJECT_LOGO_PRESETS)[number]["id"];
+const DEFAULT_PROJECT_COLOR = PROJECT_COLOR_PRESETS[0];
+const DEFAULT_PROJECT_LOGO = PROJECT_LOGO_PRESETS[0];
 
 function apiDocumentToUi(document: ApiKnowledgeBaseDocument) {
   return {
@@ -270,18 +293,34 @@ function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: str
     </main>
   );
 }
-function projectMockMetrics(projectId: string): { lastOpened: string; knowledgeBases: number; repositories: number; tasks: number } {
+function projectHash(projectId: string): number {
   let hash = 0;
   for (let index = 0; index < projectId.length; index += 1) {
     hash = (hash * 31 + projectId.charCodeAt(index)) >>> 0;
   }
-  const days = (hash % 14) + 1;
-  const lastOpened = days === 1 ? "Last opened: yesterday" : `Last opened: ${days} days ago`;
+  return hash;
+}
+
+function projectVisual(project: Pick<ProjectSummary, "id" | "name">) {
+  const hash = projectHash(project.id);
   return {
-    lastOpened,
-    knowledgeBases: (hash >> 4) % 6,
-    repositories: (hash >> 8) % 4,
-    tasks: (hash >> 12) % 12
+    color: PROJECT_COLOR_PRESETS[hash % PROJECT_COLOR_PRESETS.length] ?? DEFAULT_PROJECT_COLOR,
+    logo: PROJECT_LOGO_PRESETS[(hash >> 3) % PROJECT_LOGO_PRESETS.length] ?? DEFAULT_PROJECT_LOGO
+  };
+}
+
+function projectMockMetrics(projectId: string): { lastOpened: string; conversations: number; assets: number; tasks: number; zone: string; status: "Active" | "Paused"; recommended: boolean } {
+  const hash = projectHash(projectId);
+  const days = (hash % 14) + 1;
+  const zoneNames = ["Cooling Plant", "Air Handler Units", "Chillers", "Demo Zone", "Envelope", "Energy Model"] as const;
+  return {
+    lastOpened: days === 1 ? "1d ago" : `${days}d ago`,
+    conversations: ((hash >> 4) % 94) + 6,
+    assets: ((hash >> 8) % 4200) + 80,
+    tasks: (hash >> 12) % 12,
+    zone: zoneNames[hash % zoneNames.length] ?? zoneNames[0],
+    status: hash % 5 === 0 ? "Paused" : "Active",
+    recommended: hash % 7 === 0 || projectId.includes("alpha")
   };
 }
 
@@ -302,73 +341,231 @@ function ProjectCardSkeleton() {
   );
 }
 
-function ProjectScreen({ projects, onSelect, onSignOut, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; onSignOut: () => void; busy: boolean }) {
+function ProjectMark({ project, colorId, logoId, className = "" }: { project?: Pick<ProjectSummary, "id" | "name">; colorId?: string; logoId?: string; className?: string }) {
+  const visual = project ? projectVisual(project) : null;
+  const color = PROJECT_COLOR_PRESETS.find((preset) => preset.id === colorId) ?? visual?.color ?? DEFAULT_PROJECT_COLOR;
+  const logo = PROJECT_LOGO_PRESETS.find((preset) => preset.id === logoId) ?? visual?.logo ?? DEFAULT_PROJECT_LOGO;
+  return (
+    <span
+      className={`project-picker-mark ${className}`.trim()}
+      style={{ "--project-mark-bg": color.bg, "--project-mark-fg": color.fg, "--project-mark-border": color.border } as CSSProperties}
+      aria-hidden="true"
+    >
+      <Icon name={logo.icon} />
+    </span>
+  );
+}
+
+function ProjectPickerCard({ project, busy, onSelect }: { project: ProjectSummary; busy: boolean; onSelect: (project: ProjectSummary) => void }) {
+  const metrics = projectMockMetrics(project.id);
+  const canChat = project.permissions.includes("chat:read");
+  return (
+    <article className={`project-picker-card${metrics.recommended ? " is-recommended" : ""}`}>
+      <div className="project-picker-card-top">
+        <ProjectMark project={project} />
+        <button type="button" className="project-picker-more" aria-label={`${project.name} actions`} disabled={busy}>
+          <Icon name="more" />
+        </button>
+      </div>
+      {metrics.recommended ? <span className="project-picker-recommended"><Icon name="shield-check" />Recommended</span> : null}
+      <div className="project-picker-title">
+        <h2>{project.name}</h2>
+        <p>{project.id}</p>
+      </div>
+      <dl className="project-picker-metrics" aria-label={`${project.name} project metrics`}>
+        <div><dt><Icon name="message" />Conversations</dt><dd>{metrics.conversations}</dd></div>
+        <div><dt><Icon name="folder" />Assets</dt><dd>{metrics.assets.toLocaleString()}</dd></div>
+        <div><dt><Icon name="clock" />Last activity</dt><dd>{metrics.lastOpened}</dd></div>
+      </dl>
+      <div className="project-picker-card-footer">
+        <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
+        <span className="project-picker-zone">{metrics.zone}</span>
+        <button type="button" className="project-picker-open" onClick={() => onSelect(project)} disabled={busy || !canChat}>
+          Open <Icon name="arrow-up" />
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ProjectPickerListRow({ project, busy, onSelect }: { project: ProjectSummary; busy: boolean; onSelect: (project: ProjectSummary) => void }) {
+  const metrics = projectMockMetrics(project.id);
+  return (
+    <button type="button" className="project-picker-list-row" onClick={() => onSelect(project)} disabled={busy}>
+      <ProjectMark project={project} />
+      <span className="project-picker-list-main">
+        <strong>{project.name}</strong>
+        <span>{project.id}</span>
+      </span>
+      <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
+      <span>{metrics.conversations} conversations</span>
+      <span>{metrics.assets.toLocaleString()} assets</span>
+      <span>{metrics.lastOpened}</span>
+      <Icon name="arrow-up" />
+    </button>
+  );
+}
+
+function NewProjectForm({ onCreate, busy, onCancel }: { onCreate: (name: string) => void; busy: boolean; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const [colorId, setColorId] = useState<ProjectColorId>(DEFAULT_PROJECT_COLOR.id);
+  const [logoId, setLogoId] = useState<ProjectLogoId>(DEFAULT_PROJECT_LOGO.id);
+  const previewProject = { id: "project_preview", name: name.trim() || "New Project" };
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim() || busy) return;
+    onCreate(name.trim());
+    setName("");
+    onCancel();
+  }
+
+  return (
+    <form className="new-project-form" onSubmit={handleSubmit}>
+      <div className="new-project-form-header">
+        <ProjectMark project={previewProject} colorId={colorId} logoId={logoId} />
+        <div>
+          <h2>Create new project</h2>
+          <p>Choose a title, color, and logo preset.</p>
+        </div>
+      </div>
+      <label className="new-project-title">
+        <span>Project title</span>
+        <Input
+          id="new-project-name"
+          placeholder="Enter project name..."
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          disabled={busy}
+        />
+      </label>
+      <fieldset className="new-project-preset-group">
+        <legend>Color</legend>
+        <div className="new-project-swatches">
+          {PROJECT_COLOR_PRESETS.map((preset) => (
+            <button key={preset.id} type="button" className={preset.id === colorId ? "is-selected" : ""} onClick={() => setColorId(preset.id)} style={{ "--swatch-bg": preset.bg, "--swatch-fg": preset.fg, "--swatch-border": preset.border } as CSSProperties} aria-label={preset.label}>
+              <span />
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="new-project-preset-group">
+        <legend>Logo</legend>
+        <div className="new-project-logo-grid">
+          {PROJECT_LOGO_PRESETS.map((preset) => (
+            <button key={preset.id} type="button" className={preset.id === logoId ? "is-selected" : ""} onClick={() => setLogoId(preset.id)}>
+              <Icon name={preset.icon} />
+              <span>{preset.label}</span>
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      <div className="new-project-form-actions">
+        <Button type="button" variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
+        <Button type="submit" loading={busy} disabled={!name.trim() || busy}>Create project</Button>
+      </div>
+    </form>
+  );
+}
+
+function ProjectPicker({
+  projects,
+  user,
+  busy,
+  onSelect,
+  onCreate,
+  onSignOut,
+  showChrome = true
+}: {
+  projects: ProjectSummary[];
+  user: UserSummary | null;
+  busy: boolean;
+  onSelect: (project: ProjectSummary) => void;
+  onCreate: (name: string) => void;
+  onSignOut: () => void;
+  showChrome?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [view, setView] = useState<ProjectPickerView>("cards");
+  const [filter, setFilter] = useState<(typeof PROJECT_FILTERS)[number]>("All projects");
+  const [creating, setCreating] = useState(false);
+  const filteredProjects = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return projects.filter((project) => {
+      const metrics = projectMockMetrics(project.id);
+      const matchesSearch = !normalized || project.name.toLowerCase().includes(normalized) || project.id.toLowerCase().includes(normalized);
+      const matchesFilter = filter === "All projects" || metrics.status === filter;
+      return matchesSearch && matchesFilter;
+    });
+  }, [projects, query, filter]);
+
+  return (
+    <section className="project-picker" aria-labelledby="projects-title">
+      {showChrome ? (
+        <header className="project-picker-topbar">
+          <div className="project-picker-brand"><span>BA</span><strong>BuildingAgent</strong></div>
+          <div className="project-picker-top-actions">
+            <button type="button" aria-label="Help"><Icon name="info" /></button>
+            <button type="button" aria-label="Notifications"><Icon name="zap" /></button>
+            <button type="button" className="project-picker-user" onClick={onSignOut} aria-label="Sign out">{user?.name?.slice(0, 2).toUpperCase() ?? "BA"}</button>
+          </div>
+        </header>
+      ) : null}
+      <div className="project-picker-body">
+        <div className="project-picker-hero">
+          <p>Welcome back, {user?.name?.split(" ")[0] ?? "there"}</p>
+          <h1 id="projects-title">Choose a project to get started</h1>
+          <span>Pick up where you left off or create a new project to unlock project-scoped chat, knowledge base search, and repository outputs.</span>
+        </div>
+        <div className="project-picker-toolbar">
+          <label className="project-picker-search">
+            <Icon name="search" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects by name or ID..." />
+          </label>
+          <label className="project-picker-filter">
+            <Icon name="settings" />
+            <select value={filter} onChange={(event) => setFilter(event.target.value as (typeof PROJECT_FILTERS)[number])}>
+              {PROJECT_FILTERS.map((option) => <option key={option}>{option}</option>)}
+            </select>
+            <Icon name="chevron-down" />
+          </label>
+          <div className="project-picker-view-toggle" aria-label="Project view">
+            <button type="button" className={view === "cards" ? "is-active" : ""} onClick={() => setView("cards")} aria-label="Card view"><Icon name="grid" /></button>
+            <button type="button" className={view === "list" ? "is-active" : ""} onClick={() => setView("list")} aria-label="List view"><Icon name="table" /></button>
+          </div>
+        </div>
+        {busy ? <p className="project-picker-status-line" role="status"><span className="spinner" aria-hidden="true" />Opening workspace...</p> : null}
+        <div className={`project-picker-results is-${view}`}>
+          {filteredProjects.map((project) => view === "cards" ? (
+            <ProjectPickerCard key={project.id} project={project} busy={busy} onSelect={onSelect} />
+          ) : (
+            <ProjectPickerListRow key={project.id} project={project} busy={busy} onSelect={onSelect} />
+          ))}
+          {filteredProjects.length === 0 ? <p className="project-picker-empty">No projects match that search.</p> : null}
+          {view === "cards" ? (
+            <button type="button" className="project-picker-create-card" onClick={() => setCreating(true)}>
+              <span><Icon name="plus" /></span>
+              <strong>Create new project</strong>
+              <small>Start fresh with a blank project and configure your workspace.</small>
+            </button>
+          ) : (
+            <button type="button" className="project-picker-create-row" onClick={() => setCreating(true)}><Icon name="plus" />Create new project</button>
+          )}
+        </div>
+      </div>
+      {creating ? (
+        <div className="new-project-backdrop" role="presentation">
+          <NewProjectForm onCreate={onCreate} busy={busy} onCancel={() => setCreating(false)} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ProjectScreen({ projects, onSelect, onSignOut, onCreate, user, busy }: { projects: ProjectSummary[]; onSelect: (project: ProjectSummary) => Promise<void>; onSignOut: () => void; onCreate: (name: string) => void; user: UserSummary | null; busy: boolean }) {
   return (
     <main className="workspace-card project-screen minimal-project-shell" aria-labelledby="projects-title">
-      <ParticleField className="minimal-particle-field" density={44} connectionDistance={145} opacity={0.12} />
-      <div className="project-screen-header minimal-project-header">
-        <div>
-          <CubeLogo size={34} className="minimal-project-logo" />
-          <p className="eyebrow">Project boundary</p>
-          <h1 id="projects-title">Choose an authorized project</h1>
-          <p className="muted">Only projects returned by the API for this seeded session are selectable. Metadata below is mock-only; no live customer telemetry.</p>
-        </div>
-        <div className="project-screen-actions">
-          <MockOnlyBadge kind="stub" label="Mock metrics only" />
-          <button type="button" className="project-sign-out" onClick={onSignOut}>Sign out</button>
-        </div>
-      </div>
-      {busy ? (
-        <p className="inline-status project-status" role="status">
-          <span className="spinner" aria-hidden="true" />
-          Opening workspace...
-        </p>
-      ) : null}
-      {projects.length === 0 ? <EmptyState title="No authorized projects">This session did not return any selectable project records.</EmptyState> : null}
-      <div className="project-grid" aria-busy={busy}>
-        {projects.map((project) => {
-          const metrics = projectMockMetrics(project.id);
-          const canChat = project.permissions.includes("chat:read");
-          return (
-            <Card className="project-card minimal-project-card" key={project.id}>
-              <div className="project-card-heading">
-                <div>
-                  <h2>{project.name}</h2>
-                  <p className="project-card-id">{project.id}</p>
-                </div>
-                <Badge tone={canChat ? "success" : "neutral"}>{canChat ? "Chat-enabled" : "Read-only"}</Badge>
-              </div>
-              <p className="project-card-last-opened">{metrics.lastOpened}</p>
-              <dl className="project-card-metrics" aria-label={`${project.name} mock metrics`}>
-                <div>
-                  <dt>Knowledge bases</dt>
-                  <dd>{metrics.knowledgeBases}</dd>
-                </div>
-                <div>
-                  <dt>Repositories</dt>
-                  <dd>{metrics.repositories}</dd>
-                </div>
-                <div>
-                  <dt>Open tasks</dt>
-                  <dd>{metrics.tasks}</dd>
-                </div>
-              </dl>
-              <p className="permissions">{project.permissions.join(" / ") || "No chat permissions"}</p>
-              <Button type="button" className="btn-minimal" onClick={() => void onSelect(project)} loading={busy}>
-                {busy ? "Selecting..." : "Select project"}
-              </Button>
-            </Card>
-          );
-        })}
-        {projects.length > 0 ? (
-          <Card className="project-card project-card-add minimal-project-card" aria-label="Add project (placeholder)">
-            <div className="project-card-add-icon" aria-hidden="true">+</div>
-            <h2>Add project</h2>
-            <p className="muted">New project provisioning is not wired yet. Track progress in M002 follow-up issues.</p>
-            <Button type="button" variant="secondary" className="btn-minimal" disabled>Coming soon</Button>
-          </Card>
-        ) : null}
-      </div>
+      <ProjectPicker projects={projects} user={user} busy={busy} onSelect={(project) => { void onSelect(project); }} onCreate={onCreate} onSignOut={onSignOut} />
     </main>
   );
 }
@@ -810,37 +1007,6 @@ function WorkspaceRightPanel({ registry, management, disabled }: { registry: Reg
   );
 }
 
-function NewProjectForm({ onCreate, busy, onCancel }: { onCreate: (name: string) => void; busy: boolean; onCancel: () => void }) {
-  const [name, setName] = useState("");
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!name.trim() || busy) return;
-    onCreate(name.trim());
-    setName("");
-    onCancel();
-  }
-
-  return (
-    <form className="new-project-form" onSubmit={handleSubmit}>
-      <label className="visually-hidden" htmlFor="new-project-name">Project name</label>
-      <Input
-        id="new-project-name"
-        placeholder="Enter project name..."
-        value={name}
-        onChange={(event) => setName(event.target.value)}
-        disabled={busy}
-      />
-      <Button type="submit" loading={busy} disabled={!name.trim() || busy}>
-        Create
-      </Button>
-      <Button type="button" variant="secondary" onClick={onCancel} disabled={busy}>
-        Cancel
-      </Button>
-    </form>
-  );
-}
-
 function Workspace({
   project,
   projects,
@@ -911,7 +1077,6 @@ function Workspace({
 
   const [leftOpen, setLeftOpen] = useState(project !== null);
   const [rightOpen, setRightOpen] = useState(false);
-  const [showNewProjectForm, setShowNewProjectForm] = useState(false);
 
   useEffect(() => {
     if (project) {
@@ -951,34 +1116,7 @@ function Workspace({
     </div>
   ) : (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
-      <div className="workspace-floating-toggles">
-        <button type="button" className="workspace-icon-button workspace-left-toggle" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
-          <Icon name="panel-left" />
-        </button>
-        <button type="button" className="workspace-icon-button workspace-right-toggle" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
-          <Icon name="panel-right" />
-        </button>
-      </div>
-      <section className="new-project-state">
-        <div className="brand-mark" aria-hidden="true">BA</div>
-        <h1 id="workspace-title">BuildingAgent workspace</h1>
-        <p>Select a project or create a new one to unlock project-scoped chat, knowledge base search, and repository outputs.</p>
-        {projects.length > 0 ? (
-          <div className="project-grid project-grid-select" aria-label="Select a project">
-            {projects.map((proj) => (
-              <button type="button" className="project-card-select" key={proj.id} onClick={() => onSelectProject(proj)} disabled={busy}>
-                <span className="project-card-select-name">{proj.name}</span>
-                <span className="project-card-select-id">{proj.id}</span>
-              </button>
-            ))}
-            <button type="button" className="project-card-select project-card-select-new" onClick={() => setShowNewProjectForm(true)} aria-label="Create new project">
-              <span className="project-card-select-plus">+</span>
-              <span className="project-card-select-label">New project</span>
-            </button>
-          </div>
-        ) : null}
-        {showNewProjectForm ? <NewProjectForm onCreate={onCreateProject} busy={busy} onCancel={() => setShowNewProjectForm(false)} /> : null}
-      </section>
+      <ProjectPicker projects={projects} user={user} busy={busy} onSelect={onSelectProject} onCreate={onCreateProject} onSignOut={onSignOut} />
     </div>
   );
 
