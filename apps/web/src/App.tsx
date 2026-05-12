@@ -1152,6 +1152,43 @@ export default function App() {
     };
   }, [token]);
 
+  // Poll for proactive messages (scheduler-fired reminders) in the active conversation
+  useEffect(() => {
+    if (!token || !selectedProject || !activeConversationId) return;
+
+    const POLL_INTERVAL_MS = 5000;
+    let active = true;
+
+    async function poll() {
+      if (!active || busy) return;
+      try {
+        const chat = await getChat(token!, selectedProject!.id, activeConversationId!);
+        if (!active) return;
+        setMessages((current) => {
+          const currentIds = new Set(current.map((m) => m.id));
+          const newMessages = chat.messages.filter((m) => !currentIds.has(m.id));
+          if (newMessages.length === 0) return current;
+          // Append new messages (typically scheduler-fired assistant messages)
+          const merged = [...current];
+          for (const msg of newMessages) {
+            if (!currentIds.has(msg.id)) {
+              merged.push(msg);
+            }
+          }
+          return merged;
+        });
+      } catch {
+        // Polling failures are silent — retry on next interval
+      }
+    }
+
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
+
   async function handleLogin(email: string, password: string) {
     setBusy(true);
     try {
