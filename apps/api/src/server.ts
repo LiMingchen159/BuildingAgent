@@ -27,7 +27,7 @@ import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
 import { loadStoreSync, scheduleSave } from "./persistence.js";
-import { SchedulerService, parseTimeExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
+import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -677,6 +677,51 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       });
     }
 
+    // Pre-process recurring time expressions (every N minutes, daily at H:00, etc.)
+    const recurExpr = parseRecurringExpression(content);
+    if (recurExpr) {
+      scheduler.schedule({
+        projectId,
+        conversationId,
+        userId: session.userId,
+        message: recurExpr.reminderText,
+        triggerAt: recurExpr.triggerAt,
+        recurrence: recurExpr.recurrence
+      });
+
+      const intervalDesc = recurExpr.recurrence.type === "interval"
+        ? `每${Math.round((recurExpr.recurrence.intervalSeconds ?? 60) / 60)}分钟`
+        : `按计划`;
+
+      const assistantMessage: ChatMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: `好的，${intervalDesc}提醒你「${recurExpr.reminderText}」。`
+      };
+      messages.push(assistantMessage);
+      conversation.messageIds.push(assistantMessage.id);
+      trimChatMessages(messages, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+
+      if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+        conversation.title = `重复提醒: ${recurExpr.reminderText}`.slice(0, 60);
+      }
+
+      scheduleSave(store);
+      return reply.status(201).send({
+        message,
+        assistantMessage,
+        conversationId,
+        conversationTitle: conversation.title,
+        provider: providerDiagnostics(provider.metadata, false),
+        fallbackUsed: false,
+        lifecycle: [],
+        requestId: requestIdFor(request)
+      });
+    }
+
     let agentTurn;
     const projectKbRoot = kbRootForProject(projectId, kbRoot);
     try {
@@ -878,6 +923,52 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       sseWrite("done", JSON.stringify({
         message: userMessage,
         assistantMessage: streamAssistantMessage,
+        conversationId,
+        conversationTitle: conversation.title,
+        provider: providerDiagnostics(provider.metadata, false),
+        fallbackUsed: false,
+        requestId: reqId
+      }));
+      reply.raw.end();
+      return;
+    }
+
+    // Pre-process recurring time expressions (streaming endpoint)
+    const streamRecurExpr = parseRecurringExpression(content);
+    if (streamRecurExpr) {
+      scheduler.schedule({
+        projectId,
+        conversationId,
+        userId: session.userId,
+        message: streamRecurExpr.reminderText,
+        triggerAt: streamRecurExpr.triggerAt,
+        recurrence: streamRecurExpr.recurrence
+      });
+
+      const intervalDesc = streamRecurExpr.recurrence.type === "interval"
+        ? `每${Math.round((streamRecurExpr.recurrence.intervalSeconds ?? 60) / 60)}分钟`
+        : `按计划`;
+
+      const streamAssistMsg: ChatMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: `好的，${intervalDesc}提醒你「${streamRecurExpr.reminderText}」。`
+      };
+      messages.push(streamAssistMsg);
+      conversation.messageIds.push(streamAssistMsg.id);
+      trimChatMessages(messages, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+
+      if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+        conversation.title = `重复提醒: ${streamRecurExpr.reminderText}`.slice(0, 60);
+      }
+
+      scheduleSave(store);
+      sseWrite("done", JSON.stringify({
+        message: userMessage,
+        assistantMessage: streamAssistMsg,
         conversationId,
         conversationTitle: conversation.title,
         provider: providerDiagnostics(provider.metadata, false),

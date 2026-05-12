@@ -7,8 +7,8 @@ import type { AgentMemoryStore } from "./memory.js";
 import { knowledgeBaseRoot } from "./knowledgeBase.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
-import type { SchedulerService, ScheduledJob } from "../scheduler.js";
-import { parseCancelCommand, parseListCommand, parseTimeExpression } from "../scheduler.js";
+import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
+import { parseCancelCommand, parseListCommand, parseTimeExpression, nextCronTime } from "../scheduler.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_READ_BYTES = 200_000;
@@ -576,6 +576,168 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           })),
           count: jobs.length
         };
+      }
+    },
+    {
+      name: "cronjob",
+      category: "utility",
+      description: "Manage cron jobs: list, get, create, update, pause, resume, remove, trigger. Supports one-shot, interval, and cron-expression schedules.",
+      schema: {
+        name: "cronjob",
+        description: "Manage scheduled and recurring jobs. Use 'list' to see all jobs, 'create' to schedule a new job (supports interval seconds, cron expressions), 'pause'/'resume' for recurring jobs, 'remove' to cancel.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              description: "Action: 'list', 'get', 'create', 'update', 'pause', 'resume', 'remove', 'trigger'."
+            },
+            job_id: { type: "string", description: "Job ID for get/pause/resume/remove/trigger actions." },
+            name: { type: "string", description: "Display name for the job (create/update)." },
+            message: { type: "string", description: "Message to deliver when the job fires (create/update)." },
+            schedule: { type: "string", description: "Cron expression (5-field: 'min hour dom month dow') or interval in seconds (create/update)." },
+            is_interval: { type: "boolean", description: "If true, schedule is treated as interval seconds. If false or omitted, treated as cron expression." }
+          },
+          required: ["action"]
+        }
+      },
+      async run(args, context) {
+        if (!scheduler) {
+          return { error: "Scheduler service is not available." };
+        }
+        const action = typeof args.action === "string" ? args.action : "";
+
+        switch (action) {
+          case "list": {
+            const jobs = scheduler.list(context.projectId);
+            return {
+              jobs: jobs.map((j: ScheduledJob) => ({
+                jobId: j.jobId,
+                message: j.message,
+                status: j.status,
+                triggerAt: new Date(j.triggerAt).toISOString(),
+                createdAt: new Date(j.createdAt).toISOString(),
+                recurrence: j.recurrence ?? null,
+                runCount: j.runCount ?? 0
+              })),
+              count: jobs.length
+            };
+          }
+
+          case "get": {
+            const jobId = typeof args.job_id === "string" ? args.job_id : "";
+            if (!jobId) return { error: "job_id is required for 'get' action." };
+            const jobs = scheduler.list(context.projectId);
+            const job = jobs.find((j) => j.jobId === jobId);
+            if (!job) return { error: `Job not found: ${jobId}` };
+            return {
+              job: {
+                jobId: job.jobId,
+                message: job.message,
+                status: job.status,
+                triggerAt: new Date(job.triggerAt).toISOString(),
+                createdAt: new Date(job.createdAt).toISOString(),
+                recurrence: job.recurrence ?? null,
+                runCount: job.runCount ?? 0
+              }
+            };
+          }
+
+          case "create": {
+            const message = typeof args.message === "string" ? args.message.trim() : "";
+            if (!message) return { error: "message is required for 'create'." };
+
+            const scheduleRaw = typeof args.schedule === "string" ? args.schedule.trim() : "";
+            const isInterval = args.is_interval === true;
+
+            let triggerAt = Date.now() + 60_000;
+            let recurrence: JobRecurrence | undefined;
+
+            if (isInterval && scheduleRaw) {
+              const seconds = parseInt(scheduleRaw, 10);
+              if (isNaN(seconds) || seconds <= 0) return { error: "schedule must be a positive number of seconds for interval type." };
+              triggerAt = Date.now() + seconds * 1000;
+              recurrence = { type: "interval", intervalSeconds: seconds };
+            } else if (!isInterval && scheduleRaw) {
+              recurrence = { type: "cron", cronExpression: scheduleRaw };
+              triggerAt = nextCronTime(scheduleRaw, Date.now()) ?? Date.now() + 60_000;
+            } else {
+              // One-shot with default 60s delay
+              triggerAt = Date.now() + 60_000;
+            }
+
+            const job = scheduler.schedule({
+              projectId: context.projectId,
+              conversationId: context.conversationId,
+              userId: context.userId,
+              message,
+              triggerAt,
+              ...(recurrence ? { recurrence } : {})
+            });
+
+            return {
+              created: true,
+              jobId: job.jobId,
+              message: job.message,
+              triggerAt: new Date(job.triggerAt).toISOString(),
+              recurrence: job.recurrence ?? null
+            };
+          }
+
+          case "pause": {
+            const jobId = typeof args.job_id === "string" ? args.job_id : "";
+            if (!jobId) return { error: "job_id is required." };
+            const ok = scheduler.pause(jobId);
+            return ok ? { paused: true, jobId } : { error: "Could not pause job. Is it a pending recurring job?" };
+          }
+
+          case "resume": {
+            const jobId = typeof args.job_id === "string" ? args.job_id : "";
+            if (!jobId) return { error: "job_id is required." };
+            const ok = scheduler.resume(jobId);
+            return ok ? { resumed: true, jobId } : { error: "Could not resume job. Is it a paused job?" };
+          }
+
+          case "remove": {
+            const jobId = typeof args.job_id === "string" ? args.job_id : "";
+            if (!jobId) return { error: "job_id is required." };
+            const ok = scheduler.cancel(jobId);
+            return ok ? { removed: true, jobId } : { error: "Could not remove job." };
+          }
+
+          case "trigger": {
+            const jobId = typeof args.job_id === "string" ? args.job_id : "";
+            if (!jobId) return { error: "job_id is required." };
+            // Trigger by scheduling immediately
+            const triggered = scheduler.schedule({
+              projectId: context.projectId,
+              conversationId: context.conversationId,
+              userId: context.userId,
+              message: `[Triggered] job ${jobId}`,
+              triggerAt: Date.now() + 1000
+            });
+            return { triggered: true, jobId: triggered.jobId, message: "Job triggered for immediate execution." };
+          }
+
+          case "update": {
+            const jobId = typeof args.job_id === "string" ? args.job_id : "";
+            if (!jobId) return { error: "job_id is required." };
+            // Cancel old, create new with same ID
+            scheduler.cancel(jobId);
+            const message = typeof args.message === "string" ? args.message.trim() : "Updated reminder";
+            const updated = scheduler.schedule({
+              projectId: context.projectId,
+              conversationId: context.conversationId,
+              userId: context.userId,
+              message,
+              triggerAt: Date.now() + 60_000
+            });
+            return { updated: true, jobId: updated.jobId, message: updated.message };
+          }
+
+          default:
+            return { error: `Unknown action: ${action}. Supported: list, get, create, update, pause, resume, remove, trigger.` };
+        }
       }
     }
   ];
