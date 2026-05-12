@@ -1092,7 +1092,7 @@ function Workspace({
   // Determine shell class name for sidebar visibility
   const shellClass = [
     "cgpt-workspace-shell",
-    project ? "" : "is-project-picker",
+    project ? "" : "is-no-sidebars",
     !project ? (leftOpen ? "is-left-expanded" : "") : (leftOpen ? "" : "is-left-collapsed"),
     !project ? (rightOpen ? "is-right-expanded" : "") : (rightOpen ? "" : "is-right-collapsed")
   ].filter(Boolean).join(" ");
@@ -1117,6 +1117,14 @@ function Workspace({
     </div>
   ) : (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
+      <div className="workspace-floating-toggles">
+        <button type="button" className="workspace-icon-button workspace-left-toggle" onClick={() => setLeftOpen((open) => !open)} aria-label={leftOpen ? "Collapse project sidebar" : "Expand project sidebar"}>
+          <Icon name="panel-left" />
+        </button>
+        <button type="button" className="workspace-icon-button workspace-right-toggle" onClick={() => setRightOpen((open) => !open)} aria-label={rightOpen ? "Collapse workspace details" : "Expand workspace details"}>
+          <Icon name="panel-right" />
+        </button>
+      </div>
       <ProjectPicker projects={projects} user={user} busy={busy} onSelect={onSelectProject} onCreate={onCreateProject} onSignOut={onSignOut} conversationCounts={projectConversationCounts} assetCounts={projectAssetCounts} showChrome={false} />
     </div>
   );

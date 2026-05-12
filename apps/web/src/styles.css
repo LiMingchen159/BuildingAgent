@@ -3565,10 +3565,6 @@ p {
   grid-template-columns: 280px minmax(0, 1fr) 0;
 }
 
-.cgpt-workspace-shell.workspace-shell.is-project-picker {
-  grid-template-columns: 0 minmax(0, 1fr) 0;
-}
-
 .cgpt-workspace-shell.workspace-shell {
   transition: grid-template-columns 0.3s ease;
 }
@@ -3612,17 +3608,13 @@ p {
 
 .cgpt-workspace-shell.is-left-collapsed .workspace-sidebar,
 .cgpt-workspace-shell.is-right-collapsed .workspace-right,
-.cgpt-workspace-shell.is-no-project .workspace-right,
-.cgpt-workspace-shell.is-project-picker .workspace-sidebar,
-.cgpt-workspace-shell.is-project-picker .workspace-right {
+.cgpt-workspace-shell.is-no-project .workspace-right {
   border: 0;
 }
 
 .cgpt-workspace-shell.is-left-collapsed .workspace-sidebar-inner,
 .cgpt-workspace-shell.is-right-collapsed .workspace-right-inner,
-.cgpt-workspace-shell.is-no-project .workspace-right-inner,
-.cgpt-workspace-shell.is-project-picker .workspace-sidebar-inner,
-.cgpt-workspace-shell.is-project-picker .workspace-right-inner {
+.cgpt-workspace-shell.is-no-project .workspace-right-inner {
   overflow: hidden;
 }
 
