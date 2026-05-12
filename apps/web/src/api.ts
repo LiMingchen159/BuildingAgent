@@ -920,3 +920,90 @@ export async function deleteProject(token: string, projectId: string): Promise<D
     requestId: payload.requestId
   };
 }
+
+// ---- WebSocket ----
+
+export type WsEventHandler = (data: Record<string, unknown>) => void;
+
+export interface ProjectSocket {
+  close(): void;
+  on(event: "message", handler: WsEventHandler): void;
+  on(event: "close", handler: () => void): void;
+}
+
+/** Create a WebSocket connection for real-time project updates. */
+export function createProjectSocket(
+  projectId: string,
+  token: string,
+  apiBaseUrl?: string
+): ProjectSocket {
+  const base = (apiBaseUrl ?? API_BASE_URL).replace(/\/+$/, "");
+  const isHttps = base.startsWith("https://");
+  const wsBase = isHttps ? base.replace("https://", "wss://") : base.replace("http://", "ws://");
+  const url = `${wsBase}/api/projects/${encodeURIComponent(projectId)}/ws?token=${encodeURIComponent(token)}`;
+
+  const handlers: { message: WsEventHandler[]; close: (() => void)[] } = { message: [], close: [] };
+  let ws: WebSocket | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
+  function connect(): void {
+    if (closed) return;
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+
+    ws.onopen = () => {
+      // Connected
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data as string);
+        for (const handler of handlers.message) {
+          handler(data as Record<string, unknown>);
+        }
+      } catch {
+        // skip unparseable
+      }
+    };
+
+    ws.onclose = () => {
+      ws = null;
+      if (!closed) {
+        scheduleReconnect();
+      } else {
+        for (const handler of handlers.close) handler();
+      }
+    };
+
+    ws.onerror = () => {
+      ws?.close();
+    };
+  }
+
+  function scheduleReconnect(): void {
+    if (closed) return;
+    reconnectTimer = setTimeout(connect, 5000);
+  }
+
+  connect();
+
+  return {
+    close() {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
+    },
+    on(event: "message" | "close", handler: WsEventHandler | (() => void)) {
+      if (event === "message") {
+        handlers.message.push(handler as WsEventHandler);
+      } else {
+        handlers.close.push(handler as () => void);
+      }
+    }
+  };
+}
