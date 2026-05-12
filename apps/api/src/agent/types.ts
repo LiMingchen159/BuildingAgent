@@ -25,6 +25,7 @@ export interface AgentTurnRequest {
   projectId: string;
   userId: string;
   requestId: string;
+  conversationId: string;
   messages: ChatMessage[];
   providerMessages: ProviderChatMessage[];
   provider: ChatProvider;
@@ -64,6 +65,7 @@ export interface AgentToolContext {
   projectId: string;
   userId: string;
   requestId: string;
+  conversationId: string;
   messages: ChatMessage[];
 }
 

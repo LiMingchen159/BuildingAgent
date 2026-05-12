@@ -27,6 +27,7 @@ import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
 import { loadStoreSync, scheduleSave } from "./persistence.js";
+import { SchedulerService, parseTimeExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -64,6 +65,25 @@ function nextMessageId(): string {
 function nextConversationId(): string {
   conversationSequence += 1;
   return `conv_${String(conversationSequence).padStart(6, "0")}`;
+}
+
+function restoreSequences(store: SeedStore): void {
+  let maxMsg = 0;
+  let maxConv = 0;
+  for (const messages of Object.values(store.messagesByProject ?? {})) {
+    for (const m of messages) {
+      const match = /^msg_(\d+)$/.exec(m.id);
+      if (match) maxMsg = Math.max(maxMsg, Number(match[1]!));
+    }
+  }
+  for (const conversations of Object.values(store.conversationsByProject ?? {})) {
+    for (const c of conversations) {
+      const match = /^conv_(\d+)$/.exec(c.id);
+      if (match) maxConv = Math.max(maxConv, Number(match[1]!));
+    }
+  }
+  messageSequence = maxMsg;
+  conversationSequence = maxConv;
 }
 
 function kbRootForProject(projectId: string, baseRoot: string): string {
@@ -144,11 +164,41 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const allowProviderFallback = shouldAllowProviderFallback(env, options.allowProviderFallback);
   messageSequence = 0;
   conversationSequence = 0;
+  restoreSequences(store);
 
   const provider = options.chatProvider ?? providerResolver(env);
-  const memory = new AgentMemoryStore();
+  const memory = new AgentMemoryStore(path.join(knowledgeBaseRoot(env), "..", "data"));
+  memory.start();
   const skills = createGenericSkillRegistry();
-  const tools = createGenericToolRegistry(memory);
+
+  // Scheduler for reminders/cronjobs
+  const schedulerDataDir = path.join(knowledgeBaseRoot(env), "..", "data");
+  const scheduler = new SchedulerService(schedulerDataDir);
+  scheduler.setOnFired((job) => {
+    const msgs = store.messagesByProject[job.projectId] ?? [];
+    const assistantMsg: ChatMessage = {
+      id: nextMessageId(),
+      projectId: job.projectId,
+      userId: job.userId,
+      role: "assistant",
+      content: `${job.message} ✓`
+    };
+    msgs.push(assistantMsg);
+
+    // If conversationId is set, add to that conversation
+    if (job.conversationId) {
+      const conversations = store.conversationsByProject[job.projectId] ?? [];
+      const conv = conversations.find((c) => c.id === job.conversationId);
+      if (conv) {
+        conv.messageIds.push(assistantMsg.id);
+      }
+    }
+    store.messagesByProject[job.projectId] = msgs;
+    scheduleSave(store);
+  });
+  scheduler.start();
+
+  const tools = createGenericToolRegistry(memory, scheduler);
   const agentRuntime = new AgentRuntime({ memory, tools, skills });
   const kbRoot = knowledgeBaseRoot(env);
   const app = Fastify({
@@ -545,6 +595,53 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
 
+    // Pre-process time expressions (reminders) before agent turn
+    const timeExpr = parseTimeExpression(content);
+    if (timeExpr) {
+      scheduler.schedule({
+        projectId,
+        conversationId,
+        userId: session.userId,
+        message: timeExpr.reminderText,
+        triggerAt: timeExpr.triggerAt
+      });
+
+      const delayMs = timeExpr.triggerAt - Date.now();
+      const delaySec = Math.round(delayMs / 1000);
+      const delayText = delaySec >= 3600 ? `${Math.round(delaySec / 3600)}小时`
+        : delaySec >= 60 ? `${Math.round(delaySec / 60)}分钟`
+        : `${delaySec}秒`;
+
+      const assistantMessage: ChatMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: `好的，${delayText}后提醒你「${timeExpr.reminderText}」。`
+      };
+      messages.push(assistantMessage);
+      conversation.messageIds.push(assistantMessage.id);
+      trimChatMessages(messages, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+
+      // Auto-title on first message
+      if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+        conversation.title = `提醒: ${timeExpr.reminderText}`.slice(0, 60);
+      }
+
+      scheduleSave(store);
+      return reply.status(201).send({
+        message,
+        assistantMessage,
+        conversationId,
+        conversationTitle: conversation.title,
+        provider: providerDiagnostics(provider.metadata, false),
+        fallbackUsed: false,
+        lifecycle: [],
+        requestId: requestIdFor(request)
+      });
+    }
+
     let agentTurn;
     const projectKbRoot = kbRootForProject(projectId, kbRoot);
     try {
@@ -554,6 +651,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
+        conversationId,
         messages,
         providerMessages: chatHistoryForProvider(messages),
         provider,
@@ -578,6 +676,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
+        conversationId,
         messages,
         providerMessages: chatHistoryForProvider(messages),
         provider: fallbackProvider,
@@ -707,6 +806,53 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       reply.raw.write(`event: ${event}\ndata: ${data}\n\n`);
     };
 
+    // Pre-process time expressions (reminders) before agent turn
+    const streamTimeExpr = parseTimeExpression(content);
+    if (streamTimeExpr) {
+      scheduler.schedule({
+        projectId,
+        conversationId,
+        userId: session.userId,
+        message: streamTimeExpr.reminderText,
+        triggerAt: streamTimeExpr.triggerAt
+      });
+
+      const delayMs = streamTimeExpr.triggerAt - Date.now();
+      const delaySec = Math.round(delayMs / 1000);
+      const delayText = delaySec >= 3600 ? `${Math.round(delaySec / 3600)}小时`
+        : delaySec >= 60 ? `${Math.round(delaySec / 60)}分钟`
+        : `${delaySec}秒`;
+
+      const streamAssistantMessage: ChatMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: `好的，${delayText}后提醒你「${streamTimeExpr.reminderText}」。`
+      };
+      messages.push(streamAssistantMessage);
+      conversation.messageIds.push(streamAssistantMessage.id);
+      trimChatMessages(messages, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+
+      if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+        conversation.title = `提醒: ${streamTimeExpr.reminderText}`.slice(0, 60);
+      }
+
+      scheduleSave(store);
+      sseWrite("done", JSON.stringify({
+        message: userMessage,
+        assistantMessage: streamAssistantMessage,
+        conversationId,
+        conversationTitle: conversation.title,
+        provider: providerDiagnostics(provider.metadata, false),
+        fallbackUsed: false,
+        requestId: reqId
+      }));
+      reply.raw.end();
+      return;
+    }
+
     let finalText = "";
     let finalProviderDiagnostics: ReturnType<typeof providerDiagnostics> | null = null;
     let streamError: string | null = null;
@@ -720,6 +866,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         projectId,
         userId: session.userId,
         requestId: reqId,
+        conversationId,
         messages,
         providerMessages: chatHistoryForProvider(messages),
         provider,
@@ -747,6 +894,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             projectId,
             userId: session.userId,
             requestId: reqId,
+            conversationId,
             messages,
             providerMessages: chatHistoryForProvider(messages),
             provider: fallbackProvider,
@@ -883,6 +1031,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
+        conversationId: conversation?.id ?? "",
         messages: []
       }
     );
@@ -918,6 +1067,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     const conversations = (store.conversationsByProject[request.params.projectId] ?? [])
+      .filter((c) => c.messageIds.length > 0)
       .map((c) => ({ id: c.id, title: c.title, messageCount: c.messageIds.length, createdAt: c.createdAt }));
 
     return {

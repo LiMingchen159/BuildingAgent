@@ -3,7 +3,7 @@ import type { AgentSkillRegistry } from "./skills.js";
 import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentLifecycleEventType, AgentLoopResult, AgentTurnRequest, AgentTurnResult } from "./types.js";
 import { knowledgeBasePrompt } from "./knowledgeBase.js";
-import type { ChatCompletionDelta, ChatCompletionResult, ChatToolCall, ProviderChatMessage } from "../providers.js";
+import type { ChatCompletionDelta, ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -18,6 +18,10 @@ interface WorkingToolCall {
   result: Record<string, unknown>;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class AgentRuntime {
   constructor(private readonly options: AgentRuntimeOptions) {}
 
@@ -25,8 +29,36 @@ export class AgentRuntime {
     return { type, message, at: new Date().toISOString(), ...(metadata ? { metadata } : {}) };
   }
 
+  private async callProviderWithRetry(
+    request: AgentTurnRequest,
+    messages: ProviderChatMessage[],
+    toolDefs: ChatToolDefinition[],
+    maxRetries: number = 2
+  ): Promise<ChatCompletionResult> {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const completion = await request.provider.complete({
+          projectId: request.projectId,
+          userId: request.userId,
+          requestId: request.requestId,
+          messages: messages.slice(),
+          tools: toolDefs,
+          toolChoice: "auto"
+        });
+        return completion;
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries) {
+          await sleep(Math.min(1000 * Math.pow(2, attempt), 8000));
+        }
+      }
+    }
+    throw lastError;
+  }
+
   async *runTurnStream(request: AgentTurnRequest): AsyncGenerator<AgentLifecycleEvent, AgentLoopResult, undefined> {
-    const maxIterations = this.options.maxIterations ?? 10;
+    const maxIterations = this.options.maxIterations ?? 20;
     const events: AgentLifecycleEvent[] = [];
     const toolCallHistory: Array<{ name: string; args: Record<string, unknown>; result: Record<string, unknown> }> = [];
 
@@ -63,6 +95,7 @@ export class AgentRuntime {
           projectId: request.projectId,
           userId: request.userId,
           requestId: request.requestId,
+          conversationId: request.conversationId,
           messages: request.messages
         }
       );
@@ -76,6 +109,7 @@ export class AgentRuntime {
       "You have access to tools. Use them proactively to gather information before answering.",
       "When you need data: call the right tool, review the result, then decide your next step.",
       "Plan your work: tell the user what you're going to do, then do it step by step.",
+      "You can schedule reminders for users. When a user asks to be reminded, use schedule_reminder with an appropriate delay.",
       "Be concise, actionable, and explicit about mocked BIM/Brick/IFC/timeseries data.",
       "Never expose secrets or hidden credentials.",
       skillHints ? `Available skills:\n${skillHints}` : "",
@@ -105,14 +139,7 @@ export class AgentRuntime {
         toolCount: toolDefs.length
       }));
 
-      const completion = await request.provider.complete({
-        projectId: request.projectId,
-        userId: request.userId,
-        requestId: request.requestId,
-        messages: conversationMessages.slice(),
-        tools: toolDefs,
-        toolChoice: "auto"
-      });
+      const completion = await this.callProviderWithRetry(request, conversationMessages, toolDefs, 2);
 
       finalProvider = completion.provider;
       finalFallbackUsed = completion.fallbackUsed;
@@ -157,6 +184,7 @@ export class AgentRuntime {
             projectId: request.projectId,
             userId: request.userId,
             requestId: request.requestId,
+            conversationId: request.conversationId,
             messages: request.messages
           }
         );

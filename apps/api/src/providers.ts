@@ -186,39 +186,129 @@ export function createDeterministicMockProviderWithTools(overrides: Partial<Chat
 
   let toolCallCounter = 0;
 
+  function pickTools(request: ChatCompletionRequest): ChatToolCall[] {
+    const userMsg = [...request.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+    const lowered = userMsg.toLowerCase();
+    const available = request.tools ?? [];
+    const byName = (name: string) => available.find((t) => t.function.name === name);
+
+    const calls: ChatToolCall[] = [];
+    toolCallCounter += 1;
+
+    // Always search knowledge base first for relevant info
+    if (byName("search_files") && (lowered.includes("ttl") || lowered.includes("brick") || lowered.includes("schema") || lowered.includes("file") || lowered.includes("knowledge"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "search_files", arguments: JSON.stringify({ pattern: "ttl", mode: "files", glob: "*.ttl" }) }
+      });
+    }
+
+    // Read a file if path mentioned
+    if (byName("read_file") && (lowered.includes("read") || lowered.includes("check") || lowered.includes("inspect") || lowered.includes("look at"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 1).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "read_file", arguments: JSON.stringify({ path: "README.md" }) }
+      });
+    }
+
+    // Terminal for analysis
+    if (byName("terminal") && (lowered.includes("analyze") || lowered.includes("run") || lowered.includes("calculate") || lowered.includes("python"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 2).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "terminal", arguments: JSON.stringify({ command: "echo 'Analysis placeholder'" }) }
+      });
+    }
+
+    // Reminder / scheduler patterns
+    if (byName("schedule_reminder") && (lowered.includes("remind") || lowered.includes("reminder") || lowered.includes("提醒") || lowered.includes("秒") || lowered.includes("分钟") || lowered.includes("小时"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 3).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "schedule_reminder", arguments: JSON.stringify({ delay_seconds: 30, message: "Reminder from chat" }) }
+      });
+    }
+
+    // Cancel reminder
+    if (byName("cancel_reminder") && (lowered.includes("cancel") || lowered.includes("取消"))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 4).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "cancel_reminder", arguments: JSON.stringify({ action: "cancel_recent" }) }
+      });
+    }
+
+    // List reminders
+    if (byName("list_reminders") && (lowered.includes("list") && (lowered.includes("remind") || lowered.includes("提醒")))) {
+      calls.push({
+        id: `call_${String(toolCallCounter + 5).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "list_reminders", arguments: JSON.stringify({}) }
+      });
+    }
+
+    // Fallback: use session_summary to show we're doing something
+    if (calls.length === 0 && byName("session_summary")) {
+      calls.push({
+        id: `call_${String(toolCallCounter).padStart(4, "0")}`,
+        type: "function",
+        function: { name: "session_summary", arguments: JSON.stringify({}) }
+      });
+    }
+
+    return calls;
+  }
+
   return {
     metadata,
     async complete(request) {
       const lastUserMessage = [...request.messages].reverse().find((message) => message.role === "user")?.content ?? "";
       const normalized = lastUserMessage.replace(/\s+/gu, " ").trim();
 
-      // If message starts with "tool:", simulate tool calls
-      if (normalized.startsWith("tool:") && request.tools && request.tools.length > 0) {
-        const toolName = request.tools[0]!.function.name;
-        toolCallCounter += 1;
-        const toolCall: ChatToolCall = {
-          id: `call_${String(toolCallCounter).padStart(4, "0")}`,
-          type: "function",
-          function: {
-            name: toolName,
-            arguments: JSON.stringify({ query: normalized.slice(5).trim() || "test" })
+      // If we already have tool results, this is a follow-up turn — synthesize a final answer
+      const hasToolResults = request.messages.some((m) => m.role === "tool");
+      if (hasToolResults) {
+        const toolMessages = request.messages.filter((m) => m.role === "tool");
+        const toolSummary = toolMessages.map((m) => {
+          const content = m.content ?? "";
+          try {
+            const parsed = JSON.parse(content);
+            if (parsed.matches) return `Found ${parsed.count ?? parsed.matches.length} matches in knowledge base`;
+            if (parsed.content) return `Read file (${parsed.totalLines ?? "?"} lines)`;
+            if (parsed.output) return `Command output: ${parsed.output.slice(0, 200)}`;
+            if (parsed.projectId) return `Session summary for ${parsed.projectId}`;
+            return JSON.stringify(parsed).slice(0, 150);
+          } catch {
+            return content.slice(0, 150);
           }
-        };
+        }).join("; ");
+
         return {
-          text: "",
-          toolCalls: [toolCall],
+          text: [
+            `Here's what I found after running my analysis tools:\n\n`,
+            `**Tool Results:** ${toolSummary}\n\n`,
+            `Based on the data I gathered, here's my comprehensive analysis:\n\n`,
+            `Your request was: "${normalized}"\n\n`,
+            `I've completed the following steps:\n`,
+            `1. Searched the knowledge base for relevant files and schemas\n`,
+            `2. Read the relevant configuration and data files\n`,
+            `3. Analyzed the results to provide actionable insights\n\n`,
+            `This is a mock analysis — connect a real LLM provider (set BUILDING_AGENT_LLM_API_KEY) for actual AI-powered multi-turn agent behavior with real-time data analysis.`,
+          ].join(""),
           provider: metadata,
           fallbackUsed: false
         };
       }
 
-      // If we have tool result messages (role: "tool"), this is the second turn — return final answer
-      const hasToolResults = request.messages.some((m) => m.role === "tool");
-      if (hasToolResults) {
-        const toolMessages = request.messages.filter((m) => m.role === "tool");
-        const lastToolResult = toolMessages.at(-1)?.content ?? "no result";
+      // First turn: plan + execute tools
+      const toolCalls = pickTools(request);
+      if (toolCalls.length > 0) {
+        const toolNames = toolCalls.map((t) => t.function.name).join(", ");
         return {
-          text: `After running the tools, here's my analysis: ${normalized}. Tool results: ${lastToolResult}`,
+          text: `Let me analyze your request: "${normalized}"\n\nI'll start by gathering information using these tools: ${toolNames}. One moment...`,
+          toolCalls,
           provider: metadata,
           fallbackUsed: false
         };
@@ -334,10 +424,16 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
       const bodyRecord = body as Record<string, unknown>;
       const choice = (bodyRecord.choices as Array<Record<string, unknown>> | undefined)?.[0];
       const message = choice?.message as Record<string, unknown> | undefined;
-      const text = (typeof message?.content === "string" ? message.content : "") || "";
+      const rawContent = typeof message?.content === "string" ? message.content : null;
       const toolCalls = parseToolCalls(bodyRecord);
 
-      if (!text && !toolCalls) {
+      // Validate text content when present (only when no tool calls, to allow tool-only responses)
+      let text: string;
+      if (rawContent !== null && rawContent !== undefined) {
+        text = normalizeProviderText(rawContent, metadata);
+      } else if (toolCalls) {
+        text = "Calling tools...";
+      } else {
         throw new ProviderError("Provider response did not include assistant text or tool calls.", {
           code: "provider_malformed_response",
           provider: metadata
@@ -345,7 +441,7 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
       }
 
       const result: ChatCompletionResult = {
-        text: text || (toolCalls ? "Calling tools..." : ""),
+        text,
         provider: metadata,
         fallbackUsed: false
       };
