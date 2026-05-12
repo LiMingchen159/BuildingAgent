@@ -2712,7 +2712,14 @@ p {
   flex-direction: column;
   min-height: 100%;
   overflow: visible;
+  transition: opacity 180ms ease, transform 180ms ease;
   width: 100%;
+}
+
+.project-picker.is-opening {
+  opacity: 0.42;
+  pointer-events: none;
+  transform: translateY(-4px);
 }
 
 .project-picker-topbar {
@@ -2778,7 +2785,7 @@ p {
   margin: 0;
   max-width: none;
   overflow: visible;
-  padding: 1.2rem 1.5rem 2rem;
+  padding: 1.95rem 1.5rem 2rem;
   width: 100%;
 }
 
@@ -4070,6 +4077,11 @@ p {
 
 .workspace-center-empty .project-picker {
   min-height: 100%;
+}
+
+.workspace-center-empty .workspace-floating-toggles {
+  position: relative;
+  z-index: 2;
 }
 
 .workspace-floating-toggles {

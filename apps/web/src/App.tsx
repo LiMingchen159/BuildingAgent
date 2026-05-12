@@ -486,6 +486,7 @@ function ProjectPicker({
   const [view, setView] = useState<ProjectPickerView>("cards");
   const [filter, setFilter] = useState<(typeof PROJECT_FILTERS)[number]>("All projects");
   const [creating, setCreating] = useState(false);
+  const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
   const filteredProjects = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return projects.filter((project) => {
@@ -496,8 +497,14 @@ function ProjectPicker({
     });
   }, [projects, query, filter]);
 
+  function handleSelectProject(project: ProjectSummary) {
+    if (busy) return;
+    setOpeningProjectId(project.id);
+    window.setTimeout(() => onSelect(project), 120);
+  }
+
   return (
-    <section className="project-picker" aria-labelledby="projects-title">
+    <section className={`project-picker${openingProjectId ? " is-opening" : ""}`} aria-labelledby="projects-title">
       {showChrome ? (
         <header className="project-picker-topbar">
           <div className="project-picker-brand"><span>BA</span><strong>BuildingAgent</strong></div>
@@ -534,9 +541,9 @@ function ProjectPicker({
         {busy ? <p className="project-picker-status-line" role="status"><span className="spinner" aria-hidden="true" />Opening workspace...</p> : null}
         <div className={`project-picker-results is-${view}`}>
           {filteredProjects.map((project) => view === "cards" ? (
-            <ProjectPickerCard key={project.id} project={project} conversationCount={conversationCounts?.[project.id] ?? 0} assetCount={assetCounts?.[project.id] ?? 0} busy={busy} onSelect={onSelect} />
+            <ProjectPickerCard key={project.id} project={project} conversationCount={conversationCounts?.[project.id] ?? 0} assetCount={assetCounts?.[project.id] ?? 0} busy={busy || Boolean(openingProjectId)} onSelect={handleSelectProject} />
           ) : (
-            <ProjectPickerListRow key={project.id} project={project} conversationCount={conversationCounts?.[project.id] ?? 0} assetCount={assetCounts?.[project.id] ?? 0} busy={busy} onSelect={onSelect} />
+            <ProjectPickerListRow key={project.id} project={project} conversationCount={conversationCounts?.[project.id] ?? 0} assetCount={assetCounts?.[project.id] ?? 0} busy={busy || Boolean(openingProjectId)} onSelect={handleSelectProject} />
           ))}
           {filteredProjects.length === 0 ? <p className="project-picker-empty">No projects match that search.</p> : null}
           {view === "cards" ? (
