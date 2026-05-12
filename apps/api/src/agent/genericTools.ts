@@ -742,6 +742,160 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
       }
     },
 
+    // --- Web search tools ---
+    {
+      name: "web_search",
+      category: "web",
+      description: "Search the web using DuckDuckGo Instant Answer API. Returns abstracts, related topics, and source URLs. Free, no API key required.",
+      schema: {
+        name: "web_search",
+        description: "Search the web for information. Returns abstract, related topics, and source links. Use for looking up current information, documentation, or general knowledge.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Search query." }
+          },
+          required: ["query"]
+        }
+      },
+      async run(args, context) {
+        const query = textArg(args, "query");
+        if (!query) return { error: "query is required." };
+        try {
+          const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10_000);
+          const response = await fetch(url, { signal: controller.signal });
+          clearTimeout(timer);
+          if (!response.ok) {
+            return { error: `Search returned HTTP ${response.status}.` };
+          }
+          const data = (await response.json()) as Record<string, unknown>;
+          const results: Array<{ title: string; snippet: string; url?: string }> = [];
+
+          // Abstract
+          if (typeof data.AbstractText === "string" && data.AbstractText.trim()) {
+            const abstractUrl = typeof data.AbstractURL === "string" ? data.AbstractURL : null;
+            results.push({
+              title: (typeof data.Heading === "string" ? data.Heading : "Abstract"),
+              snippet: data.AbstractText as string,
+              ...(abstractUrl ? { url: abstractUrl } : {})
+            } as { title: string; snippet: string; url?: string });
+          }
+
+          // Related topics
+          const relatedTopics = data.RelatedTopics as Array<Record<string, unknown>> | undefined;
+          if (Array.isArray(relatedTopics)) {
+            for (const topic of relatedTopics) {
+              if (typeof topic.Text === "string") {
+                const topicUrl = typeof topic.FirstURL === "string" ? topic.FirstURL : null;
+                results.push({
+                  title: typeof topic.FirstURL === "string"
+                    ? decodeURIComponent((topic.FirstURL as string).split("/").pop() ?? "").replace(/_/g, " ")
+                    : "",
+                  snippet: topic.Text,
+                  ...(topicUrl ? { url: topicUrl } : {})
+                } as { title: string; snippet: string; url?: string });
+              }
+            }
+          }
+
+          // Answer
+          if (typeof data.Answer === "string" && data.Answer.trim()) {
+            results.unshift({
+              title: "Answer",
+              snippet: data.Answer
+            });
+          }
+
+          return {
+            query,
+            results: results.slice(0, 20),
+            resultCount: results.length,
+            source: "DuckDuckGo"
+          };
+        } catch (error) {
+          return {
+            error: error instanceof Error ? error.message : "Web search failed.",
+            query
+          };
+        }
+      }
+    },
+    {
+      name: "web_extract",
+      category: "web",
+      description: "Fetch and extract readable text content from a URL. Strips HTML tags, scripts, and styles.",
+      schema: {
+        name: "web_extract",
+        description: "Fetch a URL and extract its readable text content. Use to read documentation pages, articles, or any web content.",
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "URL to fetch and extract text from." },
+            max_length: { type: "number", description: "Maximum characters to return (default 10,000, max 50,000)." }
+          },
+          required: ["url"]
+        }
+      },
+      async run(args, context) {
+        const url = textArg(args, "url");
+        if (!url) return { error: "url is required." };
+        const maxLen = Math.min(numArg(args, "max_length", 10_000), 50_000);
+
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15_000);
+          const response = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+              "User-Agent": "BuildingAgent/1.0 (web-extract-bot)",
+              "Accept": "text/html,text/plain"
+            }
+          });
+          clearTimeout(timer);
+
+          if (!response.ok) {
+            return { error: `HTTP ${response.status} from ${url}.` };
+          }
+
+          const contentType = response.headers.get("content-type") ?? "";
+          if (!contentType.includes("text/") && !contentType.includes("application/json")) {
+            return { error: `Unsupported content type: ${contentType}. Only text content is supported.` };
+          }
+
+          const html = await response.text();
+          // Simple HTML-to-text: remove scripts, styles, tags
+          const text = html
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#x27;/g, "'")
+            .replace(/&nbsp;/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+          const truncated = text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+
+          return {
+            url,
+            text: truncated,
+            length: truncated.length,
+            truncated: text.length > maxLen
+          };
+        } catch (error) {
+          return {
+            error: error instanceof Error ? error.message : "Web extract failed.",
+            url
+          };
+        }
+      }
+    },
+
     // --- Background process management tools ---
     {
       name: "process_start",
