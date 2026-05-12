@@ -2707,17 +2707,17 @@ p {
 
 .project-picker {
   background:
-    radial-gradient(circle at 50% 0%, rgba(219, 234, 254, 0.42), transparent 24rem),
-    linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px),
-    linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at 50% 0%, rgba(219, 234, 254, 0.34), transparent 22rem),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.028) 1px, transparent 1px),
+    linear-gradient(rgba(15, 23, 42, 0.028) 1px, transparent 1px),
     #ffffff;
   background-position: center top, 0 0, 0 0, 0 0;
   background-size: auto, 18px 18px, 18px 18px, auto;
   color: #0f1b35;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  overflow: hidden;
+  min-height: 100%;
+  overflow: auto;
   width: 100%;
 }
 
@@ -2727,8 +2727,8 @@ p {
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
   display: flex;
   justify-content: space-between;
-  min-height: 4.4rem;
-  padding: 0 1.5rem;
+  min-height: 3.5rem;
+  padding: 0 1.1rem;
 }
 
 .project-picker-brand,
@@ -2769,7 +2769,7 @@ p {
 }
 
 .project-picker-top-actions button:hover {
-  background: #eef2f7;
+  background: var(--workspace-hover);
   color: #0f1b35;
   transform: none;
 }
@@ -2782,15 +2782,16 @@ p {
 
 .project-picker-body {
   margin: 0 auto;
-  max-width: 66rem;
+  max-width: 58rem;
   overflow-y: auto;
-  padding: 2.1rem 1.25rem 3rem;
+  padding: 1.8rem 1.25rem 2.5rem;
   width: 100%;
 }
 
 .project-picker-hero {
-  margin: 0 auto 2.1rem;
-  max-width: 42rem;
+  animation: project-picker-rise 260ms ease-out both;
+  margin: 0 auto 1.6rem;
+  max-width: 38rem;
   text-align: center;
 }
 
@@ -2802,7 +2803,7 @@ p {
 
 .project-picker-hero h1 {
   color: #0f1b35;
-  font-size: clamp(2rem, 4vw, 2.75rem);
+  font-size: clamp(1.9rem, 3.3vw, 2.45rem);
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1.1;
@@ -2817,12 +2818,13 @@ p {
 }
 
 .project-picker-toolbar {
+  animation: project-picker-rise 320ms ease-out both;
   align-items: center;
   display: grid;
   gap: 0.9rem;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  margin: 0 auto 2rem;
-  max-width: 56rem;
+  margin: 0 auto 1.65rem;
+  max-width: 50rem;
 }
 
 .project-picker-search,
@@ -2908,9 +2910,10 @@ p {
 }
 
 .project-picker-results.is-cards {
+  animation: project-picker-rise 380ms ease-out both;
   display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .project-picker-card,
@@ -2920,8 +2923,13 @@ p {
   border-radius: 0.85rem;
   box-shadow: 0 16px 34px rgba(15, 23, 42, 0.055);
   color: #0f1b35;
-  min-height: 13.9rem;
-  padding: 1.25rem;
+  min-height: 12.2rem;
+  padding: 1rem;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
 
 .project-picker-card {
@@ -2930,14 +2938,18 @@ p {
   position: relative;
 }
 
-.project-picker-card.is-recommended {
-  border-color: #9edec2;
-}
-
 .project-picker-card-top {
   align-items: flex-start;
   display: flex;
   justify-content: space-between;
+}
+
+.project-picker-card:hover,
+.project-picker-create-card:hover {
+  background: var(--workspace-hover);
+  border-color: rgba(17, 24, 39, 0.16);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.075);
+  transform: translateY(-2px);
 }
 
 .project-picker-mark {
@@ -2966,21 +2978,6 @@ p {
   width: 1.7rem;
 }
 
-.project-picker-recommended {
-  align-items: center;
-  background: #e7f7ef;
-  border-radius: 999px;
-  color: #24795d;
-  display: inline-flex;
-  font-size: 0.72rem;
-  font-weight: 700;
-  gap: 0.3rem;
-  left: 1.25rem;
-  padding: 0.22rem 0.5rem;
-  position: absolute;
-  top: 0.95rem;
-}
-
 .project-picker-title h2 {
   font-size: 1rem;
   margin: 0 0 0.28rem;
@@ -2996,7 +2993,7 @@ p {
 .project-picker-metrics {
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
 }
 
@@ -3115,6 +3112,7 @@ p {
 }
 
 .project-picker-results.is-list {
+  animation: project-picker-rise 380ms ease-out both;
   display: grid;
   gap: 0.65rem;
 }
@@ -3136,7 +3134,7 @@ p {
 
 .project-picker-list-row:hover,
 .project-picker-create-row:hover {
-  background: #f8fafc;
+  background: var(--workspace-hover);
   color: #0f1b35;
   transform: none;
 }
@@ -3186,6 +3184,18 @@ p {
   padding: 1.25rem;
   position: fixed;
   z-index: 20;
+}
+
+@keyframes project-picker-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .minimal-project-header {
@@ -3551,6 +3561,10 @@ p {
   grid-template-columns: 280px minmax(0, 1fr) 0;
 }
 
+.cgpt-workspace-shell.workspace-shell.is-project-picker {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+
 .cgpt-workspace-shell.workspace-shell {
   transition: grid-template-columns 0.3s ease;
 }
@@ -3594,13 +3608,17 @@ p {
 
 .cgpt-workspace-shell.is-left-collapsed .workspace-sidebar,
 .cgpt-workspace-shell.is-right-collapsed .workspace-right,
-.cgpt-workspace-shell.is-no-project .workspace-right {
+.cgpt-workspace-shell.is-no-project .workspace-right,
+.cgpt-workspace-shell.is-project-picker .workspace-sidebar,
+.cgpt-workspace-shell.is-project-picker .workspace-right {
   border: 0;
 }
 
 .cgpt-workspace-shell.is-left-collapsed .workspace-sidebar-inner,
 .cgpt-workspace-shell.is-right-collapsed .workspace-right-inner,
-.cgpt-workspace-shell.is-no-project .workspace-right-inner {
+.cgpt-workspace-shell.is-no-project .workspace-right-inner,
+.cgpt-workspace-shell.is-project-picker .workspace-sidebar-inner,
+.cgpt-workspace-shell.is-project-picker .workspace-right-inner {
   overflow: hidden;
 }
 

@@ -309,18 +309,12 @@ function projectVisual(project: Pick<ProjectSummary, "id" | "name">) {
   };
 }
 
-function projectMockMetrics(projectId: string): { lastOpened: string; conversations: number; assets: number; tasks: number; zone: string; status: "Active" | "Paused"; recommended: boolean } {
+function projectMockMetrics(projectId: string): { status: "Active" | "Paused"; zone: string } {
   const hash = projectHash(projectId);
-  const days = (hash % 14) + 1;
   const zoneNames = ["Cooling Plant", "Air Handler Units", "Chillers", "Demo Zone", "Envelope", "Energy Model"] as const;
   return {
-    lastOpened: days === 1 ? "1d ago" : `${days}d ago`,
-    conversations: ((hash >> 4) % 94) + 6,
-    assets: ((hash >> 8) % 4200) + 80,
-    tasks: (hash >> 12) % 12,
-    zone: zoneNames[hash % zoneNames.length] ?? zoneNames[0],
     status: hash % 5 === 0 ? "Paused" : "Active",
-    recommended: hash % 7 === 0 || projectId.includes("alpha")
+    zone: zoneNames[hash % zoneNames.length] ?? zoneNames[0]
   };
 }
 
@@ -356,26 +350,24 @@ function ProjectMark({ project, colorId, logoId, className = "" }: { project?: P
   );
 }
 
-function ProjectPickerCard({ project, busy, onSelect }: { project: ProjectSummary; busy: boolean; onSelect: (project: ProjectSummary) => void }) {
+function ProjectPickerCard({ project, conversationCount, assetCount, busy, onSelect }: { project: ProjectSummary; conversationCount: number; assetCount: number; busy: boolean; onSelect: (project: ProjectSummary) => void }) {
   const metrics = projectMockMetrics(project.id);
   const canChat = project.permissions.includes("chat:read");
   return (
-    <article className={`project-picker-card${metrics.recommended ? " is-recommended" : ""}`}>
+    <article className="project-picker-card">
       <div className="project-picker-card-top">
         <ProjectMark project={project} />
         <button type="button" className="project-picker-more" aria-label={`${project.name} actions`} disabled={busy}>
           <Icon name="more" />
         </button>
       </div>
-      {metrics.recommended ? <span className="project-picker-recommended"><Icon name="shield-check" />Recommended</span> : null}
       <div className="project-picker-title">
         <h2>{project.name}</h2>
         <p>{project.id}</p>
       </div>
       <dl className="project-picker-metrics" aria-label={`${project.name} project metrics`}>
-        <div><dt><Icon name="message" />Conversations</dt><dd>{metrics.conversations}</dd></div>
-        <div><dt><Icon name="folder" />Assets</dt><dd>{metrics.assets.toLocaleString()}</dd></div>
-        <div><dt><Icon name="clock" />Last activity</dt><dd>{metrics.lastOpened}</dd></div>
+        <div><dt><Icon name="message" />Conversations</dt><dd>{conversationCount}</dd></div>
+        <div><dt><Icon name="folder" />Assets</dt><dd>{assetCount.toLocaleString()}</dd></div>
       </dl>
       <div className="project-picker-card-footer">
         <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
@@ -388,7 +380,7 @@ function ProjectPickerCard({ project, busy, onSelect }: { project: ProjectSummar
   );
 }
 
-function ProjectPickerListRow({ project, busy, onSelect }: { project: ProjectSummary; busy: boolean; onSelect: (project: ProjectSummary) => void }) {
+function ProjectPickerListRow({ project, conversationCount, assetCount, busy, onSelect }: { project: ProjectSummary; conversationCount: number; assetCount: number; busy: boolean; onSelect: (project: ProjectSummary) => void }) {
   const metrics = projectMockMetrics(project.id);
   return (
     <button type="button" className="project-picker-list-row" onClick={() => onSelect(project)} disabled={busy}>
@@ -398,9 +390,8 @@ function ProjectPickerListRow({ project, busy, onSelect }: { project: ProjectSum
         <span>{project.id}</span>
       </span>
       <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
-      <span>{metrics.conversations} conversations</span>
-      <span>{metrics.assets.toLocaleString()} assets</span>
-      <span>{metrics.lastOpened}</span>
+      <span>{conversationCount} conversations</span>
+      <span>{assetCount.toLocaleString()} assets</span>
       <Icon name="arrow-up" />
     </button>
   );
@@ -475,6 +466,8 @@ function ProjectPicker({
   onSelect,
   onCreate,
   onSignOut,
+  conversationCounts,
+  assetCounts,
   showChrome = true
 }: {
   projects: ProjectSummary[];
@@ -483,6 +476,8 @@ function ProjectPicker({
   onSelect: (project: ProjectSummary) => void;
   onCreate: (name: string) => void;
   onSignOut: () => void;
+  conversationCounts?: Record<string, number>;
+  assetCounts?: Record<string, number>;
   showChrome?: boolean;
 }) {
   const [query, setQuery] = useState("");
@@ -537,9 +532,9 @@ function ProjectPicker({
         {busy ? <p className="project-picker-status-line" role="status"><span className="spinner" aria-hidden="true" />Opening workspace...</p> : null}
         <div className={`project-picker-results is-${view}`}>
           {filteredProjects.map((project) => view === "cards" ? (
-            <ProjectPickerCard key={project.id} project={project} busy={busy} onSelect={onSelect} />
+            <ProjectPickerCard key={project.id} project={project} conversationCount={conversationCounts?.[project.id] ?? 0} assetCount={assetCounts?.[project.id] ?? 0} busy={busy} onSelect={onSelect} />
           ) : (
-            <ProjectPickerListRow key={project.id} project={project} busy={busy} onSelect={onSelect} />
+            <ProjectPickerListRow key={project.id} project={project} conversationCount={conversationCounts?.[project.id] ?? 0} assetCount={assetCounts?.[project.id] ?? 0} busy={busy} onSelect={onSelect} />
           ))}
           {filteredProjects.length === 0 ? <p className="project-picker-empty">No projects match that search.</p> : null}
           {view === "cards" ? (
@@ -1030,6 +1025,8 @@ function Workspace({
   onSelectConversation,
   onCreateProject,
   onSignOut,
+  projectConversationCounts,
+  projectAssetCounts,
   busy,
   onDeleteConversation,
   onRenameConversation,
@@ -1060,6 +1057,8 @@ function Workspace({
   onSelectConversation: (convId: string) => void;
   onCreateProject: (name: string) => void;
   onSignOut: () => void;
+  projectConversationCounts: Record<string, number>;
+  projectAssetCounts: Record<string, number>;
   busy: boolean;
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
@@ -1091,7 +1090,7 @@ function Workspace({
   // Determine shell class name for sidebar visibility
   const shellClass = [
     "cgpt-workspace-shell",
-    project ? "" : "is-no-sidebars",
+    project ? "" : "is-project-picker",
     !project ? (leftOpen ? "is-left-expanded" : "") : (leftOpen ? "" : "is-left-collapsed"),
     !project ? (rightOpen ? "is-right-expanded" : "") : (rightOpen ? "" : "is-right-collapsed")
   ].filter(Boolean).join(" ");
@@ -1116,7 +1115,7 @@ function Workspace({
     </div>
   ) : (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
-      <ProjectPicker projects={projects} user={user} busy={busy} onSelect={onSelectProject} onCreate={onCreateProject} onSignOut={onSignOut} />
+      <ProjectPicker projects={projects} user={user} busy={busy} onSelect={onSelectProject} onCreate={onCreateProject} onSignOut={onSignOut} conversationCounts={projectConversationCounts} assetCounts={projectAssetCounts} />
     </div>
   );
 
@@ -1168,6 +1167,8 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [knowledgeBaseDocuments, setKnowledgeBaseDocuments] = useState<KnowledgeBaseDocument[]>([]);
   const [repositoryItems, setRepositoryItems] = useState<RepositoryItem[]>([]);
+  const [projectConversationCounts, setProjectConversationCounts] = useState<Record<string, number>>({});
+  const [projectAssetCounts, setProjectAssetCounts] = useState<Record<string, number>>({});
   const [chatProviderDiagnostics, setChatProviderDiagnostics] = useState<ChatProviderDiagnostics | null>(null);
   const [chatProviderRequestId, setChatProviderRequestId] = useState<string | undefined>(undefined);
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
@@ -1191,6 +1192,8 @@ export default function App() {
     setActiveConversationId(null);
     setKnowledgeBaseDocuments([]);
     setRepositoryItems([]);
+    setProjectConversationCounts({});
+    setProjectAssetCounts({});
     setChatProviderDiagnostics(null);
     setChatProviderRequestId(undefined);
     setRegistry(null);
@@ -1213,6 +1216,7 @@ export default function App() {
     setManagement(managementResponse);
     setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
     setRepositoryItems(repoResponse.artifacts.map(artifactToRepositoryItem));
+    setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.documents.length + repoResponse.artifacts.length }));
     return { registryResponse, managementResponse, kbResponse, repoResponse };
   }
 
@@ -1248,6 +1252,8 @@ export default function App() {
           if (!cancelled) {
             setMessages(chatResponse.messages);
             setConversations(convResponse.conversations);
+            setProjectConversationCounts((current) => ({ ...current, [restoredProject.id]: convResponse.conversations.length }));
+            setProjectAssetCounts((current) => ({ ...current, [restoredProject.id]: kbResponse.documents.length + repoResponse.artifacts.length }));
             setActiveConversationId(chatResponse.activeConversationId ?? null);
             setRegistry(registryResponse);
             setManagement(managementResponse);
@@ -1348,6 +1354,8 @@ export default function App() {
       setSelectedProject(project);
       setMessages(chat.messages);
       setConversations(convResponse.conversations);
+      setProjectConversationCounts((current) => ({ ...current, [project.id]: convResponse.conversations.length }));
+      setProjectAssetCounts((current) => ({ ...current, [project.id]: surfaces.kbResponse.documents.length + surfaces.repoResponse.artifacts.length }));
       setActiveConversationId(chat.activeConversationId ?? null);
       setKnowledgeBaseDocuments(surfaces.kbResponse.documents.map(apiDocumentToUi));
       setRepositoryItems(surfaces.repoResponse.artifacts.map(artifactToRepositoryItem));
@@ -1388,6 +1396,8 @@ export default function App() {
       setActiveConversationId(null);
       setKnowledgeBaseDocuments([]);
       setRepositoryItems([]);
+      setProjectConversationCounts((current) => ({ ...current, [project.id]: 0 }));
+      setProjectAssetCounts((current) => ({ ...current, [project.id]: 0 }));
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
       setRegistry(null);
@@ -1691,7 +1701,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );
