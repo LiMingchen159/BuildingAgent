@@ -1086,6 +1086,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     let finalText = "";
     let finalProviderDiagnostics: ReturnType<typeof providerDiagnostics> | null = null;
     let streamError: string | null = null;
+    const turnStartedAt = Date.now();
+    const capturedActivities: import("./seed.js").ChatMessageActivity[] = [];
+    const captureActivity = (payload: Record<string, unknown>): import("./seed.js").ChatMessageActivity | null => {
+      if (typeof payload.label !== "string" || typeof payload.kind !== "string") return null;
+      const act: import("./seed.js").ChatMessageActivity = {
+        label: payload.label,
+        kind: payload.kind as import("./seed.js").ChatMessageActivity["kind"]
+      };
+      if (typeof payload.id === "string") act.id = payload.id;
+      if (typeof payload.tool === "string") act.tool = payload.tool;
+      if (payload.status === "running" || payload.status === "done") act.status = payload.status;
+      if (typeof payload.raw === "string") act.raw = payload.raw;
+      if (typeof payload.requestId === "string") act.requestId = payload.requestId;
+      if (typeof payload.detail === "string") act.detail = payload.detail;
+      if (typeof payload.output === "string") act.output = payload.output;
+      if (typeof payload.durationMs === "number") act.durationMs = payload.durationMs;
+      if (typeof payload.exitCode === "number") act.exitCode = payload.exitCode;
+      return act;
+    };
 
     try {
       const projectKbRoot = kbRootForProject(projectId, kbRoot);
@@ -1109,7 +1128,36 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
       const emitActivity = (payload: Record<string, unknown>): void => {
         activitySequence += 1;
-        sseWrite("activity", { id: `act_${reqId}_${activitySequence}`, requestId: reqId, ...payload });
+        const enriched = { id: `act_${reqId}_${activitySequence}`, requestId: reqId, ...payload };
+        sseWrite("activity", enriched);
+        const captured = captureActivity(enriched);
+        if (!captured) return;
+        // Replace by id so paired tool started/completed events collapse to one row in history.
+        if (captured.id) {
+          const existingIndex = capturedActivities.findIndex((a) => a.id === captured.id);
+          if (existingIndex >= 0) {
+            capturedActivities[existingIndex] = captured;
+            return;
+          }
+        }
+        capturedActivities.push(captured);
+      };
+      // Thinking tokens for the current iteration are streamed live to the client
+      // as `token` events. If the iteration ends up calling tools, the same text
+      // was interim narration, not the final answer — we then move it to a
+      // context activity and send `token_reset` so the client drops it from the
+      // streamed answer body. If the iteration ends without tool calls, the
+      // buffered text IS the final answer and stays in the answer body.
+      let pendingThinking = "";
+      const promotePendingToActivity = (): void => {
+        const trimmed = pendingThinking.trim();
+        pendingThinking = "";
+        if (!trimmed) return;
+        emitActivity({
+          label: trimmed.slice(0, 600),
+          kind: "context"
+        });
+        sseWrite("token_reset", { requestId: reqId });
       };
       for await (const event of agentRuntime.runTurnStream({
         projectId,
@@ -1122,6 +1170,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         knowledgeBaseDocuments
       })) {
         if (event.type === "thinking") {
+          pendingThinking += event.message;
           sseWrite("token", { content: event.message });
         } else if (event.type === "progress") {
           const kind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
@@ -1138,7 +1187,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         } else if (event.type === "tool_started") {
           const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
           if (toolName) {
+            // Any thinking streamed in this iteration was interim narration, not
+            // the final answer. Roll it back on the client and promote to activity.
+            promotePendingToActivity();
+            const toolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
             emitActivity({
+              ...(toolCallId ? { id: `tool_${reqId}_${toolCallId}` } : {}),
               label: toolLabelFor(toolName, "running"),
               kind: "tool",
               tool: toolName,
@@ -1149,7 +1203,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         } else if (event.type === "tool_completed") {
           const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
           if (toolName) {
+            const toolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
             emitActivity({
+              ...(toolCallId ? { id: `tool_${reqId}_${toolCallId}` } : {}),
               label: toolLabelFor(toolName, "done"),
               kind: "tool",
               tool: toolName,
@@ -1158,6 +1214,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             });
           }
         } else if (event.type === "turn_completed") {
+          pendingThinking = "";
           finalText = event.message || "";
         }
       }
@@ -1190,7 +1247,29 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           };
           const emitFallbackActivity = (payload: Record<string, unknown>): void => {
             fallbackActivitySequence += 1;
-            sseWrite("activity", { id: `act_${reqId}_fb_${fallbackActivitySequence}`, requestId: reqId, ...payload });
+            const enriched = { id: `act_${reqId}_fb_${fallbackActivitySequence}`, requestId: reqId, ...payload };
+            sseWrite("activity", enriched);
+            const captured = captureActivity(enriched);
+            if (!captured) return;
+            if (captured.id) {
+              const existingIndex = capturedActivities.findIndex((a) => a.id === captured.id);
+              if (existingIndex >= 0) {
+                capturedActivities[existingIndex] = captured;
+                return;
+              }
+            }
+            capturedActivities.push(captured);
+          };
+          let fallbackPendingThinking = "";
+          const promoteFallbackPendingToActivity = (): void => {
+            const trimmed = fallbackPendingThinking.trim();
+            fallbackPendingThinking = "";
+            if (!trimmed) return;
+            emitFallbackActivity({
+              label: trimmed.slice(0, 600),
+              kind: "context"
+            });
+            sseWrite("token_reset", { requestId: reqId });
           };
           for await (const event of agentRuntime.runTurnStream({
             projectId,
@@ -1203,6 +1282,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             knowledgeBaseDocuments
           })) {
             if (event.type === "thinking") {
+              fallbackPendingThinking += event.message;
               sseWrite("token", { content: event.message });
             } else if (event.type === "progress") {
               const fkind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
@@ -1219,7 +1299,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             } else if (event.type === "tool_started") {
               const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
               if (ftoolName) {
+                promoteFallbackPendingToActivity();
+                const ftoolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
                 emitFallbackActivity({
+                  ...(ftoolCallId ? { id: `tool_${reqId}_fb_${ftoolCallId}` } : {}),
                   label: fallbackToolLabelFor(ftoolName, "running"),
                   kind: "tool",
                   tool: ftoolName,
@@ -1230,7 +1313,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             } else if (event.type === "tool_completed") {
               const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
               if (ftoolName) {
+                const ftoolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
                 emitFallbackActivity({
+                  ...(ftoolCallId ? { id: `tool_${reqId}_fb_${ftoolCallId}` } : {}),
                   label: fallbackToolLabelFor(ftoolName, "done"),
                   kind: "tool",
                   tool: ftoolName,
@@ -1239,6 +1324,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
                 });
               }
             } else if (event.type === "turn_completed") {
+              fallbackPendingThinking = "";
               finalText = event.message || "";
             }
           }
@@ -1275,7 +1361,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: finalText || "I wasn't able to complete the analysis."
+      content: finalText || "I wasn't able to complete the analysis.",
+      ...(capturedActivities.length > 0 ? { activities: capturedActivities } : {}),
+      workDuration: Date.now() - turnStartedAt
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);

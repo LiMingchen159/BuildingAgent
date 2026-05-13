@@ -5290,10 +5290,10 @@ p {
   align-items: center;
   gap: 0.3rem;
   font-size: 0.75rem;
-  color: var(--color-text-secondary);
+  color: #6b6b6b;
   padding: 0.25rem 0.5rem;
   border-radius: 12px;
-  background: var(--color-bg-surface-muted);
+  background: #f2f2f2;
   animation: activity-fade-in 0.2s ease-out;
 }
 
@@ -5302,34 +5302,14 @@ p {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.streaming-activity.activity-tool {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-
-.streaming-activity.activity-memory {
-  background: #f5f3ff;
-  color: #6d28d9;
-}
-
-.streaming-activity.activity-kb {
-  background: #ecfdf5;
-  color: #047857;
-}
-
-.streaming-activity.activity-file {
-  background: #fff7ed;
-  color: #c2410c;
-}
-
-.streaming-activity.activity-response {
-  background: #fdf2f8;
-  color: #be185d;
-}
-
+.streaming-activity.activity-tool,
+.streaming-activity.activity-memory,
+.streaming-activity.activity-kb,
+.streaming-activity.activity-file,
+.streaming-activity.activity-response,
 .streaming-activity.activity-context {
-  background: #f8fafc;
-  color: #475569;
+  background: #f2f2f2;
+  color: #6b6b6b;
 }
 
 @keyframes tool-spin {
@@ -5337,7 +5317,23 @@ p {
   to { transform: rotate(360deg); }
 }
 
-/* --- Worked Timeline --- */
+/* --- Worked Timeline (light minimal grayscale) --- */
+
+/* Neutralize legacy `.message span` (blue/heavy/block) inside the timeline so
+   our timeline spans stay inline grayscale. */
+.worked-timeline span,
+.activity-row span {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: inline;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  margin-bottom: 0;
+  padding: 0;
+  text-transform: none;
+}
 
 .worked-timeline {
   color: #262626;
@@ -5346,6 +5342,7 @@ p {
   background: transparent;
   border: none;
   border-radius: 0;
+  box-shadow: none;
 }
 
 .worked-timeline-header {
@@ -5358,11 +5355,11 @@ p {
   cursor: pointer;
   user-select: none;
   list-style: none;
-  padding: 0.2rem 0 0.55rem;
+  padding: 0.15rem 0 0.45rem;
 }
 
-.worked-timeline-header:hover {
-  color: #5c5c5c;
+.worked-timeline-done .worked-timeline-header:hover {
+  color: #4f4f4f;
 }
 
 .worked-timeline-header::-webkit-details-marker {
@@ -5372,57 +5369,60 @@ p {
 .worked-timeline-header .workspace-icon {
   width: 0.9rem;
   height: 0.9rem;
-  opacity: 0.68;
+  opacity: 0.6;
   stroke-width: 1.7;
 }
 
 .worked-timeline-chevron {
   margin-left: 0.1rem;
   transition: transform 0.16s ease;
-  opacity: 0.55;
+  opacity: 0.45;
+  color: #b0b0b0;
 }
 
 .worked-timeline[open] .worked-timeline-chevron {
   transform: rotate(180deg);
 }
 
+/* Running header: cursor stays default (not collapsible), shimmer on title text only */
 .worked-timeline-running .worked-timeline-header {
   cursor: default;
   user-select: text;
 }
 
-.message-streaming .worked-timeline-running {
-  position: relative;
-  overflow: hidden;
+.worked-timeline .worked-timeline-title {
+  display: inline-block;
+  color: #7a7a7a;
 }
 
-.message-streaming .worked-timeline-running::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
+/* Text-only shimmer via background-clip — never paints a block background */
+.worked-timeline .worked-timeline-title.is-running {
+  background-image: linear-gradient(
     90deg,
-    transparent 0%,
-    transparent 38%,
-    rgba(255, 255, 255, 0.72) 48%,
-    rgba(170, 170, 170, 0.14) 54%,
-    transparent 100%
+    #9a9a9a 0%,
+    #9a9a9a 38%,
+    #2b2b2b 50%,
+    #9a9a9a 62%,
+    #9a9a9a 100%
   );
-  background-size: 260% 100%;
-  animation: timeline-shimmer 2.35s ease-in-out infinite;
-  mix-blend-mode: screen;
-  pointer-events: none;
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-shimmer 2.35s linear infinite;
 }
 
-@keyframes timeline-shimmer {
+@keyframes text-shimmer {
   0% { background-position: 120% 0; }
-  100% { background-position: -120% 0; }
+  100% { background-position: -20% 0; }
 }
 
 .worked-timeline-content {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0.55rem;
   padding-left: 0;
 }
 
@@ -5441,7 +5441,6 @@ p {
   cursor: pointer;
   list-style: none;
   position: relative;
-  overflow: hidden;
 }
 
 .activity-row-summary::-webkit-details-marker {
@@ -5453,42 +5452,32 @@ p {
 }
 
 .activity-row-summary:hover {
-  color: #6f6f6f;
+  color: #5f5f5f;
 }
 
-.activity-row-icon {
-  display: flex;
+.activity-row .activity-row-icon {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 1rem;
   height: 1rem;
   flex-shrink: 0;
-  opacity: 0.72;
+  opacity: 0.7;
+  color: #8b8b8b;
 }
 
 .activity-row-icon .workspace-icon {
   width: 0.9rem;
   height: 0.9rem;
-  stroke-width: 1.65;
+  stroke-width: 1.6;
 }
 
+/* Running row: soft breathing pulse on icon, text-only shimmer on label. No block bg. */
 .activity-row.is-running .activity-row-icon {
-  animation: activity-breathe 1.55s ease-in-out infinite;
-  opacity: 0.76;
+  animation: activity-breathe 1.6s ease-in-out infinite;
 }
 
-.activity-row.is-running .activity-row-summary::after {
-  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.72) 48%, rgba(150, 150, 150, 0.12) 54%, transparent 100%);
-  background-size: 240% 100%;
-  content: "";
-  inset: 0;
-  mix-blend-mode: screen;
-  pointer-events: none;
-  position: absolute;
-  animation: timeline-shimmer 2.1s ease-in-out infinite;
-}
-
-.activity-row-label {
+.activity-row .activity-row-label {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -5496,9 +5485,28 @@ p {
   white-space: nowrap;
 }
 
-.activity-row-chevron {
+.activity-row.is-running .activity-row-label {
+  background-image: linear-gradient(
+    90deg,
+    #9a9a9a 0%,
+    #9a9a9a 38%,
+    #2b2b2b 50%,
+    #9a9a9a 62%,
+    #9a9a9a 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-shimmer 2.35s linear infinite;
+}
+
+.activity-row .activity-row-chevron {
   margin-left: 0.05rem;
-  opacity: 0.46;
+  opacity: 0.4;
+  color: #b5b5b5;
   transition: transform 0.16s ease;
 }
 
@@ -5507,25 +5515,47 @@ p {
 }
 
 .activity-row-details {
-  color: #8a8a8a;
+  color: #4a4a4a;
   display: grid;
-  gap: 0.1rem;
-  padding: 0.28rem 0 0.1rem 1.48rem;
+  gap: 0.25rem;
+  padding: 0.35rem 0 0.1rem 1.48rem;
 }
 
 .activity-row-details p {
   font-family: var(--font-family-mono);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   line-height: 1.45;
   margin: 0;
   overflow-wrap: anywhere;
+  background: #f4f4f4;
+  color: #3a3a3a;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
 }
 
 .activity-progress-text {
-  color: #262626;
+  color: #2b2b2b;
   font-size: 1rem;
   line-height: 1.7;
   margin: 0;
+}
+
+.activity-progress-text.is-running {
+  background-image: linear-gradient(
+    90deg,
+    #9a9a9a 0%,
+    #9a9a9a 38%,
+    #2b2b2b 50%,
+    #9a9a9a 62%,
+    #9a9a9a 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-shimmer 2.35s linear infinite;
 }
 
 .activity-progress-pending {
@@ -5533,8 +5563,23 @@ p {
 }
 
 @keyframes activity-breathe {
-  0%, 100% { opacity: 0.48; }
-  50% { opacity: 0.9; }
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.95; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .worked-timeline .worked-timeline-title.is-running,
+  .activity-row.is-running .activity-row-label,
+  .activity-progress-text.is-running {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+    color: #6a6a6a;
+  }
+  .activity-row.is-running .activity-row-icon {
+    animation: none;
+    opacity: 0.8;
+  }
 }
 
 /* --- Final Answer --- */

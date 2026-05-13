@@ -128,6 +128,7 @@ export interface StreamEventHandlers {
   onProgress?: (event: ChatStreamProgressEvent) => void;
   onActivity?: (event: ChatStreamActivityEvent) => void;
   onToken?: (content: string) => void;
+  onTokenReset?: () => void;
   onError?: (error: ApiErrorDetail) => void;
   onDone?: (response: SendChatResponse) => void;
 }
@@ -233,6 +234,9 @@ export async function sendChatMessageStream(
                 if (typeof (parsed as Record<string, unknown>).content === "string") {
                   handlers.onToken?.((parsed as { content: string }).content);
                 }
+                break;
+              case "token_reset":
+                handlers.onTokenReset?.();
                 break;
               case "error":
                 failed = true;
@@ -627,11 +631,43 @@ export async function getProjectManagement(token: string, projectId: string): Pr
   };
 }
 
+function parseChatMessageActivity(value: unknown): ChatStreamActivityEvent | null {
+  if (!isRecord(value) || typeof value.label !== "string") return null;
+  const kind = typeof value.kind === "string" ? value.kind : "context";
+  const allowedKinds = new Set(["tool", "memory", "kb", "file", "response", "context"]);
+  if (!allowedKinds.has(kind)) return null;
+  const result: ChatStreamActivityEvent = {
+    label: value.label,
+    kind: kind as ChatStreamActivityEvent["kind"]
+  };
+  if (typeof value.id === "string") result.id = value.id;
+  if (typeof value.tool === "string") result.tool = value.tool;
+  if (value.status === "running" || value.status === "done") result.status = value.status;
+  if (typeof value.raw === "string") result.raw = value.raw;
+  if (typeof value.requestId === "string") result.requestId = value.requestId;
+  if (typeof value.detail === "string") result.detail = value.detail;
+  if (typeof value.output === "string") result.output = value.output;
+  if (typeof value.durationMs === "number") result.durationMs = value.durationMs;
+  if (typeof value.exitCode === "number") result.exitCode = value.exitCode;
+  return result;
+}
+
+function parseChatMessageActivities(value: unknown): ChatStreamActivityEvent[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: ChatStreamActivityEvent[] = [];
+  for (const entry of value) {
+    const parsed = parseChatMessageActivity(entry);
+    if (parsed) out.push(parsed);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 function parseChatMessage(value: unknown, message: string): ChatMessage {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || typeof value.userId !== "string" || (value.role !== "user" && value.role !== "assistant") || typeof value.content !== "string") {
     throw malformed(message);
   }
   const images = parseChatMessageImages(value.images, message);
+  const activities = parseChatMessageActivities(value.activities);
   return {
     id: value.id,
     projectId: value.projectId,
@@ -639,7 +675,9 @@ function parseChatMessage(value: unknown, message: string): ChatMessage {
     role: value.role,
     content: value.content,
     ...(typeof value.artifactId === "string" ? { artifactId: value.artifactId } : {}),
-    ...(images ? { images } : {})
+    ...(images ? { images } : {}),
+    ...(activities ? { activities } : {}),
+    ...(typeof value.workDuration === "number" ? { workDuration: value.workDuration } : {})
   };
 }
 

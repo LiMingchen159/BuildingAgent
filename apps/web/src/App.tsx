@@ -686,15 +686,21 @@ function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): Ico
   return "activity";
 }
 
-function ActivityRow({ activity, streaming }: { activity: ChatStreamActivityEvent; streaming: boolean }) {
+function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActivityEvent; streaming: boolean; isLast: boolean }) {
   if (activity.kind !== "tool") {
-    return <p className="activity-progress-text">{activity.label}</p>;
+    const running = streaming && isLast;
+    return <p className={`activity-progress-text${running ? " is-running" : ""}`}>{activity.label}</p>;
   }
   const details = [activity.detail, activity.exitCode !== undefined ? `exit ${activity.exitCode}` : undefined, activity.durationMs !== undefined ? `${activity.durationMs}ms` : undefined, activity.output]
     .filter((item): item is string => Boolean(item && item.trim()));
   const icon = activityIcon(activity.kind, activity.label);
+  // A tool row is "running" only while we're still streaming AND the most recent
+  // event for it was tool_started. Once we're past streaming (history replay or
+  // post-done state), always render the completed-tense label that the server
+  // sent on tool_completed — never show the running tense.
+  const running = streaming && activity.status === "running";
   return (
-    <details className={`activity-row activity-${activity.kind}${streaming && activity.status === "running" ? " is-running" : ""}`}>
+    <details className={`activity-row activity-${activity.kind}${running ? " is-running" : ""}`}>
       <summary className="activity-row-summary">
         <span className="activity-row-icon"><Icon name={icon} /></span>
         <span className="activity-row-label">{activity.label}</span>
@@ -833,42 +839,42 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                   <p>{message.content}</p>
                 ) : (
                   <>
-                    {hasActivity && isStreaming && !hasContent ? (
-                      <section className="worked-timeline worked-timeline-running" aria-label="Assistant activity">
-                        <div className="worked-timeline-header" aria-live="polite">
-                          <span>Working for {formatElapsedTime(messageDuration)}</span>
-                        </div>
-                        <div className="worked-timeline-content">
-                          {messageActivities.length > 0 ? messageActivities.map((act, i) => (
-                            <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} />
-                          )) : (
-                            <p className="activity-progress-text activity-progress-pending">Working</p>
-                          )}
-                        </div>
-                      </section>
-                    ) : hasActivity ? (
-                      <details className="worked-timeline" open={!isCollapsed} onToggle={(e) => setTimelineCollapsed(prev => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}>
-                        <summary className="worked-timeline-header">
-                          <span>Worked for {formatElapsedTime(messageDuration)}</span>
-                          <Icon name="chevron-down" className="worked-timeline-chevron" />
-                        </summary>
-                        <div className="worked-timeline-content">
-                          {messageActivities.length > 0 ? messageActivities.map((act, i) => (
-                            <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} />
-                          )) : (
-                            <p className="activity-progress-text activity-progress-pending">Worked</p>
-                          )}
-                        </div>
-                      </details>
+                    {hasActivity ? (
+                      isStreaming && !hasContent ? (
+                        <section className="worked-timeline worked-timeline-running" aria-label="Assistant activity">
+                          <div className="worked-timeline-header" aria-live="polite">
+                            <span className="worked-timeline-title is-running">Working for {formatElapsedTime(messageDuration)}</span>
+                          </div>
+                          <div className="worked-timeline-content">
+                            {messageActivities.length > 0 ? messageActivities.map((act, i) => (
+                              <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} isLast={i === messageActivities.length - 1} />
+                            )) : (
+                              <p className="activity-progress-text activity-progress-pending is-running">Thinking</p>
+                            )}
+                          </div>
+                        </section>
+                      ) : (
+                        <details className="worked-timeline worked-timeline-done" open={!isCollapsed} onToggle={(e) => setTimelineCollapsed(prev => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}>
+                          <summary className="worked-timeline-header">
+                            <span className="worked-timeline-title">Worked for {formatElapsedTime(messageDuration)}</span>
+                            <Icon name="chevron-down" className="worked-timeline-chevron" />
+                          </summary>
+                          <div className="worked-timeline-content">
+                            {messageActivities.map((act, i) => (
+                              <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={false} isLast={false} />
+                            ))}
+                          </div>
+                        </details>
+                      )
                     ) : null}
                     {hasContent ? (
                       <div className="final-answer">
                         <Markdown source={message.content} />
                       </div>
-                    ) : isStreaming ? (
+                    ) : isStreaming && !hasActivity ? (
                       <div className="final-answer-placeholder">
                         <span className="spinner" aria-hidden="true" />
-                        <span>Working...</span>
+                        <span>Thinking...</span>
                       </div>
                     ) : null}
                   </>
@@ -1713,14 +1719,32 @@ export default function App() {
           if (!turn || turn.assistantId !== streamingId || turn.conversationId !== activeConversationIdRef.current) return;
           setMessages((current) => current.map((m) => (m.id === streamingId ? { ...m, content: m.content + content } : m)));
         },
+        onTokenReset() {
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId || turn.conversationId !== activeConversationIdRef.current) return;
+          // Interim narration from a tool-calling iteration was streamed as tokens
+          // and has now been promoted to a timeline activity on the server.
+          // Clear the streamed answer body so only the real final answer remains.
+          setMessages((current) => current.map((m) => (m.id === streamingId ? { ...m, content: "" } : m)));
+        },
         onActivity(event: ChatStreamActivityEvent) {
           const turn = streamingTurnRef.current;
           if (!turn || turn.assistantId !== streamingId) return;
           turn.activities = (() => {
             const current = turn.activities;
-            const dupe = current.find((a) => (event.id && a.id === event.id) || (!event.id && a.label === event.label && a.kind === event.kind && a.status === event.status));
+            // Same id → replace the row in place (e.g. tool running → done).
+            if (event.id) {
+              const idx = current.findIndex((a) => a.id === event.id);
+              if (idx >= 0) {
+                const next = current.slice();
+                next[idx] = event;
+                return next;
+              }
+            }
+            // No id → fall back to label+kind dedup so retried progress lines collapse.
+            const dupe = current.find((a) => !a.id && a.label === event.label && a.kind === event.kind);
             if (dupe) {
-              return current.map((a) => (a.label === event.label && a.kind === event.kind ? event : a));
+              return current.map((a) => (a === dupe ? event : a));
             }
             return [...current, event];
           })();
