@@ -26,10 +26,11 @@ import { AgentMemoryStore } from "./agent/memory.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
-import { loadStoreSync, scheduleSave } from "./persistence.js";
+import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -39,6 +40,32 @@ interface BuildServerOptions {
   fetch?: FetchLike;
   allowProviderFallback?: boolean;
   persist?: boolean;
+}
+
+function tryLoadEnv(): void {
+  const candidates = [
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.env"),
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "../../.env")
+  ];
+  for (const envPath of candidates) {
+    try {
+      const content = readFileSync(envPath, "utf8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq === -1) continue;
+        const key = trimmed.slice(0, eq).trim();
+        if (key && !(key in process.env)) {
+          process.env[key] = trimmed.slice(eq + 1).trim();
+        }
+      }
+      return;
+    } catch {
+      // try next candidate
+    }
+  }
 }
 
 interface ProjectParams {
@@ -157,7 +184,20 @@ function providerErrorCode(error: unknown): string {
 
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? (options.persist ? (loadStoreSync() ?? createSeedStore()) : createSeedStore());
+  const persistStore = options.persist === true;
+  const persistSoon = (): void => {
+    if (persistStore) {
+      scheduleSave(store);
+    }
+  };
+  const persistNow = (): void => {
+    if (persistStore) {
+      saveStoreSync(store);
+    }
+  };
   const env = options.env ?? process.env;
+  // Ensure .env is loaded even when buildServer is called directly (not via index.ts)
+  if (!options.env) tryLoadEnv();
   const providerResolver =
     options.resolveChatProvider ??
     ((providerEnv: ProviderEnv) => resolveChatProvider(providerEnv, options.fetch ? { fetch: options.fetch } : {}));
@@ -194,7 +234,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
     }
     store.messagesByProject[job.projectId] = msgs;
-    scheduleSave(store);
+    persistSoon();
   });
   scheduler.start();
 
@@ -238,7 +278,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     store.sessionsByToken[token] = { userId: user.id, selectedProjectId: null };
-    scheduleSave(store);
+    persistSoon();
 
     return {
       token,
@@ -301,7 +341,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     const selectedSession = { userId: session.userId, selectedProjectId: projectId };
     store.sessionsByToken[session.token] = selectedSession;
-    scheduleSave(store);
+    persistSoon();
 
     return reply.status(201).send({
       project: { id: project.id, name: project.name, permissions: ["chat:read", "chat:write"] },
@@ -410,7 +450,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       selectedProjectId: request.params.projectId
     };
     store.sessionsByToken[session.token] = selectedSession;
-    scheduleSave(store);
+    persistSoon();
 
     return {
       session: {
@@ -629,6 +669,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     conversation.messageIds.push(message.id);
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
+    persistNow();
 
     // Pre-process time expressions (reminders) before agent turn
     const timeExpr = parseTimeExpression(content);
@@ -664,7 +705,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         conversation.title = `提醒: ${timeExpr.reminderText}`.slice(0, 60);
       }
 
-      scheduleSave(store);
+      persistSoon();
       return reply.status(201).send({
         message,
         assistantMessage,
@@ -751,7 +792,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
     }
 
-    scheduleSave(store);
+    persistSoon();
     return reply.status(201).send({
       message,
       assistantMessage,
@@ -827,6 +868,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     messages.push(userMessage);
     conversation.messageIds.push(userMessage.id);
     store.messagesByProject[projectId] = messages;
+    persistNow();
 
     // Set up SSE response
     const reqId = requestIdFor(request);
@@ -874,7 +916,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         conversation.title = `提醒: ${streamTimeExpr.reminderText}`.slice(0, 60);
       }
 
-      scheduleSave(store);
+      persistSoon();
       sseWrite("done", JSON.stringify({
         message: userMessage,
         assistantMessage: streamAssistantMessage,
@@ -1009,7 +1051,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
     }
 
-    scheduleSave(store);
+    persistSoon();
 
     // Send final done event
     sseWrite("done", JSON.stringify({
@@ -1079,7 +1121,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
     );
 
-    scheduleSave(store);
+    persistSoon();
     return reply.status(200).send({
       projectId,
       clearedMessages: clearedMessageIds.size,
@@ -1152,7 +1194,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       ...(store.conversationsByProject[request.params.projectId] ?? []),
       conversation
     ];
-    scheduleSave(store);
+    persistSoon();
 
     return reply.status(201).send({
       conversation: { id: conversation.id, title: conversation.title, messageCount: 0, createdAt: conversation.createdAt },
@@ -1224,7 +1266,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const idSet = new Set(conversation.messageIds);
     store.messagesByProject[request.params.projectId] = allMessages.filter((m) => !idSet.has(m.id));
     store.conversationsByProject[request.params.projectId] = conversations.filter((c) => c.id !== request.params.convId);
-    scheduleSave(store);
+    persistSoon();
 
     return {
       deleted: true,
@@ -1262,7 +1304,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     conversation.title = title;
-    scheduleSave(store);
+    persistSoon();
 
     return {
       conversation: { id: conversation.id, title: conversation.title, messageCount: conversation.messageIds.length, createdAt: conversation.createdAt },
@@ -1294,7 +1336,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     delete store.repositoryByProject[projectId];
     delete store.knowledgeBaseByProject[projectId];
     store.sessionsByToken[session.token] = { userId: session.userId, selectedProjectId: null };
-    scheduleSave(store);
+    persistSoon();
 
     return {
       deleted: true,

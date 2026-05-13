@@ -50,6 +50,15 @@ import {
 
 const STORAGE_KEY = "building-agent.session.v1";
 type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
+
+const STREAM_STEP_TYPES = new Set([
+  "loop_started",
+  "provider_started",
+  "tool_started",
+  "tool_completed",
+  "memory_recalled",
+  "skills_applied"
+]);
 type IconName =
   | "activity"
   | "arrow-up"
@@ -681,13 +690,18 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
   );
 }
 
-function ChatWorkspace({ project, user, messages, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
+function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wasEmptyRef = useRef(messages.length === 0);
   const canWrite = project.permissions.includes("chat:write");
   const hasMessages = messages.length > 0;
+  const latestMessage = messages[messages.length - 1];
+  const latestMessageId = latestMessage?.id ?? "";
+  const latestMessageKey = `${messages.length}:${latestMessageId}`;
   const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
 
   useEffect(() => {
@@ -701,7 +715,7 @@ function ChatWorkspace({ project, user, messages, onSend, busy, provider, reques
   useEffect(() => {
     if (wasEmptyRef.current && hasMessages) {
       setLeavingEmptyState(true);
-      const timeout = window.setTimeout(() => setLeavingEmptyState(false), 520);
+      const timeout = window.setTimeout(() => setLeavingEmptyState(false), 220);
       wasEmptyRef.current = false;
       return () => window.clearTimeout(timeout);
     }
@@ -711,6 +725,19 @@ function ChatWorkspace({ project, user, messages, onSend, busy, provider, reques
     }
     return undefined;
   }, [hasMessages]);
+
+  useEffect(() => {
+    if (!hasMessages) {
+      previousConversationRef.current = null;
+      return;
+    }
+
+    const behavior: ScrollBehavior = previousConversationRef.current !== activeConversationId ? "auto" : "smooth";
+    previousConversationRef.current = activeConversationId;
+    requestAnimationFrame(() => {
+      messageEndRef.current?.scrollIntoView({ block: "end", behavior });
+    });
+  }, [activeConversationId, hasMessages, latestMessageKey]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -747,6 +774,7 @@ function ChatWorkspace({ project, user, messages, onSend, busy, provider, reques
             </article>
           );
         })}
+        <div className="message-list-end" ref={messageEndRef} aria-hidden="true" />
       </section>
       <form className="composer" onSubmit={handleSubmit}>
         {(!hasMessages || leavingEmptyState) ? <p className="composer-empty-greeting">{emptyChatGreeting}</p> : null}
@@ -1133,7 +1161,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1477,7 +1505,7 @@ export default function App() {
       projectId,
       userId,
       role: "assistant",
-      content: ""
+      content: "Starting Hermes run..."
     };
 
     setMessages((current) => [...current, optimisticUser, streamingAssistant]);
@@ -1494,6 +1522,16 @@ export default function App() {
           if (event.type === "turn_completed" && event.message) {
             setMessages((current) =>
               current.map((m) => (m.id === streamingId ? { ...m, content: event.message } : m))
+            );
+          }
+          if (STREAM_STEP_TYPES.has(event.type) && event.message) {
+            const stepLine = `\n\n> ${event.message}`;
+            setMessages((current) =>
+              current.map((m) => {
+                if (m.id !== streamingId) return m;
+                const content = m.content === "Starting Hermes run..." ? stepLine.trimStart() : `${m.content}${stepLine}`;
+                return { ...m, content };
+              })
             );
           }
           // Track tool calls

@@ -22,7 +22,7 @@ const DEFAULT_KNOWLEDGE_BASE_DIR = resolveKnowledgeBaseDefault();
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".ttl", ".rdf", ".csv", ".json", ".yaml", ".yml"]);
 const MAX_DOCUMENTS = 80;
-const MAX_EXCERPT_BYTES = 2400;
+const MAX_EXCERPT_BYTES = 600;
 
 export interface KnowledgeBaseIndexOptions {
   rootDir?: string | undefined;
@@ -92,7 +92,7 @@ export function knowledgeBasePrompt(documents: KnowledgeBaseDocument[]): string 
 
   return [
     "Knowledge Base files discovered for this project:",
-    ...documents.slice(0, 8).map((document) => {
+    ...documents.slice(0, 5).map((document) => {
       const excerpt = document.excerpt ? ` Excerpt: ${document.excerpt}` : "";
       return `- ${document.path} (${document.kind}, ${document.sizeBytes} bytes).${excerpt}`;
     })
@@ -102,7 +102,7 @@ export function knowledgeBasePrompt(documents: KnowledgeBaseDocument[]): string 
 async function readExcerpt(filePath: string): Promise<string | undefined> {
   try {
     const buffer = await readFile(filePath);
-    return buffer.subarray(0, MAX_EXCERPT_BYTES).toString("utf8").replace(/\s+/gu, " ").trim().slice(0, 900) || undefined;
+    return buffer.subarray(0, MAX_EXCERPT_BYTES).toString("utf8").replace(/\s+/gu, " ").trim().slice(0, 200) || undefined;
   } catch {
     return undefined;
   }

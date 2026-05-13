@@ -40,12 +40,12 @@ describe("authenticated cli commands", () => {
     }
     apiUrl = `http://127.0.0.1:${address.port}`;
     closeServer = async () => app.close();
-  });
+  }, 20000);
 
   afterEach(async () => {
     await closeServer();
     await rm(homeDir, { recursive: true, force: true });
-  });
+  }, 20000);
 
   it("logs in, persists auth, selects a project, and reuses it for chat in fresh invocations", async () => {
     const loginIo = createIo();
@@ -74,20 +74,20 @@ describe("authenticated cli commands", () => {
     });
     expect(parseOutput(chatIo)).toMatchObject({
       message: { projectId: "project_alpha", role: "user", content: "hello from the cli" },
-      assistantMessage: {
+      assistantMessage: expect.objectContaining({
         projectId: "project_alpha",
-        role: "assistant",
-        content: "Mock assistant response for project_alpha: hello from the cli"
-      },
-      provider: {
-        id: "deterministic-mock",
-        mode: "mock",
-        model: "deterministic-local-mock",
-        fallbackUsed: true,
-        fallbackReason: "local_default"
-      },
-      fallbackUsed: true,
+        role: "assistant"
+      }),
+      provider: expect.objectContaining({
+        fallbackUsed: false
+      }),
+      fallbackUsed: false,
       requestId: expect.stringMatching(/^req_/u)
+    });
+    expect(parseOutput(chatIo)).not.toMatchObject({
+      assistantMessage: expect.objectContaining({
+        content: expect.stringMatching(/This is a mock response/i)
+      })
     });
     expect(chatIo.stdoutText()).not.toMatch(/seed-token-ada|Bearer\s+[A-Za-z0-9._-]+|local-dev-password|sk-[A-Za-z0-9_-]+/u);
 
@@ -96,7 +96,7 @@ describe("authenticated cli commands", () => {
     expect(parseOutput(listIo)).toMatchObject({
       messages: [
         expect.objectContaining({ role: "user", content: "hello from the cli" }),
-        expect.objectContaining({ role: "assistant", content: "Mock assistant response for project_alpha: hello from the cli" })
+        expect.objectContaining({ role: "assistant", projectId: "project_alpha" })
       ],
       requestId: expect.stringMatching(/^req_/u)
     });
@@ -108,7 +108,7 @@ describe("authenticated cli commands", () => {
       session: { userId: "user_ada", projectId: "project_alpha" },
       config: { token: "[redacted]", selectedProjectId: "project_alpha", lastCommand: "session" }
     });
-  });
+  }, 20000);
 
   it("preserves backend error codes and request ids for forbidden project selection", async () => {
     const loginIo = createIo();

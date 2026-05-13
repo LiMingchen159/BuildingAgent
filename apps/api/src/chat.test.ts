@@ -150,7 +150,7 @@ describe("project-scoped chat contract", () => {
 
     expect(posted.statusCode).toBe(201);
     expect(posted.json()).toMatchObject({
-      assistantMessage: { role: "assistant", content: "Mock assistant response for project_alpha: Local smoke" },
+      assistantMessage: { role: "assistant", content: "I'll help you with that. Let me look into the project data and knowledge base to find what you need.\n\nThis is a mock response — connect a real LLM provider for AI-powered agent behavior." },
       provider: {
         id: "deterministic-mock",
         mode: "mock",
@@ -256,7 +256,7 @@ describe("project-scoped chat contract", () => {
 
     expect(response.statusCode).toBe(201);
     expect(response.json()).toMatchObject({
-      assistantMessage: { role: "assistant", content: "Mock assistant response for project_alpha: Recover locally" },
+      assistantMessage: { role: "assistant", content: "I'll help you with that. Let me look into the project data and knowledge base to find what you need.\n\nThis is a mock response — connect a real LLM provider for AI-powered agent behavior." },
       provider: {
         id: "deterministic-mock",
         mode: "mock",
@@ -395,7 +395,8 @@ describe("project-scoped chat contract", () => {
   });
 
   it("rechecks membership on every operation and isolates projects between users", async () => {
-    const app = buildServer();
+    const { provider } = fakeProvider();
+    const app = buildServer({ chatProvider: provider });
 
     await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
     await app.inject({
@@ -610,6 +611,24 @@ describe("project-scoped chat contract", () => {
 });
 
 describe("chat streaming endpoint", () => {
+  function parseSseEvents(body: string): Array<{ event: string; data: unknown }> {
+    const events: Array<{ event: string; data: unknown }> = [];
+    const chunks = body.split("\n\n").filter(Boolean);
+    for (const chunk of chunks) {
+      const lines = chunk.split("\n");
+      let event = "";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (event && data) {
+        events.push({ event, data: JSON.parse(data) });
+      }
+    }
+    return events;
+  }
+
   it("returns SSE events for a simple chat turn", async () => {
     const { provider } = fakeProvider();
     const app = buildServer({ chatProvider: provider });
@@ -626,21 +645,7 @@ describe("chat streaming endpoint", () => {
     expect(res.headers["content-type"]).toBe("text/event-stream");
 
     const body = res.body;
-    // Parse SSE body: event: X\ndata: Y\n\n
-    const events: Array<{ event: string; data: unknown }> = [];
-    const chunks = body.split("\n\n").filter(Boolean);
-    for (const chunk of chunks) {
-      const lines = chunk.split("\n");
-      let event = "";
-      let data = "";
-      for (const line of lines) {
-        if (line.startsWith("event: ")) event = line.slice(7);
-        if (line.startsWith("data: ")) data = line.slice(6);
-      }
-      if (event && data) {
-        events.push({ event, data: JSON.parse(data) });
-      }
-    }
+    const events = parseSseEvents(body);
 
     // Should have lifecycle events and a done event
     expect(events.length).toBeGreaterThanOrEqual(2);
@@ -654,6 +659,43 @@ describe("chat streaming endpoint", () => {
     expect(doneData.assistantMessage).toMatchObject({ role: "assistant" });
     expect(doneData.conversationId).toEqual(expect.stringMatching(/^conv_/));
     expect(doneData.provider).toMatchObject({ id: "fake-real" });
+  });
+
+  it("emits an error event when the provider stream ends without a final response", async () => {
+    const provider: ChatProvider = {
+      metadata: { id: "empty-stream", mode: "real", model: "empty-model", status: "configured" },
+      async complete() {
+        throw new Error("non-streaming should not be used");
+      },
+      async *completeStream() {
+        return;
+      }
+    };
+    const app = buildServer({ chatProvider: provider, allowProviderFallback: false });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Hello empty stream" }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "error",
+          data: expect.objectContaining({
+            code: "provider_error",
+            message: "Chat provider failed before producing a safe response.",
+            requestId: expect.stringMatching(/^req_/)
+          })
+        })
+      ])
+    );
+    expect(events.some((event) => event.event === "done")).toBe(false);
   });
 
   it("requires auth before streaming", async () => {

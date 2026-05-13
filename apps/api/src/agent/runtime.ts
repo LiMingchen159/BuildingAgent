@@ -3,7 +3,7 @@ import type { AgentSkillRegistry } from "./skills.js";
 import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentLifecycleEventType, AgentLoopResult, AgentTurnRequest, AgentTurnResult } from "./types.js";
 import { knowledgeBasePrompt } from "./knowledgeBase.js";
-import type { ChatCompletionDelta, ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
+import { ProviderError, type ChatCompletionDelta, type ChatCompletionResult, type ChatToolCall, type ChatToolDefinition, type ProviderChatMessage } from "../providers.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -36,7 +36,9 @@ export class AgentRuntime {
   ): Promise<{ completion: ChatCompletionResult; thinking: AgentLifecycleEvent[] }> {
     const thinking: AgentLifecycleEvent[] = [];
 
-    if (request.provider.completeStream) {
+    // Skip streaming for large-context requests (KB docs) to avoid burning rate-limit budget
+    const hasKbDocs = request.knowledgeBaseDocuments && request.knowledgeBaseDocuments.length > 0;
+    if (request.provider.completeStream && !hasKbDocs) {
       let streamText = "";
       const streamToolCalls: ChatToolCall[] = [];
 
@@ -65,13 +67,24 @@ export class AgentRuntime {
             }
           }
         }
-      } catch {
-        // Stream failed, fall back to non-streaming
+      } catch (streamError) {
+        // Stream failed, fall back to non-streaming. Add cooldown for rate limits.
+        if (typeof streamError === "object" && streamError !== null && "status" in streamError && (streamError as { status?: number }).status === 429) {
+          await sleep(5000);
+        }
         return { completion: await this.callProviderWithRetry(request, messages, toolDefs, 2), thinking: [] };
       }
 
+      const trimmedStreamText = streamText.trim();
+      if (!trimmedStreamText && streamToolCalls.length === 0) {
+        throw new ProviderError("Chat provider stream ended without assistant text or tool calls.", {
+          code: "provider_empty_stream",
+          provider: request.provider.metadata
+        });
+      }
+
       const result: ChatCompletionResult = {
-        text: streamText,
+        text: trimmedStreamText,
         provider: request.provider.metadata,
         fallbackUsed: false
       };
@@ -103,7 +116,13 @@ export class AgentRuntime {
       } catch (error) {
         lastError = error;
         if (attempt < maxRetries) {
-          await sleep(Math.min(1000 * Math.pow(2, attempt), 8000));
+          // 429 rate-limit: wait 10-20s before retry; other errors use standard backoff
+          const isRateLimit =
+            typeof error === "object" && error !== null && "status" in error && (error as { status?: number }).status === 429;
+          const delay = isRateLimit
+            ? 10000 + Math.floor(Math.random() * 10000)
+            : Math.min(1000 * Math.pow(2, attempt), 8000);
+          await sleep(delay);
         }
       }
     }
