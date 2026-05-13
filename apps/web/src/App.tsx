@@ -12,6 +12,7 @@ import { CubeLogo } from "./ui/CubeLogo";
 import { ParticleField } from "./ui/ParticleField";
 import {
   ApiClientError,
+  createProjectSocket,
   getChat,
   getKnowledgeBase,
   getProjectManagement,
@@ -1373,6 +1374,28 @@ export default function App() {
       clearInterval(interval);
     };
   }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
+
+  // WebSocket connection for real-time reminder/message delivery
+  useEffect(() => {
+    if (!token || !selectedProject) return;
+
+    const socket = createProjectSocket(selectedProject.id, token);
+
+    socket.on("message", (data) => {
+      if (data.type === "reminder_fired" && data.message) {
+        const reminderMsg = data.message as ChatMessage;
+        setMessages((current) => {
+          const currentIds = new Set(current.map((m) => m.id));
+          if (currentIds.has(reminderMsg.id)) return current;
+          return [...current, reminderMsg];
+        });
+      }
+    });
+
+    return () => {
+      socket.close();
+    };
+  }, [token, selectedProject?.id ?? null]);
 
   async function handleLogin(email: string, password: string) {
     setBusy(true);
