@@ -71,7 +71,7 @@ export interface AgentToolContext {
 
 export interface AgentTool {
   name: string;
-  category: "memory" | "session" | "utility" | "building" | "file";
+  category: "memory" | "session" | "utility" | "building" | "file" | "web";
   description: string;
   schema: AgentToolSchema;
   run(args: Record<string, unknown>, context: AgentToolContext): Promise<Record<string, unknown>>;
