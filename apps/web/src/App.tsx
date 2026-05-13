@@ -671,6 +671,9 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
 function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, streamingActivity, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; streamingActivity?: ChatStreamActivityEvent[]; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
+  const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
+  const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
+  const [streamElapsed, setStreamElapsed] = useState(0);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
@@ -684,6 +687,27 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const latestMessageKey = `${messages.length}:${latestMessageId}`;
   const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
   const activities = streamingActivity ?? [];
+
+  // Timer for streaming elapsed time
+  useEffect(() => {
+    if (!busy || !streamStartTime) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setStreamElapsed(Date.now() - streamStartTime);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [busy, streamStartTime]);
+
+  // Reset timer when streaming starts
+  useEffect(() => {
+    if (busy && !streamStartTime) {
+      setStreamStartTime(Date.now());
+    } else if (!busy && streamStartTime) {
+      // Keep final elapsed time
+      setStreamStartTime(null);
+    }
+  }, [busy, streamStartTime]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -757,14 +781,26 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+    // Enter sends message, Ctrl+Enter or Cmd+Enter inserts newline
+    if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       if (!draft.trim() || busy) return;
       const message = draft.trim();
       setDraft("");
       userScrolledUpRef.current = false;
+      setStreamElapsed(0);
       void onSend(message);
     }
+  }
+
+  function formatElapsedTime(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
   }
 
   return (
@@ -775,33 +811,64 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         {messages.map((message) => {
           const isStreaming = message.id.startsWith("streaming_");
           const isThinking = message.id.startsWith("pending_assistant_");
-          const isStreamingEmpty = isStreaming && !message.content;
+          const hasActivity = isStreaming && (activities.length > 0 || (activeTools && activeTools.length > 0));
+          const hasContent = message.content.trim().length > 0;
+          const isCollapsed = timelineCollapsed[message.id] ?? false;
+
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
               <div className="message-content">
-                {isStreamingEmpty ? (
-                  <p className="streaming-placeholder">Thinking...</p>
-                ) : message.role === "assistant" ? (
-                  <Markdown source={message.content} />
-                ) : (
+                {message.role === "user" ? (
                   <p>{message.content}</p>
+                ) : (
+                  <>
+                    {hasActivity ? (
+                      <details className="worked-timeline" open={!isCollapsed} onToggle={(e) => setTimelineCollapsed(prev => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}>
+                        <summary className="worked-timeline-header">
+                          <Icon name="clock" />
+                          <span>Worked for {formatElapsedTime(isStreaming ? streamElapsed : 0)}</span>
+                          <Icon name="chevron-down" className="worked-timeline-chevron" />
+                        </summary>
+                        <div className="worked-timeline-content">
+                          {activities.map((act, i) => (
+                            <div key={`${act.kind}-${i}`} className={`timeline-activity activity-${act.kind}`}>
+                              <span className="timeline-activity-icon">
+                                {act.kind === "tool" ? <Icon name="wrench" /> :
+                                 act.kind === "kb" ? <Icon name="book-open" /> :
+                                 act.kind === "file" ? <Icon name="file-text" /> :
+                                 <Icon name="activity" />}
+                              </span>
+                              <span className="timeline-activity-label">{act.label}</span>
+                            </div>
+                          ))}
+                          {activeTools && activeTools.length > 0 ? (
+                            <div className="timeline-tools">
+                              {activeTools.map((tool) => (
+                                <div key={tool.name} className={`timeline-tool tool-${tool.status}`}>
+                                  <span className="timeline-tool-icon">
+                                    {tool.status === "running" ? <Icon name="rotate" /> : <Icon name="check-check" />}
+                                  </span>
+                                  <span className="timeline-tool-name">{tool.name}</span>
+                                  {tool.status === "running" ? <span className="timeline-tool-status">Running...</span> : null}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </details>
+                    ) : null}
+                    {hasContent ? (
+                      <div className="final-answer">
+                        <Markdown source={message.content} />
+                      </div>
+                    ) : isStreaming ? (
+                      <div className="final-answer-placeholder">
+                        <span className="spinner" aria-hidden="true" />
+                        <span>Working...</span>
+                      </div>
+                    ) : null}
+                  </>
                 )}
-                {isStreaming && activities.length > 0 ? (
-                  <div className="streaming-activities" aria-label="Assistant activity">
-                    {activities.slice(-3).map((act, i) => (
-                      <span key={`${act.kind}-${i}`} className={`streaming-activity activity-${act.kind}`}>
-                        {act.label}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {isStreaming && activeTools && activeTools.length > 0 ? (
-                  <div className="tool-call-indicators" aria-label="Active tool calls">
-                    {activeTools.map((tool) => (
-                      <ToolCallIndicator key={tool.name} tool={tool} />
-                    ))}
-                  </div>
-                ) : null}
                 {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
               </div>
             </article>
@@ -991,7 +1058,7 @@ function WorkspaceSidebarBlock({
                   type="button"
                   className="workspace-sidebar-history-item"
                   onClick={conversation.id === activeConversationId ? undefined : () => onSelectConversation(conversation.id)}
-                  disabled={busy}
+                  disabled={conversation.id === activeConversationId}
                   title={conversation.title}
                 >
                   <span className="workspace-sidebar-history-title">
@@ -1597,7 +1664,6 @@ export default function App() {
           });
         },
         onProgress(event) {
-          // Legacy progress events: treat as activity
           const label = event.message.trim();
           if (!label) return;
           setStreamingActivity((current) => {
@@ -1641,7 +1707,7 @@ export default function App() {
                     : c
                 );
               }
-              return [...current, { id: response.conversationId!, title: updatedTitle, messageCount: 2, createdAt: new Date().toISOString() }];
+              return [{ id: response.conversationId!, title: updatedTitle, messageCount: 2, createdAt: new Date().toISOString() }, ...current];
             });
           }
           setChatProviderDiagnostics(response.provider);
@@ -1686,6 +1752,7 @@ export default function App() {
     }
     setActiveConversationId(null);
     setMessages([]);
+    setStreamingActivity([]);
     setChatProviderDiagnostics(null);
     setChatProviderRequestId(undefined);
     setActiveTab("chat");
@@ -1700,6 +1767,7 @@ export default function App() {
     if (!token || !selectedProject) return;
     if (convId === activeConversationId) return;
     setBusy(true);
+    setStreamingActivity([]);
     try {
       const result = await selectConversation(token, selectedProject.id, convId);
       setMessages(result.messages);
