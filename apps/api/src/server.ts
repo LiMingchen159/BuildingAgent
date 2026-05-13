@@ -28,8 +28,9 @@ import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
 import { loadStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -39,6 +40,32 @@ interface BuildServerOptions {
   fetch?: FetchLike;
   allowProviderFallback?: boolean;
   persist?: boolean;
+}
+
+function tryLoadEnv(): void {
+  const candidates = [
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.env"),
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "../../.env")
+  ];
+  for (const envPath of candidates) {
+    try {
+      const content = readFileSync(envPath, "utf8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq === -1) continue;
+        const key = trimmed.slice(0, eq).trim();
+        if (key && !(key in process.env)) {
+          process.env[key] = trimmed.slice(eq + 1).trim();
+        }
+      }
+      return;
+    } catch {
+      // try next candidate
+    }
+  }
 }
 
 interface ProjectParams {
@@ -158,6 +185,8 @@ function providerErrorCode(error: unknown): string {
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? (options.persist ? (loadStoreSync() ?? createSeedStore()) : createSeedStore());
   const env = options.env ?? process.env;
+  // Ensure .env is loaded even when buildServer is called directly (not via index.ts)
+  if (!options.env) tryLoadEnv();
   const providerResolver =
     options.resolveChatProvider ??
     ((providerEnv: ProviderEnv) => resolveChatProvider(providerEnv, options.fetch ? { fetch: options.fetch } : {}));
