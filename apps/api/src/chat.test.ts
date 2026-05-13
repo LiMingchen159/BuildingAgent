@@ -39,6 +39,16 @@ function assertNoSecrets(value: unknown) {
   }
 }
 
+function deferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("project-scoped chat contract", () => {
   it("requires auth and a matching selected project before reading chat", async () => {
     const app = buildServer();
@@ -778,6 +788,43 @@ describe("chat streaming endpoint", () => {
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "turn_completed", message: "Real provider non-streaming response" })
     ]));
+  });
+
+  it("sends the final SSE done event before best-effort auto-title completion finishes", async () => {
+    const titleGate = deferredPromise<void>();
+    const provider: ChatProvider = {
+      metadata: { id: "stream-real", mode: "real", model: "stream-model", status: "configured" },
+      async complete() {
+        await titleGate.promise;
+        return {
+          text: "Best effort title",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      },
+      async *completeStream() {
+        yield { content: "Final body" };
+      }
+    };
+    const app = buildServer({ chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const resPromise = app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Title should not block done" }
+    });
+
+    const res = await resPromise;
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    expect(events.find((e) => e.event === "done")).toBeDefined();
+    expect(events.find((e) => e.event === "done")?.data).toMatchObject({
+      assistantMessage: expect.objectContaining({ content: "Final body" })
+    });
+
+    titleGate.resolve();
   });
 
   it("emits an error event when the provider stream ends without a final response", async () => {

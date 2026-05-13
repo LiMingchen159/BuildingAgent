@@ -1027,26 +1027,6 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
 
-    // Auto-title
-    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
-      try {
-        const titleResult = await provider.complete({
-          messages: [
-            { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${finalText}` }
-          ],
-          projectId,
-          userId: session.userId,
-          requestId: reqId
-        });
-        const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
-        if (title) {
-          conversation.title = title;
-        }
-      } catch {
-        // title generation is best-effort
-      }
-    }
-
     persistSoon();
 
     // Send final done event
@@ -1061,6 +1041,29 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
 
     reply.raw.end();
+
+    // Auto-title is best-effort and must never delay the final answer.
+    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+      void (async () => {
+        try {
+          const titleResult = await provider.complete({
+            messages: [
+              { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${finalText}` }
+            ],
+            projectId,
+            userId: session.userId,
+            requestId: reqId
+          });
+          const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
+          if (title) {
+            conversation.title = title;
+            persistSoon();
+          }
+        } catch {
+          // title generation is best-effort
+        }
+      })();
+    }
   });
 
   app.delete<{ Params: ProjectParams; Querystring: { conversationId?: string } }>("/api/projects/:projectId/chat", async (request, reply) => {
