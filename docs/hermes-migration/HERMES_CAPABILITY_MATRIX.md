@@ -30,8 +30,8 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 | P1-3 | **Git / Repository Operations** | `tools/git_tools.py` | **Missing** — No git tools. | Add `git_status`, `git_diff`, `git_log` (read-only first). | P2 |
 | P1-4 | **Context Compression** | `agent/context_compressor.py` | **Implemented** — `ContextCompressor` deduplicates tool results, keeps tail messages. Budget: 40 msgs, 8 tail. | m004-s6 | — |
 | P1-5 | **Health / Status Endpoints** | Gateway health checks | **Implemented** — `/health` returns `{ok, service, requestId}`. | Already working. | — |
-| P1-6 | **Skill Registry (runtime CRUD)** | `skills/`, `tools/skill_manager_tool.py` | **Partial** — `AgentSkillRegistry` has 3 placeholder skills. No runtime CRUD. | Add skill create/edit tools. | P2 |
-| P1-7 | **Structured JSON Logging** | `hermes_logging.py` | **Partial** — Tool call logs are persisted. Fastify logger not structured. | Add structured logging with rotation. | P2 |
+| P1-6 | **Skill Registry (runtime CRUD)** | `skills/`, `tools/skill_manager_tool.py` | **Implemented** — `AgentSkillRegistry` with `get()`, `update()`, `remove()` CRUD methods. 4 tool definitions: `skill_create`, `skill_edit`, `skill_delete`, `skill_list`. Built-in skills protected from deletion. | m004-s7 | — |
+| P1-7 | **Structured JSON Logging** | `hermes_logging.py` | **Implemented** — `StructuredLogger` with JSON line-delimited format, 5MB file rotation. Fastify hooks for request_started/request_completed/request_error with duration tracking. Scheduler event logging (onFired, onScheduled). | m004-s7 | — |
 | P1-8 | **Background Process Monitoring** | `tools/terminal_tool.py`, `process_registry.py` | **Implemented** — `ProcessRegistry` with spawn/status/kill/list. 4 process tools. | m004-s4 | — |
 | P1-9 | **Recurring Cron Jobs** | `cron/scheduler.py`, `cron/jobs.py` | **Implemented** — Interval + cron expression recurrence. Background ticker. Pause/resume. `cronjob` tool. | m004-s2 | — |
 | P1-10 | **WebSocket Push** | `tui_gateway/ws.py` | **Implemented** — WS upgrade handler, per-project connection tracking, `reminder_fired` broadcast. Frontend auto-reconnect. | m004-s3 | — |
@@ -54,7 +54,7 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 | Priority | Total | Implemented | Partial | Missing |
 |----------|-------|-------------|---------|---------|
 | P0 | 14 | 14 | 0 | 0 |
-| P1 | 10 | 8 | 2 | 0 |
+| P1 | 10 | 10 | 0 | 0 |
 | P2 | 8 | 0 | 0 | 8 |
 
 **P1 completed (m004-s2 through m004-s6):**
@@ -64,11 +64,9 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 - P1-4: Context Compression ✅ — dedup tool results, keep tail, budget 40 messages
 - P1-1: Web Search ✅ — DuckDuckGo API, web_extract for URL text extraction
 - P1-5: Health Endpoint ✅ — /health returns `{ok, service, requestId}`
+- P1-6: Skill CRUD ✅ — AgentSkillRegistry CRUD tools (create/edit/delete/list), built-in protection
+- P1-7: Structured JSON Logging ✅ — JSON line-delimited, 5MB rotation, request tracing, scheduler events
 
 **P0 all clear:**
 - P0-1: Grace call ✅ — final LLM call without tools on max iteration
 - P0-9: execute_code tool ✅ — Python execution via terminal tool
-
-**P1 remaining:**
-- P1-6: Skill CRUD (runtime skill editing)
-- P1-7: Structured JSON Logging (log rotation, request tracing)
