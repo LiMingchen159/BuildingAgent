@@ -5263,6 +5263,75 @@ p {
   padding: 0.25rem 0 0.75rem;
 }
 
+/* --- Streaming activity indicators --- */
+
+.streaming-placeholder {
+  color: var(--color-text-secondary);
+  font-style: italic;
+  animation: pulse-text 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-text {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.streaming-activities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border-default);
+}
+
+.streaming-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  background: var(--color-bg-surface-muted);
+  animation: activity-fade-in 0.2s ease-out;
+}
+
+@keyframes activity-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.streaming-activity.activity-tool {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.streaming-activity.activity-memory {
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.streaming-activity.activity-kb {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.streaming-activity.activity-file {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.streaming-activity.activity-response {
+  background: #fdf2f8;
+  color: #be185d;
+}
+
+.streaming-activity.activity-context {
+  background: #f8fafc;
+  color: #475569;
+}
+
 /* --- Tool call indicators (streaming agent) --- */
 
 .tool-call-indicators {

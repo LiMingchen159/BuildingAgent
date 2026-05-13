@@ -650,7 +650,7 @@ describe("chat streaming endpoint", () => {
         };
       },
       async *completeStream() {
-        yield { progress: "I am checking related tools and data." };
+        yield { progress: { label: "正在运行分析工具", kind: "tool" as const, raw: "hermes.tool.progress" } };
         yield { content: "Hello" };
         yield { content: " world" };
       }
@@ -672,7 +672,7 @@ describe("chat streaming endpoint", () => {
     const events = parseSseEvents(body);
 
     expect(events.some((e) => e.event === "token")).toBe(true);
-    expect(events.some((e) => e.event === "progress")).toBe(true);
+    expect(events.some((e) => e.event === "activity")).toBe(true);
     expect(events.some((e) => e.event === "lifecycle")).toBe(false);
 
     const doneEvent = events.find((e) => e.event === "done");
@@ -682,8 +682,9 @@ describe("chat streaming endpoint", () => {
     expect(doneData.assistantMessage).toMatchObject({ role: "assistant" });
     expect(doneData.conversationId).toEqual(expect.stringMatching(/^conv_/));
     expect(doneData.provider).toMatchObject({ id: "stream-real" });
-    expect(events.find((e) => e.event === "progress")?.data).toMatchObject({
-      message: expect.any(String),
+    expect(events.find((e) => e.event === "activity")?.data).toMatchObject({
+      label: expect.any(String),
+      kind: expect.any(String),
       requestId: expect.stringMatching(/^req_/)
     });
   });
@@ -838,7 +839,7 @@ describe("chat streaming endpoint", () => {
         };
       },
       async *completeStream() {
-        yield { progress: "I am checking related tools and data." };
+        yield { progress: { label: "正在运行分析工具", kind: "tool" as const, raw: "hermes.tool.progress" } };
         yield { content: "I found the relevant device list." };
       }
     };
@@ -854,7 +855,7 @@ describe("chat streaming endpoint", () => {
 
     expect(res.statusCode).toBe(200);
     const events = parseSseEvents(res.body);
-    expect(events.some((e) => e.event === "progress")).toBe(true);
+    expect(events.some((e) => e.event === "activity")).toBe(true);
     expect(events.find((e) => e.event === "done")?.data).toMatchObject({
       assistantMessage: expect.objectContaining({ role: "assistant" })
     });

@@ -54,7 +54,10 @@ export class AgentRuntime {
           toolChoice: "auto"
         })) {
           if (delta.progress) {
-            yield this.makeEvent("progress", delta.progress);
+            yield this.makeEvent("progress", delta.progress.label, {
+              progressKind: delta.progress.kind,
+              ...(delta.progress.raw ? { progressRaw: delta.progress.raw } : {})
+            });
           }
           if (delta.content) {
             streamText += delta.content;

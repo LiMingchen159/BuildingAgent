@@ -90,6 +90,15 @@ export interface ChatLifecycleEvent {
   metadata?: Record<string, string | number | boolean> | undefined;
 }
 
+export interface ChatStreamActivityEvent {
+  label: string;
+  kind: "tool" | "memory" | "kb" | "file" | "response" | "context";
+  tool?: string;
+  status?: "running" | "done";
+  raw?: string;
+  requestId?: string;
+}
+
 export interface ChatStreamProgressEvent {
   message: string;
   requestId?: string;
@@ -110,6 +119,7 @@ export interface SendChatResponse {
 export interface StreamEventHandlers {
   onLifecycle?: (event: ChatLifecycleEvent) => void;
   onProgress?: (event: ChatStreamProgressEvent) => void;
+  onActivity?: (event: ChatStreamActivityEvent) => void;
   onToken?: (content: string) => void;
   onError?: (error: ApiErrorDetail) => void;
   onDone?: (response: SendChatResponse) => void;
@@ -186,6 +196,19 @@ export async function sendChatMessageStream(
               case "lifecycle":
                 if (isChatLifecycleEvent(parsed)) {
                   handlers.onLifecycle?.(parsed);
+                }
+                break;
+              case "activity":
+                if (typeof (parsed as Record<string, unknown>).label === "string") {
+                  const act = parsed as Record<string, unknown>;
+                  handlers.onActivity?.({
+                    label: act.label as string,
+                    kind: (act.kind as ChatStreamActivityEvent["kind"]) ?? "context",
+                    ...(typeof act.tool === "string" ? { tool: act.tool } : {}),
+                    ...(typeof act.status === "string" ? { status: act.status as "running" | "done" } : {}),
+                    ...(typeof act.raw === "string" ? { raw: act.raw } : {}),
+                    ...(typeof act.requestId === "string" ? { requestId: act.requestId } : {})
+                  });
                 }
                 break;
               case "progress":

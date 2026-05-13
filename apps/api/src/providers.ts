@@ -56,10 +56,19 @@ export interface ChatToolCall {
   };
 }
 
+export interface ProgressEvent {
+  /** User-facing activity label */
+  label: string;
+  /** Machine-readable activity kind for dedup / icons */
+  kind: "tool" | "memory" | "kb" | "file" | "response" | "context";
+  /** Raw event name for debug panel (hidden from users) */
+  raw?: string;
+}
+
 export interface ChatCompletionDelta {
   content?: string;
   toolCalls?: ChatToolCall[];
-  progress?: string;
+  progress?: ProgressEvent;
 }
 
 export interface ChatCompletionStreamResult {
@@ -164,35 +173,69 @@ function createProviderNotConfiguredError(metadata: ProviderMetadata): ProviderE
   });
 }
 
-function mapProgressEvent(eventName: string | null, payload: Record<string, unknown> | null, metadata: ProviderMetadata): string {
+function mapProgressEvent(eventName: string | null, payload: Record<string, unknown> | null, _metadata: ProviderMetadata): ProgressEvent {
   const normalizedName = (eventName ?? "").toLowerCase();
-  if (normalizedName === "hermes.tool.progress") {
-    return "I am checking related tools and data.";
-  }
+
   if (normalizedName.includes("tool")) {
-    return "I am checking related tools and data.";
+    const tool = typeof payload?.tool === "string" ? payload.tool : null;
+    const result: ProgressEvent = {
+      label: tool ? `正在使用 ${tool} 工具` : "正在运行分析工具",
+      kind: "tool"
+    };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (normalizedName.includes("memory")) {
-    return "I am checking project context and memory.";
+    const result: ProgressEvent = { label: "正在检查项目上下文", kind: "memory" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (normalizedName.includes("knowledge") || normalizedName.includes("search")) {
+    const result: ProgressEvent = { label: "正在查询知识库", kind: "kb" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (normalizedName.includes("file") || normalizedName.includes("read")) {
+    const result: ProgressEvent = { label: "正在读取相关文件", kind: "file" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (normalizedName.includes("response")) {
-    return "I am organizing the response.";
+    const result: ProgressEvent = { label: "正在整理回答", kind: "response" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
 
   const stage = typeof payload?.stage === "string" ? payload.stage.toLowerCase() : "";
   if (stage.includes("tool")) {
-    return "I am checking related tools and data.";
+    const result: ProgressEvent = { label: "正在运行分析工具", kind: "tool" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (stage.includes("memory")) {
-    return "I am checking project context and memory.";
+    const result: ProgressEvent = { label: "正在检查项目上下文", kind: "memory" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (stage.includes("knowledge") || stage.includes("search") || stage.includes("kb")) {
+    const result: ProgressEvent = { label: "正在查询知识库", kind: "kb" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (stage.includes("file") || stage.includes("read")) {
+    const result: ProgressEvent = { label: "正在读取相关文件", kind: "file" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (stage.includes("final") || stage.includes("respond")) {
-    return "I am organizing the response.";
+    const result: ProgressEvent = { label: "正在整理回答", kind: "response" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
 
-  return metadata.mode === "real"
-    ? "I am processing your request."
-    : "I am preparing a response.";
+  const result: ProgressEvent = { label: "正在处理请求", kind: "context" };
+  if (eventName) result.raw = eventName;
+  return result;
 }
 
 export function createDeterministicMockProvider(reason = "local_default"): ChatProvider {

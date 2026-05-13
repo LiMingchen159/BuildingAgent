@@ -33,6 +33,7 @@ import {
   deleteProject,
   type ChatProviderDiagnostics,
   type ChatLifecycleEvent,
+  type ChatStreamActivityEvent,
   type BuildingCapabilitySummary,
   type ChatMessage,
   type ConversationSummary,
@@ -51,7 +52,6 @@ import {
 
 const STORAGE_KEY = "building-agent.session.v1";
 type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
-const STREAMING_INTRO = "好的，我开始处理你的问题。";
 
 type IconName =
   | "activity"
@@ -668,19 +668,22 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
   );
 }
 
-function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
+function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, streamingActivity, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; streamingActivity?: ChatStreamActivityEvent[]; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const messageListRef = useRef<HTMLElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wasEmptyRef = useRef(messages.length === 0);
+  const userScrolledUpRef = useRef(false);
   const canWrite = project.permissions.includes("chat:write");
   const hasMessages = messages.length > 0;
   const latestMessage = messages[messages.length - 1];
   const latestMessageId = latestMessage?.id ?? "";
   const latestMessageKey = `${messages.length}:${latestMessageId}`;
   const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
+  const activities = streamingActivity ?? [];
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -704,18 +707,43 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     return undefined;
   }, [hasMessages]);
 
+  // Track user scroll position
+  useEffect(() => {
+    const list = messageListRef.current;
+    if (!list) return;
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = list;
+      userScrolledUpRef.current = scrollTop + clientHeight < scrollHeight - 32;
+    };
+    list.addEventListener("scroll", handleScroll, { passive: true });
+    return () => list.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Auto-scroll: only when at bottom or on new message/activity
   useEffect(() => {
     if (!hasMessages) {
       previousConversationRef.current = null;
+      userScrolledUpRef.current = false;
       return;
     }
 
     const behavior: ScrollBehavior = previousConversationRef.current !== activeConversationId ? "auto" : "smooth";
     previousConversationRef.current = activeConversationId;
-    requestAnimationFrame(() => {
-      messageEndRef.current?.scrollIntoView({ block: "end", behavior });
-    });
+    if (!userScrolledUpRef.current) {
+      requestAnimationFrame(() => {
+        messageEndRef.current?.scrollIntoView({ block: "end", behavior });
+      });
+    }
   }, [activeConversationId, hasMessages, latestMessageKey]);
+
+  // Scroll on new activity as well
+  useEffect(() => {
+    if (!userScrolledUpRef.current && activities.length > 0) {
+      requestAnimationFrame(() => {
+        messageEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+      });
+    }
+  }, [activities.length]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -724,21 +752,49 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     }
     const message = draft.trim();
     setDraft("");
+    userScrolledUpRef.current = false;
     await onSend(message);
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      if (!draft.trim() || busy) return;
+      const message = draft.trim();
+      setDraft("");
+      userScrolledUpRef.current = false;
+      void onSend(message);
+    }
   }
 
   return (
     <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}${leavingEmptyState ? " chat-shell-leaving-empty" : ""}`} aria-labelledby="chat-title">
       <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
-      <section className="message-list" aria-label={`${project.name} messages`}>
+      <section className="message-list" aria-label={`${project.name} messages`} ref={messageListRef}>
         {messages.length === 0 && busy ? <div className="workspace-inline-status" role="status">Sending...</div> : null}
         {messages.map((message) => {
           const isStreaming = message.id.startsWith("streaming_");
           const isThinking = message.id.startsWith("pending_assistant_");
+          const isStreamingEmpty = isStreaming && !message.content;
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
               <div className="message-content">
-                {message.role === "assistant" ? <Markdown source={message.content || (isStreaming ? "Thinking..." : "")} /> : <p>{message.content}</p>}
+                {isStreamingEmpty ? (
+                  <p className="streaming-placeholder">Thinking...</p>
+                ) : message.role === "assistant" ? (
+                  <Markdown source={message.content} />
+                ) : (
+                  <p>{message.content}</p>
+                )}
+                {isStreaming && activities.length > 0 ? (
+                  <div className="streaming-activities" aria-label="Assistant activity">
+                    {activities.slice(-3).map((act, i) => (
+                      <span key={`${act.kind}-${i}`} className={`streaming-activity activity-${act.kind}`}>
+                        {act.label}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {isStreaming && activeTools && activeTools.length > 0 ? (
                   <div className="tool-call-indicators" aria-label="Active tool calls">
                     {activeTools.map((tool) => (
@@ -757,7 +813,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         {(!hasMessages || leavingEmptyState) ? <p className="composer-empty-greeting">{emptyChatGreeting}</p> : null}
         <div className="composer-box">
           <label className="visually-hidden" htmlFor="chat-message">Message</label>
-          <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
+          <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
           <div className="composer-actions">
             {busy ? (
               <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
@@ -1064,7 +1120,8 @@ function Workspace({
   onRenameConversation,
   onDeleteProject,
   onStop,
-  activeTools
+  activeTools,
+  streamingActivity
 }: {
   project: ProjectSummary | null;
   projects: ProjectSummary[];
@@ -1096,6 +1153,7 @@ function Workspace({
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
   activeTools?: Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>;
+  streamingActivity?: ChatStreamActivityEvent[];
 }) {
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "chat", label: "Chat" },
@@ -1138,7 +1196,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1217,6 +1275,7 @@ export default function App() {
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
   const [activeTools, setActiveTools] = useState<Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>>([]);
+  const [streamingActivity, setStreamingActivity] = useState<ChatStreamActivityEvent[]>([]);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1375,6 +1434,13 @@ export default function App() {
           return [...current, reminderMsg];
         });
       }
+      if (data.type === "conversation_title_updated" && typeof data.conversationId === "string" && typeof data.title === "string") {
+        setConversations((current) =>
+          current.map((c) =>
+            c.id === data.conversationId ? { ...c, title: data.title as string } : c
+          )
+        );
+      }
     });
 
     return () => {
@@ -1488,6 +1554,7 @@ export default function App() {
 
     setBusy(true);
     setActiveTools([]);
+    setStreamingActivity([]);
     const projectId = selectedProject.id;
     const userId = user?.id ?? "local-user";
 
@@ -1504,7 +1571,7 @@ export default function App() {
       projectId,
       userId,
       role: "assistant",
-      content: STREAMING_INTRO
+      content: ""
     };
 
     setMessages((current) => [...current, optimisticUser, streamingAssistant]);
@@ -1520,21 +1587,24 @@ export default function App() {
             ))
           );
         },
+        onActivity(event: ChatStreamActivityEvent) {
+          setStreamingActivity((current) => {
+            const dupe = current.find((a) => a.label === event.label && a.kind === event.kind);
+            if (dupe) {
+              return current.map((a) => (a.label === event.label && a.kind === event.kind ? event : a));
+            }
+            return [...current, event];
+          });
+        },
         onProgress(event) {
-          setMessages((current) =>
-            current.map((m) => {
-              if (m.id !== streamingId) return m;
-              const progressLine = event.message.trim();
-              if (!progressLine) return m;
-              if (m.content === STREAMING_INTRO) {
-                return { ...m, content: progressLine };
-              }
-              if (m.content.split("\n\n").includes(progressLine)) {
-                return m;
-              }
-              return { ...m, content: `${m.content}\n\n${progressLine}` };
-            })
-          );
+          // Legacy progress events: treat as activity
+          const label = event.message.trim();
+          if (!label) return;
+          setStreamingActivity((current) => {
+            const dupe = current.find((a) => a.label === label);
+            if (dupe) return current;
+            return [...current, { label, kind: "context" as const }];
+          });
         },
         onLifecycle(event: ChatLifecycleEvent) {
           if (event.type === "turn_completed" && event.message) {
@@ -1577,16 +1647,19 @@ export default function App() {
           setChatProviderDiagnostics(response.provider);
           setChatProviderRequestId(response.requestId);
           setActiveTools([]);
+          setStreamingActivity([]);
           setBanner(null);
         }
       }, activeConversationId ?? undefined, signal);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+        setStreamingActivity([]);
         setBanner(null);
         return;
       }
       setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+      setStreamingActivity([]);
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
       } else {
@@ -1763,7 +1836,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} streamingActivity={streamingActivity} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );

@@ -1092,6 +1092,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const knowledgeBaseDocuments = await indexKnowledgeBase(projectId, { rootDir: projectKbRoot });
       store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
 
+      const seenActivities = new Set<string>();
       for await (const event of agentRuntime.runTurnStream({
         projectId,
         userId: session.userId,
@@ -1105,7 +1106,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         if (event.type === "thinking") {
           sseWrite("token", { content: event.message });
         } else if (event.type === "progress") {
-          sseWrite("progress", { message: event.message, requestId: reqId });
+          const kind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
+          const dedupKey = `${kind}:${event.message}`;
+          if (!seenActivities.has(dedupKey)) {
+            seenActivities.add(dedupKey);
+            sseWrite("activity", {
+              label: event.message,
+              kind,
+              requestId: reqId,
+              ...(event.metadata?.progressRaw ? { raw: event.metadata.progressRaw } : {})
+            });
+          }
+        } else if (event.type === "tool_started") {
+          const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+          if (toolName) {
+            sseWrite("activity", {
+              label: `正在运行 ${toolName}`,
+              kind: "tool",
+              tool: toolName,
+              status: "running",
+              requestId: reqId
+            });
+          }
+        } else if (event.type === "tool_completed") {
+          const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+          if (toolName) {
+            sseWrite("activity", {
+              label: `${toolName} 完成`,
+              kind: "tool",
+              tool: toolName,
+              status: "done",
+              requestId: reqId
+            });
+          }
         } else if (event.type === "turn_completed") {
           finalText = event.message || "";
         }
@@ -1122,6 +1155,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
         try {
           const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
+          const fallbackSeenActivities = new Set<string>();
           for await (const event of agentRuntime.runTurnStream({
             projectId,
             userId: session.userId,
@@ -1135,7 +1169,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             if (event.type === "thinking") {
               sseWrite("token", { content: event.message });
             } else if (event.type === "progress") {
-              sseWrite("progress", { message: event.message, requestId: reqId });
+              const fkind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
+              const fdedupKey = `${fkind}:${event.message}`;
+              if (!fallbackSeenActivities.has(fdedupKey)) {
+                fallbackSeenActivities.add(fdedupKey);
+                sseWrite("activity", {
+                  label: event.message,
+                  kind: fkind,
+                  requestId: reqId,
+                  ...(event.metadata?.progressRaw ? { raw: event.metadata.progressRaw } : {})
+                });
+              }
+            } else if (event.type === "tool_started") {
+              const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+              if (ftoolName) {
+                sseWrite("activity", {
+                  label: `正在运行 ${ftoolName}`,
+                  kind: "tool",
+                  tool: ftoolName,
+                  status: "running",
+                  requestId: reqId
+                });
+              }
+            } else if (event.type === "tool_completed") {
+              const ftoolName2 = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+              if (ftoolName2) {
+                sseWrite("activity", {
+                  label: `${ftoolName2} 完成`,
+                  kind: "tool",
+                  tool: ftoolName2,
+                  status: "done",
+                  requestId: reqId
+                });
+              }
             } else if (event.type === "turn_completed") {
               finalText = event.message || "";
             }
@@ -1196,6 +1262,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     reply.raw.end();
 
     // Auto-title is best-effort and must never delay the final answer.
+    // When title is generated, broadcast to frontend via WebSocket for real-time sidebar update.
     if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
       void (async () => {
         try {
@@ -1211,6 +1278,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           if (title) {
             conversation.title = title;
             persistSoon();
+            broadcastToProject(projectId, {
+              type: "conversation_title_updated",
+              conversationId,
+              title,
+              projectId
+            });
           }
         } catch {
           // title generation is best-effort
