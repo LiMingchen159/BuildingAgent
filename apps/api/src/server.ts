@@ -31,9 +31,10 @@ import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseC
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import type { WebSocket } from "ws";
 import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
+import { randomUUID } from "node:crypto";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -96,6 +97,78 @@ function nextConversationId(): string {
   conversationSequence += 1;
   return `conv_${String(conversationSequence).padStart(6, "0")}`;
 }
+
+async function transcribeAudioViaParaformer(apiKey: string, audioBuffer: Buffer): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // @ts-ignore - ws WebSocket constructor accepts options but types are incomplete
+    const ws = new WSWebSocket("wss://dashscope.aliyuncs.com/api-ws/v1/inference", {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    }) as any;
+
+    const taskId = randomUUID();
+    let transcriptParts: string[] = [];
+    let errorMessage = "";
+
+    ws.on("open", () => {
+      ws.send(JSON.stringify({
+        header: { action: "run-task", task_id: taskId, streaming: "duplex" },
+        payload: {
+          task_group: "audio",
+          task: "asr",
+          function: "recognition",
+          model: "paraformer-realtime-v2",
+          parameters: { format: "pcm", sample_rate: 16000, language_hints: ["zh", "en", "yue"] },
+          input: {}
+        }
+      }));
+
+      // Send audio in chunks (100ms = 1600 samples * 2 bytes = 3200 bytes for 16kHz PCM)
+      const chunkSize = 3200;
+      let offset = 0;
+      const interval = setInterval(() => {
+        if (offset >= audioBuffer.length) {
+          clearInterval(interval);
+          ws.send(JSON.stringify({
+            header: { action: "finish-task", task_id: taskId, streaming: "duplex" },
+            payload: { input: {} }
+          }));
+          return;
+        }
+        const chunk = audioBuffer.subarray(offset, Math.min(offset + chunkSize, audioBuffer.length));
+        ws.send(chunk);
+        offset += chunkSize;
+      }, 100);
+    });
+
+    ws.on("message", (data: any) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.header?.event === "result-generated" && msg.payload?.output?.sentence?.text) {
+          transcriptParts.push(msg.payload.output.sentence.text);
+        }
+        if (msg.header?.event === "task-finished") {
+          ws.close();
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    });
+
+    ws.on("close", () => {
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+      } else {
+        resolve(transcriptParts.join(" ").trim() || "");
+      }
+    });
+
+    ws.on("error", (err: any) => {
+      errorMessage = err.message || "WebSocket error";
+      ws.close();
+    });
+  });
+}
+
 
 function restoreSequences(store: SeedStore): void {
   let maxMsg = 0;
@@ -292,7 +365,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         sequence += 1;
         return `req_${String(sequence).padStart(6, "0")}`;
       };
-    })()
+    })(),
+    bodyLimit: 10485760 // 10MB for audio uploads
+  });
+
+  // Register raw body parser for audio/* content types
+  app.addContentTypeParser("audio/*", { parseAs: "buffer" }, (req, body, done) => {
+    done(null, body);
   });
 
   // WebSocket connection tracking per project
@@ -1495,6 +1574,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId,
       requestId: requestIdFor(request)
     };
+  });
+
+  app.post("/api/stt/transcribe", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const apiKey = env.DASHSCOPE_API_KEY;
+    if (!apiKey) {
+      return sendError(request, reply, 503, "stt_unavailable", "Speech-to-text service is not configured.");
+    }
+
+    const contentType = request.headers["content-type"] ?? "";
+    if (!contentType.startsWith("audio/")) {
+      return sendError(request, reply, 415, "stt_invalid_format", "Content-Type must be audio/* (e.g., audio/webm, audio/wav).");
+    }
+
+    const rawBody = await request.body;
+    if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) {
+      return sendError(request, reply, 422, "stt_empty_audio", "Audio data is required.");
+    }
+
+    try {
+      const text = await transcribeAudioViaParaformer(apiKey, rawBody);
+      return { text, requestId: requestIdFor(request) };
+    } catch (error) {
+      request.log.error({ err: error, requestId: requestIdFor(request) }, "STT transcription failed");
+      if (error instanceof Error && error.message.includes("401")) {
+        return sendError(request, reply, 503, "stt_auth_failed", "Speech-to-text authentication failed.");
+      }
+      return sendError(request, reply, 500, "stt_failed", "Speech-to-text transcription failed.");
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {

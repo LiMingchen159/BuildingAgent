@@ -59,6 +59,7 @@ type IconName =
   | "bar-chart"
   | "book-open"
   | "building"
+  | "check"
   | "check-check"
   | "chevron-down"
   | "clock"
@@ -74,6 +75,7 @@ type IconName =
   | "link"
   | "lock"
   | "message"
+  | "mic"
   | "more"
   | "panel-left"
   | "panel-right"
@@ -170,6 +172,7 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     "bar-chart": <><path d="M3 3v18h18" /><path d="M7 16v-5" /><path d="M12 16V7" /><path d="M17 16v-8" /></>,
     "book-open": <><path d="M12 7v14" /><path d="M3 5a5 5 0 0 1 5-1l4 2v15l-4-2a5 5 0 0 0-5 1z" /><path d="M21 5a5 5 0 0 0-5-1l-4 2v15l4-2a5 5 0 0 1 5 1z" /></>,
     building: <><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18" /><path d="M6 12H4a2 2 0 0 0-2 2v8" /><path d="M18 9h2a2 2 0 0 1 2 2v11" /><path d="M10 6h4" /><path d="M10 10h4" /><path d="M10 14h4" /><path d="M10 18h4" /></>,
+    check: <polyline points="20 6 9 17 4 12" />,
     "check-check": <><path d="m3 12 4 4L17 6" /><path d="m14 14 1.5 1.5L21 10" /></>,
     "chevron-down": <path d="m6 9 6 6 6-6" />,
     clock: <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
@@ -185,6 +188,7 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     link: <><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" /></>,
     lock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
     message: <><path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" /></>,
+    mic: <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><path d="M12 19v3" /></>,
     more: <><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="2.5" fill="currentColor" stroke="none" /><circle cx="5" cy="12" r="2.5" fill="currentColor" stroke="none" /></>,
     "panel-left": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>,
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
@@ -671,16 +675,22 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
 function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
+  const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing" | "error">("idle");
+  const [voiceError, setVoiceError] = useState("");
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wasEmptyRef = useRef(messages.length === 0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const canWrite = project.permissions.includes("chat:write");
   const hasMessages = messages.length > 0;
   const latestMessage = messages[messages.length - 1];
   const latestMessageId = latestMessage?.id ?? "";
   const latestMessageKey = `${messages.length}:${latestMessageId}`;
   const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
+  const isRecording = voiceState === "recording";
+  const isTranscribing = voiceState === "transcribing";
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -727,6 +737,75 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     await onSend(message);
   }
 
+  async function handleStartRecording() {
+    if (!canWrite || busy) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      mediaRecorder.start();
+      mediaRecorderRef.current = mediaRecorder;
+      setVoiceState("recording");
+      setVoiceError("");
+    } catch (error) {
+      setVoiceState("error");
+      setVoiceError(error instanceof Error && error.name === "NotAllowedError" ? "Microphone permission denied" : "Could not access microphone");
+    }
+  }
+
+  function handleCancelRecording() {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current = null;
+    }
+    audioChunksRef.current = [];
+    setVoiceState("idle");
+    setVoiceError("");
+  }
+
+  async function handleConfirmRecording() {
+    if (!mediaRecorderRef.current) return;
+    const recorder = mediaRecorderRef.current;
+    recorder.stop();
+    recorder.stream.getTracks().forEach((track) => track.stop());
+    setVoiceState("transcribing");
+
+    try {
+      const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+      const response = await fetch("/api/stt/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "audio/webm" },
+        body: audioBlob
+      });
+
+      if (!response.ok) {
+        throw new Error("Transcription failed");
+      }
+
+      const result = await response.json();
+      const text = result.text || "";
+      setDraft((current) => (current ? `${current} ${text}` : text).trim());
+      setVoiceState("idle");
+      setVoiceError("");
+    } catch (error) {
+      setVoiceState("error");
+      setVoiceError(error instanceof Error ? error.message : "Transcription failed");
+      setTimeout(() => {
+        setVoiceState("idle");
+        setVoiceError("");
+      }, 3000);
+    } finally {
+      mediaRecorderRef.current = null;
+      audioChunksRef.current = [];
+    }
+  }
+
   return (
     <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}${leavingEmptyState ? " chat-shell-leaving-empty" : ""}`} aria-labelledby="chat-title">
       <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
@@ -755,22 +834,55 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       </section>
       <form className="composer" onSubmit={handleSubmit}>
         {(!hasMessages || leavingEmptyState) ? <p className="composer-empty-greeting">{emptyChatGreeting}</p> : null}
-        <div className="composer-box">
+        <div className={`composer-box${isRecording ? " is-recording" : ""}${isTranscribing ? " is-transcribing" : ""}`}>
           <label className="visually-hidden" htmlFor="chat-message">Message</label>
-          <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
+          {isRecording ? (
+            <div className="composer-recording-indicator" aria-live="polite">
+              <span className="recording-waveform" aria-hidden="true">
+                <span /><span /><span /><span /><span />
+              </span>
+              <span className="recording-label">Recording...</span>
+            </div>
+          ) : isTranscribing ? (
+            <div className="composer-transcribing-indicator" aria-live="polite">
+              <span className="spinner" aria-hidden="true" />
+              <span>Transcribing...</span>
+            </div>
+          ) : (
+            <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
+          )}
           <div className="composer-actions">
-            {busy ? (
+            {isRecording ? (
+              <>
+                <button type="button" className="composer-voice-button" onClick={handleCancelRecording} title="Cancel recording" aria-label="Cancel recording">
+                  <Icon name="x" />
+                </button>
+                <button type="button" className="composer-voice-confirm" onClick={handleConfirmRecording} title="Confirm and transcribe" aria-label="Confirm and transcribe">
+                  <Icon name="check" />
+                </button>
+              </>
+            ) : isTranscribing ? (
+              <button type="button" className="composer-voice-button" disabled aria-label="Transcribing">
+                <span className="spinner" aria-hidden="true" />
+              </button>
+            ) : busy ? (
               <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
                 <Icon name="x" />
               </button>
             ) : (
-              <button type="submit" disabled={!canWrite || !draft.trim()} aria-label="Send message">
-                <Icon name="arrow-up" />
-              </button>
+              <>
+                <button type="button" className="composer-voice-button" onClick={handleStartRecording} disabled={!canWrite} title="Voice input" aria-label="Voice input">
+                  <Icon name="mic" />
+                </button>
+                <button type="submit" disabled={!canWrite || !draft.trim()} aria-label="Send message">
+                  <Icon name="arrow-up" />
+                </button>
+              </>
             )}
           </div>
         </div>
         {!canWrite ? <p className="field-error composer-readonly" role="status">This project does not grant chat write permission.</p> : null}
+        {voiceError ? <p className="field-error composer-voice-error" role="alert">{voiceError}</p> : null}
       </form>
     </section>
   );
