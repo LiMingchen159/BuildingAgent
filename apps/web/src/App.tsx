@@ -897,9 +897,14 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
           {isRecording ? (
             <div className="composer-recording-indicator" aria-live="polite">
               <span className="recording-waveform" aria-hidden="true">
-                {audioLevels.map((level, i) => (
-                  <span key={i} style={{ transform: `scaleY(${Math.max(0.1, level)})` }} />
-                ))}
+                {audioLevels.map((level, i) => {
+                  const hasSound = level > 0.05;
+                  return hasSound ? (
+                    <span key={i} style={{ transform: `scaleY(${Math.max(0.2, level)})` }} />
+                  ) : (
+                    <span key={i} />
+                  );
+                })}
               </span>
             </div>
           ) : isTranscribing ? (
