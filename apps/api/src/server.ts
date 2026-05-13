@@ -1,5 +1,4 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import cors from "@fastify/cors";
 import {
   authenticateRequest,
   getPermissionsForSelectedProject,
@@ -238,7 +237,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
   }
 
-  void app.register(cors, { origin: true });
+  // CORS disabled: @fastify/cors v9 requires Fastify v5, but we're on Fastify v4.
+  // Vite dev server proxies /api requests so CORS is not needed for development.
+  // Upgrade path: either use @fastify/cors@^8 or upgrade Fastify to v5.
+  // void app.register(cors, { origin: true });
 
   app.get("/health", async (request) => ({
     ok: true,

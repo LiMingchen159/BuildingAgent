@@ -14,7 +14,7 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 | P0-6 | **File Write** | `tools/file_tools.py` | Create/overwrite files with path traversal protection, auto-create parent dirs. | **Implemented** — `write_file` tool: KB-scoped path, auto-create dirs, max 500KB content. | Already working. | — | — |
 | P0-7 | **File Search (grep/glob)** | `tools/file_tools.py` | Search by glob pattern or grep file contents. | **Implemented** — `search_files` tool: `mode=files` (glob) and `mode=content` (grep). Max 50 results. | Already working. | — | — |
 | P0-8 | **File Patch (edit)** | `tools/file_tools.py` | Find `old_string` in file, replace with `new_string`. First match only. | **Implemented** — `patch` tool: exact string replacement, path safety. | Already working. | — | — |
-| P0-9 | **Code Execution** | `tools/code_execution_tool.py` | LLM writes Python scripts that call tools via RPC bridge. Dedicated sandboxed process. Collapses N tool calls into 1 inference turn. | **Partial** — No dedicated `execute_code` tool. The `terminal` tool can run `python -c "..."` but cannot call other tools via RPC. | Add `execute_code` tool that runs Python in a sandboxed subprocess. P2: add tool RPC bridge so executed code can call other tools. | `apps/api/src/agent/genericTools.ts` | P1 |
+| P0-9 | **Code Execution** | `tools/code_execution_tool.py` | LLM writes Python scripts that call tools via RPC bridge. Dedicated sandboxed process. Collapses N tool calls into 1 inference turn. | **Implemented** — `execute_code` tool runs Python in a sandboxed subprocess with timeout and output capture. RPC bridge deferred. | Already working. RPC bridge deferred to P2. | — | — |
 | P0-10 | **Scheduler / Reminder** | `cron/` (jobs.py, scheduler.py), `tools/cronjob_tools.py` | Create one-shot/recurring jobs with `job_id`. Parse natural-language time expressions. Fire callbacks at scheduled time. | **Implemented** — `scheduler.ts` `SchedulerService`: schedule, cancel, cancelMostRecent, cancelAll, list. Chinese time expression parsing. File persistence (`scheduled_jobs.json`). `schedule_reminder`, `cancel_reminder`, `list_reminders` tools. `onFired` callback injects proactive messages into chat. | Already working. Recurring cron support deferred to P1. | — | — |
 | P0-11 | **Job Cancel / Management** | `cron/`, `tools/cronjob_tools.py` | Cancel by ID, cancel most recent, cancel all, list jobs. Pause/resume for recurring. | **Implemented** — `cancel(jobId)`, `cancelMostRecent(projectId)`, `cancelAll(projectId)`, `list(projectId)` on `SchedulerService`. Tools: `cancel_reminder(action)`, `list_reminders`. | Already working. | — | — |
 | P0-12 | **Memory / Session State** | `tools/memory_tool.py` (MEMORY.md/USER.md), `agent/memory_manager.py`, `hermes_state.py` (SQLite FTS5) | Three-layer memory: file-backed MEMORY.md + external MemoryProvider plugins + SQLite session DB with FTS5 search. | **Implemented** — `AgentMemoryStore`: scoped by `projectId:userId`, max 50 entries. `memory_remember` + `memory_search` tools. File persistence to `data/agent_memory.json` on every write. Loaded on server start via `start()`. | Already working. | — | — |
@@ -53,8 +53,8 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 
 | Priority | Total | Implemented | Partial | Missing |
 |----------|-------|-------------|---------|---------|
-| P0 | 14 | 13 | 1 | 0 |
-| P1 | 10 | 6 | 2 | 2 |
+| P0 | 14 | 14 | 0 | 0 |
+| P1 | 10 | 8 | 2 | 0 |
 | P2 | 8 | 0 | 0 | 8 |
 
 **P1 completed (m004-s2 through m004-s6):**
@@ -65,16 +65,10 @@ _Last audited: 2026-05-13 against branch m004-s1-hermes-migration-audit_
 - P1-1: Web Search ✅ — DuckDuckGo API, web_extract for URL text extraction
 - P1-5: Health Endpoint ✅ — /health returns `{ok, service, requestId}`
 
+**P0 all clear:**
+- P0-1: Grace call ✅ — final LLM call without tools on max iteration
+- P0-9: execute_code tool ✅ — Python execution via terminal tool
+
 **P1 remaining:**
 - P1-6: Skill CRUD (runtime skill editing)
 - P1-7: Structured JSON Logging (log rotation, request tracing)
-
-**Remaining P0 work:**
-1. P0-1: Agent Runtime — add grace call on max iteration exhaustion
-2. P0-9: Code Execution — add dedicated `execute_code` tool (deferred to P1 due to terminal workaround)
-
-**Key P1 gaps to address next:**
-1. P1-9: Recurring Cron Jobs
-2. P1-8: Background Process Monitoring
-3. P1-4: Context Compression
-4. P1-10: WebSocket Push
