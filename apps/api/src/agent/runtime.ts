@@ -4,12 +4,14 @@ import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentLifecycleEventType, AgentLoopResult, AgentTurnRequest, AgentTurnResult } from "./types.js";
 import { knowledgeBasePrompt } from "./knowledgeBase.js";
 import type { ChatCompletionDelta, ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
+import { ContextCompressor } from "./compressor.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
   tools: AgentToolRegistry;
   skills: AgentSkillRegistry;
   maxIterations?: number;
+  compressor?: ContextCompressor;
 }
 
 interface WorkingToolCall {
@@ -181,9 +183,19 @@ export class AgentRuntime {
     let finalProvider = request.provider.metadata;
     let finalFallbackUsed = false;
     let iterations = 0;
+    const compressor = this.options.compressor ?? new ContextCompressor();
 
     while (iterations < maxIterations) {
       iterations += 1;
+
+      // Compress conversation if it exceeds the threshold
+      const compressedMessages = compressor.compress(conversationMessages);
+      if (compressedMessages.length < conversationMessages.length) {
+        yield yieldEvent(this.makeEvent("tool_started", `Context compressed: ${conversationMessages.length} → ${compressedMessages.length} messages.`));
+        // Keep the system message and compressed non-system messages
+        conversationMessages.length = 0;
+        conversationMessages.push(...compressedMessages);
+      }
 
       yield yieldEvent(this.makeEvent("provider_started", `Agent iteration ${iterations}: calling LLM provider.`, {
         provider: request.provider.metadata.id,
@@ -272,7 +284,18 @@ export class AgentRuntime {
     }
 
     if (iterations >= maxIterations && !finalText) {
-      finalText = "I've completed the maximum number of analysis steps. Here's what I found so far.";
+      yield yieldEvent(this.makeEvent("provider_started", "Max iterations reached. Making final summary call without tools.", {
+        iteration: iterations + 1,
+        grace: true
+      }));
+      try {
+        const { completion: graceCompletion } = await this.callProvider(request, conversationMessages, []);
+        finalText = graceCompletion.text || "I've completed the maximum number of analysis steps.";
+        finalProvider = graceCompletion.provider;
+        finalFallbackUsed = graceCompletion.fallbackUsed;
+      } catch {
+        finalText = "I've completed the maximum number of analysis steps. Here's what I found so far.";
+      }
     }
 
     yield yieldEvent(this.makeEvent("assistant_message_completed", "Assistant message completed.", {
