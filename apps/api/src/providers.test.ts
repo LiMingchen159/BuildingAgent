@@ -22,26 +22,16 @@ function assertNoSecrets(value: unknown) {
 }
 
 describe("chat provider resolution and adapters", () => {
-  it("uses deterministic mock fallback when no real provider credentials are configured", async () => {
+  it("fails clearly when no real provider credentials are configured", async () => {
     const provider = resolveChatProvider({});
-    const result = await provider.complete({
-      projectId: "project_alpha",
-      userId: "user_ada",
-      requestId: "req_test",
-      messages: [{ role: "user", content: "  Plan   phase one " }]
-    });
-
-    expect(result).toEqual({
-      text: "Mock assistant response for project_alpha: Plan phase one",
-      provider: {
-        id: "deterministic-mock",
-        mode: "mock",
-        model: "deterministic-local-mock",
-        fallbackReason: "local_default",
-        status: "fallback"
-      },
-      fallbackUsed: true
-    });
+    await expect(
+      provider.complete({
+        projectId: "project_alpha",
+        userId: "user_ada",
+        requestId: "req_test",
+        messages: [{ role: "user", content: "  Plan   phase one " }]
+      })
+    ).rejects.toMatchObject({ code: "provider_not_configured", status: 503 });
   });
 
   it("prefers BUILDING_AGENT_LLM_* configuration while keeping mock explicit", async () => {

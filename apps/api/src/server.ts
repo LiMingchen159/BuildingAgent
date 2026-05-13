@@ -26,10 +26,11 @@ import { ProcessRegistry } from "./agent/processRegistry.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
-import { loadStoreSync, scheduleSave } from "./persistence.js";
+import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
 import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
@@ -42,6 +43,32 @@ interface BuildServerOptions {
   fetch?: FetchLike;
   allowProviderFallback?: boolean;
   persist?: boolean;
+}
+
+function tryLoadEnv(): void {
+  const candidates = [
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.env"),
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "../../.env")
+  ];
+  for (const envPath of candidates) {
+    try {
+      const content = readFileSync(envPath, "utf8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq === -1) continue;
+        const key = trimmed.slice(0, eq).trim();
+        if (key && !(key in process.env)) {
+          process.env[key] = trimmed.slice(eq + 1).trim();
+        }
+      }
+      return;
+    } catch {
+      // try next candidate
+    }
+  }
 }
 
 interface ProjectParams {
@@ -160,7 +187,20 @@ function providerErrorCode(error: unknown): string {
 
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? (options.persist ? (loadStoreSync() ?? createSeedStore()) : createSeedStore());
+  const persistStore = options.persist === true;
+  const persistSoon = (): void => {
+    if (persistStore) {
+      scheduleSave(store);
+    }
+  };
+  const persistNow = (): void => {
+    if (persistStore) {
+      saveStoreSync(store);
+    }
+  };
   const env = options.env ?? process.env;
+  // Ensure .env is loaded even when buildServer is called directly (not via index.ts)
+  if (!options.env) tryLoadEnv();
   const providerResolver =
     options.resolveChatProvider ??
     ((providerEnv: ProviderEnv) => resolveChatProvider(providerEnv, options.fetch ? { fetch: options.fetch } : {}));
@@ -208,7 +248,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
     }
     store.messagesByProject[job.projectId] = msgs;
-    scheduleSave(store);
+    persistSoon();
 
     // Broadcast via WebSocket for real-time delivery
     broadcastToProject(job.projectId, {
@@ -300,7 +340,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     store.sessionsByToken[token] = { userId: user.id, selectedProjectId: null };
-    scheduleSave(store);
+    persistSoon();
 
     return {
       token,
@@ -363,7 +403,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     const selectedSession = { userId: session.userId, selectedProjectId: projectId };
     store.sessionsByToken[session.token] = selectedSession;
-    scheduleSave(store);
+    persistSoon();
 
     return reply.status(201).send({
       project: { id: project.id, name: project.name, permissions: ["chat:read", "chat:write"] },
@@ -472,7 +512,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       selectedProjectId: request.params.projectId
     };
     store.sessionsByToken[session.token] = selectedSession;
-    scheduleSave(store);
+    persistSoon();
 
     return {
       session: {
@@ -691,6 +731,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     conversation.messageIds.push(message.id);
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
+    persistNow();
 
     // Pre-process time expressions (reminders) before agent turn
     const timeExpr = parseTimeExpression(content);
@@ -726,7 +767,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         conversation.title = `提醒: ${timeExpr.reminderText}`.slice(0, 60);
       }
 
-      scheduleSave(store);
+      persistSoon();
       return reply.status(201).send({
         message,
         assistantMessage,
@@ -858,7 +899,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
     }
 
-    scheduleSave(store);
+    persistSoon();
     return reply.status(201).send({
       message,
       assistantMessage,
@@ -934,6 +975,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     messages.push(userMessage);
     conversation.messageIds.push(userMessage.id);
     store.messagesByProject[projectId] = messages;
+    persistNow();
 
     // Set up SSE response
     const reqId = requestIdFor(request);
@@ -944,8 +986,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       "X-Accel-Buffering": "no"
     });
 
-    const sseWrite = (event: string, data: string): void => {
-      reply.raw.write(`event: ${event}\ndata: ${data}\n\n`);
+    const sseWrite = (event: string, data: unknown): void => {
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
     // Pre-process time expressions (reminders) before agent turn
@@ -981,8 +1023,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         conversation.title = `提醒: ${streamTimeExpr.reminderText}`.slice(0, 60);
       }
 
-      scheduleSave(store);
-      sseWrite("done", JSON.stringify({
+      persistSoon();
+      sseWrite("done", {
         message: userMessage,
         assistantMessage: streamAssistantMessage,
         conversationId,
@@ -990,7 +1032,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         provider: providerDiagnostics(provider.metadata, false),
         fallbackUsed: false,
         requestId: reqId
-      }));
+      });
       reply.raw.end();
       return;
     }
@@ -1061,12 +1103,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         knowledgeBaseDocuments
       })) {
         if (event.type === "thinking") {
-          sseWrite("token", JSON.stringify({ content: event.message }));
-        } else {
-          sseWrite("lifecycle", JSON.stringify(event));
-        }
-
-        if (event.type === "turn_completed") {
+          sseWrite("token", { content: event.message });
+        } else if (event.type === "progress") {
+          sseWrite("progress", { message: event.message, requestId: reqId });
+        } else if (event.type === "turn_completed") {
           finalText = event.message || "";
         }
       }
@@ -1093,12 +1133,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             knowledgeBaseDocuments
           })) {
             if (event.type === "thinking") {
-              sseWrite("token", JSON.stringify({ content: event.message }));
-            } else {
-              sseWrite("lifecycle", JSON.stringify(event));
-            }
-
-            if (event.type === "turn_completed") {
+              sseWrite("token", { content: event.message });
+            } else if (event.type === "progress") {
+              sseWrite("progress", { message: event.message, requestId: reqId });
+            } else if (event.type === "turn_completed") {
               finalText = event.message || "";
             }
           }
@@ -1106,19 +1144,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           finalProviderDiagnostics = providerDiagnostics(fallbackProvider.metadata, true);
         } catch (fallbackError) {
           streamError = "Agent streaming failed after fallback.";
-          sseWrite("error", JSON.stringify({
+          sseWrite("error", {
             code: "agent_stream_error",
             message: streamError,
             requestId: reqId
-          }));
+          });
         }
       } else {
         streamError = "Chat provider failed before producing a safe response.";
-        sseWrite("error", JSON.stringify({
+        sseWrite("error", {
           code: "provider_error",
           message: streamError,
           requestId: reqId
-        }));
+        });
       }
     }
 
@@ -1142,30 +1180,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
 
-    // Auto-title
-    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
-      try {
-        const titleResult = await provider.complete({
-          messages: [
-            { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${finalText}` }
-          ],
-          projectId,
-          userId: session.userId,
-          requestId: reqId
-        });
-        const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
-        if (title) {
-          conversation.title = title;
-        }
-      } catch {
-        // title generation is best-effort
-      }
-    }
-
-    scheduleSave(store);
+    persistSoon();
 
     // Send final done event
-    sseWrite("done", JSON.stringify({
+    sseWrite("done", {
       message: userMessage,
       assistantMessage,
       conversationId,
@@ -1173,9 +1191,32 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       provider: finalProviderDiagnostics,
       fallbackUsed: finalProviderDiagnostics?.fallbackUsed ?? false,
       requestId: reqId
-    }));
+    });
 
     reply.raw.end();
+
+    // Auto-title is best-effort and must never delay the final answer.
+    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+      void (async () => {
+        try {
+          const titleResult = await provider.complete({
+            messages: [
+              { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${finalText}` }
+            ],
+            projectId,
+            userId: session.userId,
+            requestId: reqId
+          });
+          const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
+          if (title) {
+            conversation.title = title;
+            persistSoon();
+          }
+        } catch {
+          // title generation is best-effort
+        }
+      })();
+    }
   });
 
   app.delete<{ Params: ProjectParams; Querystring: { conversationId?: string } }>("/api/projects/:projectId/chat", async (request, reply) => {
@@ -1232,7 +1273,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
     );
 
-    scheduleSave(store);
+    persistSoon();
     return reply.status(200).send({
       projectId,
       clearedMessages: clearedMessageIds.size,
@@ -1305,7 +1346,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       ...(store.conversationsByProject[request.params.projectId] ?? []),
       conversation
     ];
-    scheduleSave(store);
+    persistSoon();
 
     return reply.status(201).send({
       conversation: { id: conversation.id, title: conversation.title, messageCount: 0, createdAt: conversation.createdAt },
@@ -1377,7 +1418,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const idSet = new Set(conversation.messageIds);
     store.messagesByProject[request.params.projectId] = allMessages.filter((m) => !idSet.has(m.id));
     store.conversationsByProject[request.params.projectId] = conversations.filter((c) => c.id !== request.params.convId);
-    scheduleSave(store);
+    persistSoon();
 
     return {
       deleted: true,
@@ -1415,7 +1456,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     conversation.title = title;
-    scheduleSave(store);
+    persistSoon();
 
     return {
       conversation: { id: conversation.id, title: conversation.title, messageCount: conversation.messageIds.length, createdAt: conversation.createdAt },
@@ -1447,7 +1488,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     delete store.repositoryByProject[projectId];
     delete store.knowledgeBaseByProject[projectId];
     store.sessionsByToken[session.token] = { userId: session.userId, selectedProjectId: null };
-    scheduleSave(store);
+    persistSoon();
 
     return {
       deleted: true,

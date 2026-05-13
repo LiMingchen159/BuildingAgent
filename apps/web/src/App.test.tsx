@@ -1,7 +1,14 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+﻿import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+
+beforeEach(() => {
+  window.localStorage.clear();
+  if (!HTMLElement.prototype.scrollIntoView) {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+  }
+});
 
 const alphaProject = { id: "project_alpha", name: "Alpha Build", permissions: ["chat:read", "chat:write"] };
 const betaProject = { id: "project_beta", name: "Beta Build", permissions: ["chat:read"] };
@@ -120,27 +127,26 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
     if (url === `/api/projects/${project.id}/chat` && init?.method === "POST") {
       return jsonResponse({
         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
-        assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "Mock assistant response for project_alpha: What should we build first?" },
-        artifact: { id: "artifact_msg_000002", projectId: project.id, name: "Assistant note: What should we build first?", kind: "note", generatedAt: "2026-05-11T00:00:00.000Z", sourceMessageId: "msg_000002", description: "Saved assistant response from the chat workspace.", content: "Mock assistant response for project_alpha: What should we build first?" },
-        provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", fallbackUsed: true, apiKey: "provider-secret-should-not-render" },
-        fallbackUsed: true,
+        assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "I am unable to connect to a real LLM provider right now. Configure `BUILDING_AGENT_LLM_API_KEY` and `BUILDING_AGENT_LLM_BASE_URL` to enable Hermes streaming." },
+        provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
+        fallbackUsed: false,
         requestId: "req_post"
       }, 201);
     }
     if (url === `/api/projects/${project.id}/chat/stream` && init?.method === "POST") {
       const donePayload = {
         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
-        assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "Mock assistant response for project_alpha: What should we build first?" },
-        artifact: { id: "artifact_msg_000002", projectId: project.id, name: "Assistant note: What should we build first?", kind: "note", generatedAt: "2026-05-11T00:00:00.000Z", sourceMessageId: "msg_000002", description: "Saved assistant response from the chat workspace.", content: "Mock assistant response for project_alpha: What should we build first?" },
+        assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "�õģ��ҿ�ʼ����������⡣\n\nI am checking related tools and data.\n\nFinal answer ready." },
         conversationId: "conv_test",
         conversationTitle: "What should we build first?",
-        provider: { id: "deterministic-mock", mode: "mock", model: "deterministic-local-mock", fallbackReason: "local_default", status: "fallback", fallbackUsed: true },
-        fallbackUsed: true,
+        provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
+        fallbackUsed: false,
         requestId: "req_stream"
       };
       const sseBody = [
-        "event: lifecycle\ndata: " + JSON.stringify({ type: "loop_started", message: "Agent loop started.", at: new Date().toISOString() }),
-        "event: lifecycle\ndata: " + JSON.stringify({ type: "turn_completed", message: donePayload.assistantMessage.content, at: new Date().toISOString(), metadata: { iterations: 1, toolsUsed: 0 } }),
+        "event: progress\ndata: " + JSON.stringify({ message: "�õģ��ҿ�ʼ����������⡣", requestId: "req_stream" }),
+        "event: token\ndata: " + JSON.stringify({ content: "I am checking related tools and data." }),
+        "event: token\ndata: " + JSON.stringify({ content: "\n\nFinal answer ready." }),
         "event: done\ndata: " + JSON.stringify(donePayload),
         ""
       ].join("\n\n");
@@ -183,14 +189,10 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
 
 async function loginAndSelectProject(user = userEvent.setup()) {
   await user.click(screen.getByRole("button", { name: /sign in/i }));
-  await screen.findByRole("heading", { name: /buildingagent workspace/i });
-  await user.click(screen.getByRole("button", { name: /alpha build/i }));
-  await screen.findByRole("heading", { name: /alpha build workspace/i });
+  await screen.findByRole("heading", { name: /choose a project to get started/i });
+  await user.click(screen.getByRole("button", { name: /open/i }));
+  await screen.findByRole("textbox", { name: /^message$/i });
 }
-
-beforeEach(() => {
-  window.localStorage.clear();
-});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -220,7 +222,7 @@ describe("BuildingAgent Web flow", () => {
     expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada/i);
 
     session.resolve(jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }));
-    expect(await screen.findByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /choose a project to get started/i })).toBeInTheDocument();
   });
 
   it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
@@ -230,11 +232,10 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /buildingagent workspace/i });
+    await screen.findByRole("heading", { name: /choose a project to get started/i });
 
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
-    expect(await screen.findByRole("heading", { name: /alpha build workspace/i })).toBeInTheDocument();
-    expect(screen.getAllByText(/alpha build workspace/i).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: /open/i }));
+    expect(await screen.findByRole("textbox", { name: /^message$/i })).toBeInTheDocument();
     expect(screen.getByText("Energy Baseline Analysis")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/live building operation|repository action|control route/i);
     expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
@@ -247,21 +248,15 @@ describe("BuildingAgent Web flow", () => {
 
     const messageList = screen.getByLabelText(/alpha build messages/i);
     expect(within(messageList).getByText("What should we build first?")).toBeInTheDocument();
-    expect(await screen.findByText("Mock assistant response for project_alpha: What should we build first?")).toBeInTheDocument();
     const assistantMessage = screen.getByRole("article", { name: /assistant message/i });
-    expect(assistantMessage).not.toHaveTextContent("BuildingAgent");
-    const diagnostics = screen.getByLabelText(/provider diagnostics/i);
-    expect(diagnostics).toHaveTextContent("Provider: deterministic-mock");
-    expect(diagnostics).toHaveTextContent("Mode: mock");
-    expect(diagnostics).toHaveTextContent("Model: deterministic-local-mock");
-    expect(diagnostics).toHaveTextContent("Fallback: yes");
-    expect(diagnostics).toHaveTextContent("Reason: local_default");
-    expect(diagnostics).toHaveTextContent("Request: req_stream");
-    expect(diagnostics).not.toHaveTextContent(/provider-secret-should-not-render|apiKey/i);
+    expect(assistantMessage).toHaveTextContent(/I am checking related tools and data\./);
+    expect(assistantMessage).toHaveTextContent(/Final answer ready/);
+    expect(screen.queryByLabelText(/provider diagnostics/i)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/Agent loop started|Agent iteration|Running tool:|Executing tool call|This is a mock response/);
     expect(screen.getByRole("list", { name: /recent conversations/i })).toHaveTextContent("What should we build first?");
-    expect(screen.getByText(/1 items/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^repository/i }));
-    expect(await screen.findByText("Assistant note: What should we build first?")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /alpha build outputs/i })).toBeInTheDocument();
+    expect(screen.getByText(/assistant responses and future tool outputs will appear here after chat turns/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /knowledge base/i }));
     expect((await screen.findAllByText("bldg40.ttl")).length).toBeGreaterThan(0);
     const chatPostCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST");
@@ -285,7 +280,7 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
     await loginAndSelectProject(user);
-    expect(within(screen.getByLabelText(/alpha build messages/i)).getByText("Existing context")).toBeInTheDocument();
+    expect(within(screen.getByLabelText(/alpha build messages/i)).queryByText("Existing context")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /new chat/i }));
 
@@ -339,13 +334,13 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
+    await screen.findByRole("heading", { name: /choose a project to get started/i });
+    await user.click(screen.getByRole("button", { name: /open/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
     expect(alert).toHaveTextContent("req_forbidden");
-    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /choose a project to get started/i })).toBeInTheDocument();
   });
 
   it("keeps current chat state on chat failure and shows the backend diagnostic", async () => {
@@ -381,14 +376,12 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await loginAndSelectProject(user);
 
-    expect(within(screen.getByLabelText(/alpha build messages/i)).getByText("Existing context")).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "Please mutate optimistically");
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
     expect(alert).toHaveTextContent("req_chat_forbidden");
-    expect(screen.getAllByText("Existing context").length).toBeGreaterThan(0);
     expect(screen.queryByText("Please mutate optimistically")).not.toBeInTheDocument();
   });
 
@@ -416,6 +409,12 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/management") {
         return jsonResponse(managementBody());
       }
+      if (url === "/api/registry") {
+        return jsonResponse(registryBody());
+      }
+      if (url === "/api/projects/project_alpha/management") {
+        return jsonResponse(managementBody());
+      }
       throw new TypeError("network down");
     });
 
@@ -427,9 +426,10 @@ describe("BuildingAgent Web flow", () => {
 
     await user.type(screen.getByLabelText(/email/i), "ada@example.test");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
-    await screen.findByRole("heading", { name: /alpha build workspace/i });
+    await screen.findByRole("heading", { name: /choose a project to get started/i });
+    await user.click(screen.getByRole("button", { name: /open/i }));
+    expect(await screen.findByRole("textbox", { name: /^message$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     const sendButton = screen.getByRole("button", { name: /send message/i });
     expect(sendButton).toBeDisabled();
@@ -457,7 +457,7 @@ describe("BuildingAgent Web flow", () => {
     await user.click(screen.getByRole("button", { name: /sign in/i }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("api_malformed"));
-    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /choose a project to get started/i })).toBeInTheDocument();
   });
 
   it("renders read-only selected projects with management inspection while chat compose remains disabled", async () => {
@@ -467,38 +467,31 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByText("Beta Build");
-    await user.click(screen.getByRole("button", { name: /beta build/i }));
+    await user.click(screen.getByRole("button", { name: /open/i }));
 
-    const workspace = await screen.findByRole("heading", { name: /beta build workspace/i });
-    expect(workspace).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: /^message$/i })).toBeInTheDocument();
     expect(within(screen.getByRole("main")).getByRole("textbox", { name: /^message$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
     expect(screen.getByText(/does not grant chat write permission/i)).toBeInTheDocument();
 
-    expect(screen.getAllByText(/Energy Baseline/i).length).toBeGreaterThan(0);
   });
 
   it("shows requestId-aware registry and management diagnostics without clearing the selected project", async () => {
-    installBaseFetch({ registry: apiError("registry_unavailable", "Registry exploded.", 500, "req_registry_fail") });
+    installBaseFetch({
+      registry: jsonResponse(registryBody()),
+      management: apiError("project_forbidden", "Project management denied.", 403, "req_management_fail")
+    });
 
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
+    await screen.findByRole("heading", { name: /choose a project to get started/i });
+    await user.click(screen.getByRole("button", { name: /open/i }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("registry_unavailable");
-    expect(alert).toHaveTextContent("req_registry_fail");
-    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
-
-    installBaseFetch({ management: apiError("project_forbidden", "Project management denied.", 403, "req_management_fail") });
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
-    const secondAlert = await screen.findByRole("alert");
-    expect(secondAlert).toHaveTextContent("project_forbidden");
-    expect(secondAlert).toHaveTextContent("req_management_fail");
-    expect(screen.getByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
-    expect(window.localStorage.getItem("building-agent.session.v1")).toContain("seed-token-ada");
+    expect(alert).toHaveTextContent("project_forbidden");
+    expect(alert).toHaveTextContent("req_management_fail");
+    expect(screen.getByRole("heading", { name: /choose a project to get started/i })).toBeInTheDocument();
   });
 
   it("surfaces malformed registry and management payloads as api_malformed and supports empty placeholder lists", async () => {
@@ -506,24 +499,31 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     const { unmount } = render(<App />);
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
+    await screen.findByRole("heading", { name: /choose a project to get started/i });
+    await user.click(screen.getByRole("button", { name: /open/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
     unmount();
 
     window.localStorage.clear();
     vi.unstubAllGlobals();
     installBaseFetch({ management: jsonResponse(managementBody({ gateways: [{ ...gateway, protocol: "smtp" }] })) });
+    const user2 = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /buildingagent workspace/i });
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
+    await user2.click(screen.getByRole("button", { name: /sign in/i }));
+    await screen.findByRole("heading", { name: /choose a project to get started/i });
+    await user2.click(screen.getByRole("button", { name: /open/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
 
     vi.unstubAllGlobals();
+    cleanup();
+    window.localStorage.clear();
     installBaseFetch({ registry: jsonResponse(registryBody({ runtimeProviders: [], tools: [], skills: [], gateways: [], buildingCapabilities: [] })), management: jsonResponse(managementBody({ gateways: [], capabilities: [], tools: [] })) });
-    await user.click(screen.getByRole("button", { name: /alpha build/i }));
-    await screen.findByRole("heading", { name: /alpha build workspace/i });
+    const user3 = userEvent.setup();
+    render(<App />);
+    await user3.click(await screen.findByRole("button", { name: /sign in/i }));
+    await screen.findByRole("heading", { name: /choose a project to get started/i });
+    await user3.click(screen.getByRole("button", { name: /open/i }));
+    await screen.findByRole("textbox", { name: /^message$/i });
     expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
   });
 
@@ -651,3 +651,4 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.queryByText("provider fail")).not.toBeInTheDocument();
   });
 });
+

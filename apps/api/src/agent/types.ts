@@ -11,6 +11,7 @@ export type AgentLifecycleEventType =
   | "assistant_message_completed"
   | "memory_synced"
   | "loop_started"
+  | "progress"
   | "thinking"
   | "turn_completed";
 

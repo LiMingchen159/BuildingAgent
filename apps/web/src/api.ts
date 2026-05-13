@@ -90,6 +90,11 @@ export interface ChatLifecycleEvent {
   metadata?: Record<string, string | number | boolean> | undefined;
 }
 
+export interface ChatStreamProgressEvent {
+  message: string;
+  requestId?: string;
+}
+
 export interface SendChatResponse {
   message: ChatMessage;
   assistantMessage: ChatMessage;
@@ -104,8 +109,9 @@ export interface SendChatResponse {
 
 export interface StreamEventHandlers {
   onLifecycle?: (event: ChatLifecycleEvent) => void;
+  onProgress?: (event: ChatStreamProgressEvent) => void;
   onToken?: (content: string) => void;
-  onError?: (error: { code: string; message: string; requestId?: string }) => void;
+  onError?: (error: ApiErrorDetail) => void;
   onDone?: (response: SendChatResponse) => void;
 }
 
@@ -154,6 +160,8 @@ export async function sendChatMessageStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let currentEventType = "";
+  let completed = false;
+  let failed = false;
 
   try {
     while (true) {
@@ -180,18 +188,27 @@ export async function sendChatMessageStream(
                   handlers.onLifecycle?.(parsed);
                 }
                 break;
+              case "progress":
+                if (typeof (parsed as Record<string, unknown>).message === "string") {
+                  const payload = parsed as Record<string, unknown>;
+                  handlers.onProgress?.({ message: payload.message as string, ...(typeof payload.requestId === "string" ? { requestId: payload.requestId } : {}) });
+                }
+                break;
               case "token":
                 if (typeof (parsed as Record<string, unknown>).content === "string") {
                   handlers.onToken?.((parsed as { content: string }).content);
                 }
                 break;
               case "error":
+                failed = true;
                 handlers.onError?.({
                   code: typeof parsed.code === "string" ? parsed.code : "stream_error",
-                  message: typeof parsed.message === "string" ? parsed.message : "Stream error"
+                  message: typeof parsed.message === "string" ? parsed.message : "Stream error",
+                  ...(typeof parsed.requestId === "string" ? { requestId: parsed.requestId } : {})
                 });
                 break;
               case "done":
+                completed = true;
                 handlers.onDone?.(parsed as SendChatResponse);
                 break;
             }
@@ -204,6 +221,13 @@ export async function sendChatMessageStream(
     }
   } finally {
     reader.releaseLock();
+  }
+
+  if (!completed && !failed) {
+    handlers.onError?.({
+      code: "stream_incomplete",
+      message: "Chat stream ended before the assistant returned a final response."
+    });
   }
 }
 

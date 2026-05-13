@@ -51,6 +51,8 @@ import {
 
 const STORAGE_KEY = "building-agent.session.v1";
 type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
+const STREAMING_INTRO = "好的，我开始处理你的问题。";
+
 type IconName =
   | "activity"
   | "arrow-up"
@@ -647,22 +649,6 @@ function ItemList<T extends { id: string; name: string; status: string; descript
   );
 }
 
-function providerNotice(provider: ChatProviderDiagnostics | null, requestId?: string | undefined) {
-  if (!provider) {
-    return null;
-  }
-  return (
-    <p className="provider-notice" aria-label="Provider diagnostics">
-      <span>Provider: {provider.id}</span>
-      <span>Mode: {provider.mode}</span>
-      <span>Model: {provider.model}</span>
-      <span>Fallback: {provider.fallbackUsed ? "yes" : "no"}</span>
-      {provider.fallbackReason ? <span>Reason: {provider.fallbackReason}</span> : null}
-      {requestId ? <span>Request: {requestId}</span> : null}
-    </p>
-  );
-}
-
 interface ActiveTool {
   name: string;
   status: "running" | "done";
@@ -744,7 +730,6 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   return (
     <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}${leavingEmptyState ? " chat-shell-leaving-empty" : ""}`} aria-labelledby="chat-title">
       <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
-      {providerNotice(provider, requestId)}
       <section className="message-list" aria-label={`${project.name} messages`}>
         {messages.length === 0 && busy ? <div className="workspace-inline-status" role="status">Sending...</div> : null}
         {messages.map((message) => {
@@ -1364,7 +1349,7 @@ export default function App() {
           return merged;
         });
       } catch {
-        // Polling failures are silent — retry on next interval
+        // Polling failures are silent 鈥?retry on next interval
       }
     }
 
@@ -1519,7 +1504,7 @@ export default function App() {
       projectId,
       userId,
       role: "assistant",
-      content: ""
+      content: STREAMING_INTRO
     };
 
     setMessages((current) => [...current, optimisticUser, streamingAssistant]);
@@ -1528,32 +1513,33 @@ export default function App() {
       await sendChatMessageStream(token, projectId, message.trim(), {
         onToken(content: string) {
           setMessages((current) =>
-            current.map((m) => (m.id === streamingId ? { ...m, content: m.content + content } : m))
+            current.map((m) => (
+              m.id === streamingId
+                ? { ...m, content: m.content + content }
+                : m
+            ))
+          );
+        },
+        onProgress(event) {
+          setMessages((current) =>
+            current.map((m) => {
+              if (m.id !== streamingId) return m;
+              const progressLine = event.message.trim();
+              if (!progressLine) return m;
+              if (m.content === STREAMING_INTRO) {
+                return { ...m, content: progressLine };
+              }
+              if (m.content.split("\n\n").includes(progressLine)) {
+                return m;
+              }
+              return { ...m, content: `${m.content}\n\n${progressLine}` };
+            })
           );
         },
         onLifecycle(event: ChatLifecycleEvent) {
-          // For non-streaming providers, set full text at turn_completed
           if (event.type === "turn_completed" && event.message) {
             setMessages((current) =>
               current.map((m) => (m.id === streamingId ? { ...m, content: event.message } : m))
-            );
-          }
-          // Track tool calls
-          if (event.type === "tool_started" && event.metadata?.tool) {
-            const toolName = typeof event.metadata.tool === "string" ? event.metadata.tool : "unknown";
-            setActiveTools((current) => {
-              const existing = current.find((t) => t.name === toolName);
-              if (existing && existing.status === "done") {
-                return current;
-              }
-              if (existing) return current;
-              return [...current, { name: toolName, status: "running" }];
-            });
-          }
-          if (event.type === "tool_completed" && event.metadata?.tool) {
-            const toolName = typeof event.metadata.tool === "string" ? event.metadata.tool : "unknown";
-            setActiveTools((current) =>
-              current.map((t) => (t.name === toolName ? { ...t, status: "done" as const } : t))
             );
           }
         },
