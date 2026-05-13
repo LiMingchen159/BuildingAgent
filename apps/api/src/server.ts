@@ -879,8 +879,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       "X-Accel-Buffering": "no"
     });
 
-    const sseWrite = (event: string, data: string): void => {
-      reply.raw.write(`event: ${event}\ndata: ${data}\n\n`);
+    const sseWrite = (event: string, data: unknown): void => {
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
     // Pre-process time expressions (reminders) before agent turn
@@ -917,7 +917,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
 
       persistSoon();
-      sseWrite("done", JSON.stringify({
+      sseWrite("done", {
         message: userMessage,
         assistantMessage: streamAssistantMessage,
         conversationId,
@@ -925,7 +925,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         provider: providerDiagnostics(provider.metadata, false),
         fallbackUsed: false,
         requestId: reqId
-      }));
+      });
       reply.raw.end();
       return;
     }
@@ -950,12 +950,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         knowledgeBaseDocuments
       })) {
         if (event.type === "thinking") {
-          sseWrite("token", JSON.stringify({ content: event.message }));
-        } else {
-          sseWrite("lifecycle", JSON.stringify(event));
-        }
-
-        if (event.type === "turn_completed") {
+          sseWrite("token", { content: event.message });
+        } else if (event.type === "progress") {
+          sseWrite("progress", { message: event.message, requestId: reqId });
+        } else if (event.type === "turn_completed") {
           finalText = event.message || "";
         }
       }
@@ -982,12 +980,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             knowledgeBaseDocuments
           })) {
             if (event.type === "thinking") {
-              sseWrite("token", JSON.stringify({ content: event.message }));
-            } else {
-              sseWrite("lifecycle", JSON.stringify(event));
-            }
-
-            if (event.type === "turn_completed") {
+              sseWrite("token", { content: event.message });
+            } else if (event.type === "progress") {
+              sseWrite("progress", { message: event.message, requestId: reqId });
+            } else if (event.type === "turn_completed") {
               finalText = event.message || "";
             }
           }
@@ -995,19 +991,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           finalProviderDiagnostics = providerDiagnostics(fallbackProvider.metadata, true);
         } catch (fallbackError) {
           streamError = "Agent streaming failed after fallback.";
-          sseWrite("error", JSON.stringify({
+          sseWrite("error", {
             code: "agent_stream_error",
             message: streamError,
             requestId: reqId
-          }));
+          });
         }
       } else {
         streamError = "Chat provider failed before producing a safe response.";
-        sseWrite("error", JSON.stringify({
+        sseWrite("error", {
           code: "provider_error",
           message: streamError,
           requestId: reqId
-        }));
+        });
       }
     }
 
@@ -1054,7 +1050,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     persistSoon();
 
     // Send final done event
-    sseWrite("done", JSON.stringify({
+    sseWrite("done", {
       message: userMessage,
       assistantMessage,
       conversationId,
@@ -1062,7 +1058,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       provider: finalProviderDiagnostics,
       fallbackUsed: finalProviderDiagnostics?.fallbackUsed ?? false,
       requestId: reqId
-    }));
+    });
 
     reply.raw.end();
   });

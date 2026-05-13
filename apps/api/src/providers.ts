@@ -59,6 +59,7 @@ export interface ChatToolCall {
 export interface ChatCompletionDelta {
   content?: string;
   toolCalls?: ChatToolCall[];
+  progress?: string;
 }
 
 export interface ChatCompletionStreamResult {
@@ -155,17 +156,52 @@ function fallbackMetadata(reason: string, status = "fallback"): ProviderMetadata
   };
 }
 
+function createProviderNotConfiguredError(metadata: ProviderMetadata): ProviderError {
+  return new ProviderError("Chat provider is not configured.", {
+    code: "provider_not_configured",
+    status: 503,
+    provider: metadata
+  });
+}
+
+function mapProgressEvent(eventName: string | null, payload: Record<string, unknown> | null, metadata: ProviderMetadata): string {
+  const normalizedName = (eventName ?? "").toLowerCase();
+  if (normalizedName === "hermes.tool.progress") {
+    return "I am checking related tools and data.";
+  }
+  if (normalizedName.includes("tool")) {
+    return "I am checking related tools and data.";
+  }
+  if (normalizedName.includes("memory")) {
+    return "I am checking project context and memory.";
+  }
+  if (normalizedName.includes("response")) {
+    return "I am organizing the response.";
+  }
+
+  const stage = typeof payload?.stage === "string" ? payload.stage.toLowerCase() : "";
+  if (stage.includes("tool")) {
+    return "I am checking related tools and data.";
+  }
+  if (stage.includes("memory")) {
+    return "I am checking project context and memory.";
+  }
+  if (stage.includes("final") || stage.includes("respond")) {
+    return "I am organizing the response.";
+  }
+
+  return metadata.mode === "real"
+    ? "I am processing your request."
+    : "I am preparing a response.";
+}
+
 export function createDeterministicMockProvider(reason = "local_default"): ChatProvider {
   const metadata = fallbackMetadata(reason);
 
   return {
     metadata,
-    async complete(request) {
-      const lastUserMessage = [...request.messages].reverse().find((message) => message.role === "user")?.content ?? "";
-      const normalized = lastUserMessage.replace(/\s+/gu, " ").trim();
-      const text = normalized
-        ? `Mock assistant response for ${request.projectId}: ${normalized}`
-        : `Mock assistant response for ${request.projectId}.`;
+    async complete(_request) {
+      const text = "I am unable to connect to a real LLM provider right now. Configure `BUILDING_AGENT_LLM_API_KEY` and `BUILDING_AGENT_LLM_BASE_URL` to enable Hermes streaming.";
 
       return {
         text,
@@ -264,9 +300,6 @@ export function createDeterministicMockProviderWithTools(overrides: Partial<Chat
   return {
     metadata,
     async complete(request) {
-      const lastUserMessage = [...request.messages].reverse().find((message) => message.role === "user")?.content ?? "";
-      const normalized = lastUserMessage.replace(/\s+/gu, " ").trim();
-
       // If we already have tool results, this is a follow-up turn — synthesize a final answer
       const hasToolResults = request.messages.some((m) => m.role === "tool");
       if (hasToolResults) {
@@ -290,12 +323,11 @@ export function createDeterministicMockProviderWithTools(overrides: Partial<Chat
             `Here's what I found after running my analysis tools:\n\n`,
             `**Tool Results:** ${toolSummary}\n\n`,
             `Based on the data I gathered, here's my comprehensive analysis:\n\n`,
-            `Your request was: "${normalized}"\n\n`,
             `I've completed the following steps:\n`,
             `1. Searched the knowledge base for relevant files and schemas\n`,
             `2. Read the relevant configuration and data files\n`,
             `3. Analyzed the results to provide actionable insights\n\n`,
-            `This is a mock analysis — connect a real LLM provider (set BUILDING_AGENT_LLM_API_KEY) for actual AI-powered multi-turn agent behavior with real-time data analysis.`,
+            "I am unable to connect to a real LLM provider right now. Configure BUILDING_AGENT_LLM_API_KEY and BUILDING_AGENT_LLM_BASE_URL to enable Hermes streaming.",
           ].join(""),
           provider: metadata,
           fallbackUsed: false
@@ -307,16 +339,14 @@ export function createDeterministicMockProviderWithTools(overrides: Partial<Chat
       if (toolCalls.length > 0) {
         const toolNames = toolCalls.map((t) => t.function.name).join(", ");
         return {
-          text: `Let me analyze your request: "${normalized}"\n\nI'll start by gathering information using these tools: ${toolNames}. One moment...`,
+          text: `Let me analyze your request.\n\nI'll start by gathering information using these tools: ${toolNames}. One moment...`,
           toolCalls,
           provider: metadata,
           fallbackUsed: false
         };
       }
 
-      const text = normalized
-        ? `Mock assistant response for ${request.projectId}: ${normalized}`
-        : `Mock assistant response for ${request.projectId}.`;
+      const text = "I am unable to connect to a real LLM provider right now. Configure `BUILDING_AGENT_LLM_API_KEY` and `BUILDING_AGENT_LLM_BASE_URL` to enable Hermes streaming.";
 
       return { text, provider: metadata, fallbackUsed: false };
     },
@@ -380,6 +410,67 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     return message.tool_calls as ChatToolCall[];
   }
 
+  function parseStreamingBlock(block: string): ChatCompletionDelta[] {
+    const deltas: ChatCompletionDelta[] = [];
+    let eventName: string | null = null;
+    const dataLines: string[] = [];
+
+    for (const rawLine of block.split(/\r?\n/u)) {
+      const line = rawLine.trimEnd();
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+
+    const data = dataLines.join("\n").trim();
+    if (!data || data === "[DONE]") {
+      return deltas;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return deltas;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const choices = record.choices as Array<Record<string, unknown>> | undefined;
+    const choice = choices?.[0];
+    const delta = choice?.delta as Record<string, unknown> | undefined;
+    if (delta) {
+      const item: ChatCompletionDelta = {};
+      if (typeof delta.content === "string") {
+        item.content = delta.content;
+      }
+      if (Array.isArray(delta.tool_calls)) {
+        item.toolCalls = delta.tool_calls as ChatToolCall[];
+      }
+      if (item.content || item.toolCalls) {
+        deltas.push(item);
+      }
+    }
+
+    if (eventName === "hermes.tool.progress") {
+      deltas.push({ progress: mapProgressEvent(eventName, record, metadata) });
+      return deltas;
+    }
+
+    if (eventName && eventName !== "message" && eventName !== "response.output_text.delta") {
+      deltas.push({ progress: mapProgressEvent(eventName, record, metadata) });
+      return deltas;
+    }
+
+    if (eventName === "response.output_text.delta" && typeof record.delta === "string") {
+      deltas.push({ content: record.delta });
+    } else if (eventName === "response.output_text.done" && typeof record.text === "string") {
+      deltas.push({ content: record.text });
+    }
+
+    return deltas;
+  }
   return {
     metadata,
     async complete(request) {
@@ -485,37 +576,24 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
+          const blocks = buffer.split(/\r?\n\r?\n/u);
+          buffer = blocks.pop() ?? "";
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith("data: ")) continue;
-            const data = trimmed.slice(6);
-            if (data === "[DONE]") return;
-
-            try {
-              const parsed = JSON.parse(data);
-              const delta = (parsed as Record<string, unknown>).choices as Array<Record<string, unknown>> | undefined;
-              if (!delta?.[0]) continue;
-
-              const deltaMsg = delta[0].delta as Record<string, unknown> | undefined;
-              if (!deltaMsg) continue;
-
-              const result: ChatCompletionDelta = {};
-              if (typeof deltaMsg.content === "string") {
-                result.content = deltaMsg.content;
-              }
-              if (Array.isArray(deltaMsg.tool_calls)) {
-                result.toolCalls = deltaMsg.tool_calls as ChatToolCall[];
-              }
-              if (result.content || result.toolCalls) {
-                yield result;
-              }
-            } catch {
-              // skip unparseable SSE lines
+          for (const block of blocks) {
+            if (block.includes("[DONE]")) {
+              return;
+            }
+            for (const delta of parseStreamingBlock(block)) {
+              yield delta;
             }
           }
+        }
+
+        if (buffer.includes("[DONE]")) {
+          return;
+        }
+        for (const delta of parseStreamingBlock(buffer)) {
+          yield delta;
         }
       } finally {
         reader.releaseLock();
@@ -537,8 +615,21 @@ export function resolveChatProvider(env: ProviderEnv, options: ResolveChatProvid
     });
   }
 
-  if (provider === "mock" || !apiKey) {
+  if (provider === "mock") {
     return createDeterministicMockProvider("local_default");
+  }
+
+  if (!apiKey) {
+    const metadata: ProviderMetadata = { id: "provider-not-configured", mode: "real", model, status: "unconfigured" };
+    return {
+      metadata,
+      async complete() {
+        throw createProviderNotConfiguredError(metadata);
+      },
+      async *completeStream() {
+        throw createProviderNotConfiguredError(metadata);
+      }
+    };
   }
 
   return createOpenAICompatibleProvider({ apiKey, model, baseUrl, ...(options.fetch ? { fetch: options.fetch } : {}) });
@@ -559,3 +650,4 @@ export function redactedProviderError(error: unknown): { code: string; status?: 
 
   return { code: "provider_unknown_error" };
 }
+

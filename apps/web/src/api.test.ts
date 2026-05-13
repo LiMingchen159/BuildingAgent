@@ -15,7 +15,7 @@ afterEach(() => {
 describe("chat stream client", () => {
   it("reports an incomplete stream when no done or error event arrives", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => streamResponse([
-      "event: lifecycle\ndata: " + JSON.stringify({ type: "loop_started", message: "Agent loop started.", at: new Date().toISOString() }),
+      "event: debug\ndata: " + JSON.stringify({ type: "loop_started", message: "I am checking project context and memory.", at: new Date().toISOString() }),
       ""
     ].join("\n\n"))));
 

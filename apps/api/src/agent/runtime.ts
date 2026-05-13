@@ -3,7 +3,7 @@ import type { AgentSkillRegistry } from "./skills.js";
 import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentLifecycleEventType, AgentLoopResult, AgentTurnRequest, AgentTurnResult } from "./types.js";
 import { knowledgeBasePrompt } from "./knowledgeBase.js";
-import { ProviderError, type ChatCompletionDelta, type ChatCompletionResult, type ChatToolCall, type ChatToolDefinition, type ProviderChatMessage } from "../providers.js";
+import type { ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -29,16 +29,12 @@ export class AgentRuntime {
     return { type, message, at: new Date().toISOString(), ...(metadata ? { metadata } : {}) };
   }
 
-  private async callProvider(
+  private async *callProvider(
     request: AgentTurnRequest,
     messages: ProviderChatMessage[],
     toolDefs: ChatToolDefinition[]
-  ): Promise<{ completion: ChatCompletionResult; thinking: AgentLifecycleEvent[] }> {
-    const thinking: AgentLifecycleEvent[] = [];
-
-    // Skip streaming for large-context requests (KB docs) to avoid burning rate-limit budget
-    const hasKbDocs = request.knowledgeBaseDocuments && request.knowledgeBaseDocuments.length > 0;
-    if (request.provider.completeStream && !hasKbDocs) {
+  ): AsyncGenerator<AgentLifecycleEvent, ChatCompletionResult, undefined> {
+    if (request.provider.completeStream) {
       let streamText = "";
       const streamToolCalls: ChatToolCall[] = [];
 
@@ -51,9 +47,12 @@ export class AgentRuntime {
           tools: toolDefs,
           toolChoice: "auto"
         })) {
+          if (delta.progress) {
+            yield this.makeEvent("progress", delta.progress);
+          }
           if (delta.content) {
             streamText += delta.content;
-            thinking.push(this.makeEvent("thinking", delta.content));
+            yield this.makeEvent("thinking", delta.content);
           }
           if (delta.toolCalls) {
             for (const tc of delta.toolCalls) {
@@ -72,15 +71,12 @@ export class AgentRuntime {
         if (typeof streamError === "object" && streamError !== null && "status" in streamError && (streamError as { status?: number }).status === 429) {
           await sleep(5000);
         }
-        return { completion: await this.callProviderWithRetry(request, messages, toolDefs, 2), thinking: [] };
+        return await this.callProviderWithRetry(request, messages, toolDefs, 2);
       }
 
       const trimmedStreamText = streamText.trim();
       if (!trimmedStreamText && streamToolCalls.length === 0) {
-        throw new ProviderError("Chat provider stream ended without assistant text or tool calls.", {
-          code: "provider_empty_stream",
-          provider: request.provider.metadata
-        });
+        return await this.callProviderWithRetry(request, messages, toolDefs, 2);
       }
 
       const result: ChatCompletionResult = {
@@ -89,10 +85,10 @@ export class AgentRuntime {
         fallbackUsed: false
       };
       if (streamToolCalls.length > 0) result.toolCalls = streamToolCalls;
-      return { completion: result, thinking };
+      return result;
     }
 
-    return { completion: await this.callProviderWithRetry(request, messages, toolDefs, 2), thinking: [] };
+    return await this.callProviderWithRetry(request, messages, toolDefs, 2);
   }
 
   private async callProviderWithRetry(
@@ -211,11 +207,14 @@ export class AgentRuntime {
         toolCount: toolDefs.length
       }));
 
-      // Try streaming first for real-time token output; fall back to non-streaming
-      const { completion, thinking } = await this.callProvider(request, conversationMessages, toolDefs);
-      for (const thinkingEvent of thinking) {
-        yield yieldEvent(thinkingEvent);
+      // Try streaming first for real-time token output; fall back to non-streaming.
+      const providerEvents = this.callProvider(request, conversationMessages, toolDefs);
+      let providerStep = await providerEvents.next();
+      while (!providerStep.done) {
+        yield yieldEvent(providerStep.value);
+        providerStep = await providerEvents.next();
       }
+      const completion = providerStep.value;
 
       finalProvider = completion.provider;
       finalFallbackUsed = completion.fallbackUsed;
