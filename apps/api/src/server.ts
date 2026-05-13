@@ -1092,8 +1092,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const knowledgeBaseDocuments = await indexKnowledgeBase(projectId, { rootDir: projectKbRoot });
       store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
 
-      const seenActivities = new Set<string>();
-      const toolCounts = new Map<string, number>();
+      const seenActivities = new Map<string, number>();
+      let activitySequence = 0;
+      const sanitizeToolDetail = (value: unknown): string | undefined => {
+        if (typeof value !== "string") return undefined;
+        const trimmed = value.replace(/[A-Za-z0-9_./\\-]*(?:api[_-]?key|token|secret|password)[A-Za-z0-9_./\\-]*/gi, "[redacted]").trim();
+        return trimmed ? trimmed.slice(0, 180) : undefined;
+      };
+      const toolLabelFor = (toolName: string, state: "running" | "done"): string => {
+        const lower = toolName.toLowerCase();
+        if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
+        if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";
+        if (lower.includes("read") || lower.includes("file") || lower.includes("knowledge")) return state === "running" ? "Reading file" : "Read file";
+        if (lower.includes("bash") || lower.includes("command") || lower.includes("shell")) return state === "running" ? "Running command" : "Ran command";
+        return state === "running" ? "Using tool" : "Used tool";
+      };
+      const emitActivity = (payload: Record<string, unknown>): void => {
+        activitySequence += 1;
+        sseWrite("activity", { id: `act_${reqId}_${activitySequence}`, requestId: reqId, ...payload });
+      };
       for await (const event of agentRuntime.runTurnStream({
         projectId,
         userId: session.userId,
@@ -1109,64 +1126,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         } else if (event.type === "progress") {
           const kind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
           const dedupKey = `${kind}:${event.message}`;
-          if (!seenActivities.has(dedupKey)) {
-            seenActivities.add(dedupKey);
-            sseWrite("activity", {
+          const now = Date.now();
+          if ((seenActivities.get(dedupKey) ?? 0) + 1200 < now) {
+            seenActivities.set(dedupKey, now);
+            emitActivity({
               label: event.message,
               kind,
-              requestId: reqId,
               ...(event.metadata?.progressRaw ? { raw: event.metadata.progressRaw } : {})
             });
           }
         } else if (event.type === "tool_started") {
           const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
           if (toolName) {
-            toolCounts.set(toolName, (toolCounts.get(toolName) || 0) + 1);
+            emitActivity({
+              label: toolLabelFor(toolName, "running"),
+              kind: "tool",
+              tool: toolName,
+              status: "running",
+              ...(sanitizeToolDetail(event.metadata?.args) ? { detail: sanitizeToolDetail(event.metadata?.args) } : {})
+            });
           }
         } else if (event.type === "tool_completed") {
-          // Tool completion is tracked via tool_started count
+          const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+          if (toolName) {
+            emitActivity({
+              label: toolLabelFor(toolName, "done"),
+              kind: "tool",
+              tool: toolName,
+              status: "done",
+              ...(sanitizeToolDetail(event.metadata?.resultPreview) ? { output: sanitizeToolDetail(event.metadata?.resultPreview) } : {})
+            });
+          }
         } else if (event.type === "turn_completed") {
           finalText = event.message || "";
-        }
-      }
-
-      // Send aggregated tool statistics after streaming completes
-      if (toolCounts.size > 0) {
-        const toolGroups = new Map<string, number>();
-        for (const [toolName, count] of toolCounts.entries()) {
-          const toolLower = toolName.toLowerCase();
-          if (toolLower.includes('bash') || toolLower.includes('command') || toolLower.includes('shell')) {
-            toolGroups.set('commands', (toolGroups.get('commands') || 0) + count);
-          } else if (toolLower.includes('read') || toolLower.includes('file')) {
-            toolGroups.set('files_read', (toolGroups.get('files_read') || 0) + count);
-          } else if (toolLower.includes('edit') || toolLower.includes('write')) {
-            toolGroups.set('files_edited', (toolGroups.get('files_edited') || 0) + count);
-          } else if (toolLower.includes('search') || toolLower.includes('grep') || toolLower.includes('glob')) {
-            toolGroups.set('searches', (toolGroups.get('searches') || 0) + count);
-          } else {
-            toolGroups.set('tools', (toolGroups.get('tools') || 0) + count);
-          }
-        }
-
-        for (const [group, count] of toolGroups.entries()) {
-          let label = '';
-          if (group === 'commands') {
-            label = count === 1 ? 'Ran 1 command' : `Ran ${count} commands`;
-          } else if (group === 'files_read') {
-            label = count === 1 ? 'Read 1 file' : `Read ${count} files`;
-          } else if (group === 'files_edited') {
-            label = count === 1 ? 'Edited 1 file' : `Edited ${count} files`;
-          } else if (group === 'searches') {
-            label = 'Searched files';
-          } else {
-            label = count === 1 ? 'Used 1 tool' : `Used ${count} tools`;
-          }
-          sseWrite("activity", {
-            label,
-            kind: "tool",
-            count,
-            requestId: reqId
-          });
         }
       }
 
@@ -1181,8 +1173,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
         try {
           const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
-          const fallbackSeenActivities = new Set<string>();
-          const fallbackToolCounts = new Map<string, number>();
+          const fallbackSeenActivities = new Map<string, number>();
+          let fallbackActivitySequence = 0;
+          const sanitizeFallbackToolDetail = (value: unknown): string | undefined => {
+            if (typeof value !== "string") return undefined;
+            const trimmed = value.replace(/[A-Za-z0-9_./\\-]*(?:api[_-]?key|token|secret|password)[A-Za-z0-9_./\\-]*/gi, "[redacted]").trim();
+            return trimmed ? trimmed.slice(0, 180) : undefined;
+          };
+          const fallbackToolLabelFor = (toolName: string, state: "running" | "done"): string => {
+            const lower = toolName.toLowerCase();
+            if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
+            if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";
+            if (lower.includes("read") || lower.includes("file") || lower.includes("knowledge")) return state === "running" ? "Reading file" : "Read file";
+            if (lower.includes("bash") || lower.includes("command") || lower.includes("shell")) return state === "running" ? "Running command" : "Ran command";
+            return state === "running" ? "Using tool" : "Used tool";
+          };
+          const emitFallbackActivity = (payload: Record<string, unknown>): void => {
+            fallbackActivitySequence += 1;
+            sseWrite("activity", { id: `act_${reqId}_fb_${fallbackActivitySequence}`, requestId: reqId, ...payload });
+          };
           for await (const event of agentRuntime.runTurnStream({
             projectId,
             userId: session.userId,
@@ -1198,64 +1207,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             } else if (event.type === "progress") {
               const fkind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
               const fdedupKey = `${fkind}:${event.message}`;
-              if (!fallbackSeenActivities.has(fdedupKey)) {
-                fallbackSeenActivities.add(fdedupKey);
-                sseWrite("activity", {
+              const fnow = Date.now();
+              if ((fallbackSeenActivities.get(fdedupKey) ?? 0) + 1200 < fnow) {
+                fallbackSeenActivities.set(fdedupKey, fnow);
+                emitFallbackActivity({
                   label: event.message,
                   kind: fkind,
-                  requestId: reqId,
                   ...(event.metadata?.progressRaw ? { raw: event.metadata.progressRaw } : {})
                 });
               }
             } else if (event.type === "tool_started") {
               const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
               if (ftoolName) {
-                fallbackToolCounts.set(ftoolName, (fallbackToolCounts.get(ftoolName) || 0) + 1);
+                emitFallbackActivity({
+                  label: fallbackToolLabelFor(ftoolName, "running"),
+                  kind: "tool",
+                  tool: ftoolName,
+                  status: "running",
+                  ...(sanitizeFallbackToolDetail(event.metadata?.args) ? { detail: sanitizeFallbackToolDetail(event.metadata?.args) } : {})
+                });
               }
             } else if (event.type === "tool_completed") {
-              // Tool completion is tracked via tool_started count
+              const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+              if (ftoolName) {
+                emitFallbackActivity({
+                  label: fallbackToolLabelFor(ftoolName, "done"),
+                  kind: "tool",
+                  tool: ftoolName,
+                  status: "done",
+                  ...(sanitizeFallbackToolDetail(event.metadata?.resultPreview) ? { output: sanitizeFallbackToolDetail(event.metadata?.resultPreview) } : {})
+                });
+              }
             } else if (event.type === "turn_completed") {
               finalText = event.message || "";
-            }
-          }
-
-          // Send aggregated tool statistics for fallback
-          if (fallbackToolCounts.size > 0) {
-            const toolGroups = new Map<string, number>();
-            for (const [toolName, count] of fallbackToolCounts.entries()) {
-              const toolLower = toolName.toLowerCase();
-              if (toolLower.includes('bash') || toolLower.includes('command') || toolLower.includes('shell')) {
-                toolGroups.set('commands', (toolGroups.get('commands') || 0) + count);
-              } else if (toolLower.includes('read') || toolLower.includes('file')) {
-                toolGroups.set('files_read', (toolGroups.get('files_read') || 0) + count);
-              } else if (toolLower.includes('edit') || toolLower.includes('write')) {
-                toolGroups.set('files_edited', (toolGroups.get('files_edited') || 0) + count);
-              } else if (toolLower.includes('search') || toolLower.includes('grep') || toolLower.includes('glob')) {
-                toolGroups.set('searches', (toolGroups.get('searches') || 0) + count);
-              } else {
-                toolGroups.set('tools', (toolGroups.get('tools') || 0) + count);
-              }
-            }
-
-            for (const [group, count] of toolGroups.entries()) {
-              let label = '';
-              if (group === 'commands') {
-                label = count === 1 ? 'Ran 1 command' : `Ran ${count} commands`;
-              } else if (group === 'files_read') {
-                label = count === 1 ? 'Read 1 file' : `Read ${count} files`;
-              } else if (group === 'files_edited') {
-                label = count === 1 ? 'Edited 1 file' : `Edited ${count} files`;
-              } else if (group === 'searches') {
-                label = 'Searched files';
-              } else {
-                label = count === 1 ? 'Used 1 tool' : `Used ${count} tools`;
-              }
-              sseWrite("activity", {
-                label,
-                kind: "tool",
-                count,
-                requestId: reqId
-              });
             }
           }
 

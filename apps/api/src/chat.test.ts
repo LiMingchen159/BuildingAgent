@@ -650,7 +650,7 @@ describe("chat streaming endpoint", () => {
         };
       },
       async *completeStream() {
-        yield { progress: { label: "正在运行分析工具", kind: "tool" as const, raw: "hermes.tool.progress" } };
+        yield { progress: { label: "I am checking project context", kind: "context" as const, raw: "hermes.progress" } };
         yield { content: "Hello" };
         yield { content: " world" };
       }
@@ -839,7 +839,7 @@ describe("chat streaming endpoint", () => {
         };
       },
       async *completeStream() {
-        yield { progress: { label: "正在运行分析工具", kind: "tool" as const, raw: "hermes.tool.progress" } };
+        yield { progress: { label: "I am checking project context", kind: "context" as const, raw: "hermes.progress" } };
         yield { content: "I found the relevant device list." };
       }
     };

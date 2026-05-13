@@ -179,61 +179,61 @@ function mapProgressEvent(eventName: string | null, payload: Record<string, unkn
   if (normalizedName.includes("tool")) {
     const tool = typeof payload?.tool === "string" ? payload.tool : null;
     const result: ProgressEvent = {
-      label: tool ? `正在使用 ${tool} 工具` : "正在运行分析工具",
+      label: tool ? `I am using ${tool}` : "I am running analysis tools",
       kind: "tool"
     };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (normalizedName.includes("memory")) {
-    const result: ProgressEvent = { label: "正在检查项目上下文", kind: "memory" };
+    const result: ProgressEvent = { label: "I am checking project context", kind: "memory" };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (normalizedName.includes("knowledge") || normalizedName.includes("search")) {
-    const result: ProgressEvent = { label: "正在查询知识库", kind: "kb" };
+    const result: ProgressEvent = { label: "I am querying the knowledge base", kind: "kb" };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (normalizedName.includes("file") || normalizedName.includes("read")) {
-    const result: ProgressEvent = { label: "正在读取相关文件", kind: "file" };
+    const result: ProgressEvent = { label: "I am reading relevant files", kind: "file" };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (normalizedName.includes("response")) {
-    const result: ProgressEvent = { label: "正在整理回答", kind: "response" };
+    const result: ProgressEvent = { label: "I am organizing the answer", kind: "response" };
     if (eventName) result.raw = eventName;
     return result;
   }
 
   const stage = typeof payload?.stage === "string" ? payload.stage.toLowerCase() : "";
   if (stage.includes("tool")) {
-    const result: ProgressEvent = { label: "正在运行分析工具", kind: "tool" };
+    const result: ProgressEvent = { label: "I am running analysis tools", kind: "tool" };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (stage.includes("memory")) {
-    const result: ProgressEvent = { label: "正在检查项目上下文", kind: "memory" };
+    const result: ProgressEvent = { label: "I am checking project context", kind: "memory" };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (stage.includes("knowledge") || stage.includes("search") || stage.includes("kb")) {
-    const result: ProgressEvent = { label: "正在查询知识库", kind: "kb" };
+    const result: ProgressEvent = { label: "I am querying the knowledge base", kind: "kb" };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (stage.includes("file") || stage.includes("read")) {
-    const result: ProgressEvent = { label: "正在读取相关文件", kind: "file" };
+    const result: ProgressEvent = { label: "I am reading relevant files", kind: "file" };
     if (eventName) result.raw = eventName;
     return result;
   }
   if (stage.includes("final") || stage.includes("respond")) {
-    const result: ProgressEvent = { label: "正在整理回答", kind: "response" };
+    const result: ProgressEvent = { label: "I am organizing the answer", kind: "response" };
     if (eventName) result.raw = eventName;
     return result;
   }
 
-  const result: ProgressEvent = { label: "正在处理请求", kind: "context" };
+  const result: ProgressEvent = { label: "I am processing the request", kind: "context" };
   if (eventName) result.raw = eventName;
   return result;
 }
