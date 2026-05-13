@@ -766,18 +766,29 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
 
       // Start visualizing audio levels
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const smoothedLevels = new Array(30).fill(0);
+
       const updateLevels = () => {
         if (!analyserRef.current || voiceState !== "recording") return;
         analyser.getByteFrequencyData(dataArray);
 
-        // Sample 30 frequency bands and normalize to 0-1
-        const levels = [];
-        const step = Math.floor(dataArray.length / 30);
-        for (let i = 0; i < 30; i++) {
-          const value = dataArray[i * step] || 0;
-          levels.push(value / 255);
+        // Get average volume
+        const sum = dataArray.reduce((a, b) => a + b, 0);
+        const average = sum / dataArray.length / 255;
+
+        // Create wave propagation effect - shift previous values
+        for (let i = smoothedLevels.length - 1; i > 0; i--) {
+          smoothedLevels[i] = smoothedLevels[i - 1] * 0.85; // Decay as wave propagates
         }
-        setAudioLevels(levels);
+        smoothedLevels[0] = average;
+
+        // Add some randomness for natural feel
+        const levels = smoothedLevels.map((level, i) => {
+          const noise = (Math.random() - 0.5) * 0.1;
+          return Math.max(0, Math.min(1, level + noise));
+        });
+
+        setAudioLevels([...levels]);
         animationFrameRef.current = requestAnimationFrame(updateLevels);
       };
       updateLevels();
