@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { exec } from "node:child_process";
 import type { AgentMemoryStore } from "./memory.js";
 import { knowledgeBaseRoot } from "./knowledgeBase.js";
+import type { AgentSkillRegistry } from "./skills.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
 import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
@@ -40,7 +41,7 @@ function resolveSafePath(baseRoot: string, requested: string): string | null {
   return normalized;
 }
 
-export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService, processRegistry?: ProcessRegistry): AgentToolRegistry {
+export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService, processRegistry?: ProcessRegistry, skills?: AgentSkillRegistry): AgentToolRegistry {
   const registry = new AgentToolRegistry();
   const tools: AgentTool[] = [
     {
@@ -1021,6 +1022,13 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
 
   for (const tool of tools) {
     registry.register(tool);
+  }
+
+  // Register skill CRUD tools if a skill registry is available
+  if (skills) {
+    for (const tool of skills.buildCrudToolDefs()) {
+      registry.register(tool);
+    }
   }
 
   return registry;

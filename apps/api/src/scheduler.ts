@@ -167,6 +167,9 @@ export class SchedulerService {
     this.startTicker();
   }
 
+  /** Callback invoked when a job is scheduled. */
+  onScheduled: ((job: ScheduledJob) => void) | null = null;
+
   /** Schedule a new job (one-shot or recurring). Returns the job. */
   schedule(params: {
     projectId: string;
@@ -205,6 +208,7 @@ export class SchedulerService {
     this.jobs.set(jobId, job);
     this.scheduleTimer(job);
     this.persist();
+    if (this.onScheduled) this.onScheduled(job);
     return job;
   }
 
