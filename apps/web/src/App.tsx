@@ -677,7 +677,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing" | "error">("idle");
   const [voiceError, setVoiceError] = useState("");
-  const [audioLevels, setAudioLevels] = useState<number[]>(new Array(30).fill(0));
+  const [audioLevels, setAudioLevels] = useState<number[]>(new Array(90).fill(0));
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -766,7 +766,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
 
       // Start visualizing audio levels
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const smoothedLevels = new Array(30).fill(0);
+      const smoothedLevels = new Array(90).fill(0);
 
       const updateLevels = () => {
         if (!analyserRef.current || voiceState !== "recording") return;
@@ -819,7 +819,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       animationFrameRef.current = null;
     }
     audioChunksRef.current = [];
-    setAudioLevels(new Array(30).fill(0));
+    setAudioLevels(new Array(90).fill(0));
     setVoiceState("idle");
     setVoiceError("");
   }
@@ -871,7 +871,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     } finally {
       mediaRecorderRef.current = null;
       audioChunksRef.current = [];
-      setAudioLevels(new Array(30).fill(0));
+      setAudioLevels(new Array(90).fill(0));
     }
   }
 
