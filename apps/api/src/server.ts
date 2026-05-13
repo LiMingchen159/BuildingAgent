@@ -1093,6 +1093,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
 
       const seenActivities = new Set<string>();
+      const toolCounts = new Map<string, number>();
       for await (const event of agentRuntime.runTurnStream({
         projectId,
         userId: session.userId,
@@ -1120,27 +1121,52 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         } else if (event.type === "tool_started") {
           const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
           if (toolName) {
-            sseWrite("activity", {
-              label: `正在运行 ${toolName}`,
-              kind: "tool",
-              tool: toolName,
-              status: "running",
-              requestId: reqId
-            });
+            toolCounts.set(toolName, (toolCounts.get(toolName) || 0) + 1);
           }
         } else if (event.type === "tool_completed") {
-          const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
-          if (toolName) {
-            sseWrite("activity", {
-              label: `${toolName} 完成`,
-              kind: "tool",
-              tool: toolName,
-              status: "done",
-              requestId: reqId
-            });
-          }
+          // Tool completion is tracked via tool_started count
         } else if (event.type === "turn_completed") {
           finalText = event.message || "";
+        }
+      }
+
+      // Send aggregated tool statistics after streaming completes
+      if (toolCounts.size > 0) {
+        const toolGroups = new Map<string, number>();
+        for (const [toolName, count] of toolCounts.entries()) {
+          const toolLower = toolName.toLowerCase();
+          if (toolLower.includes('bash') || toolLower.includes('command') || toolLower.includes('shell')) {
+            toolGroups.set('commands', (toolGroups.get('commands') || 0) + count);
+          } else if (toolLower.includes('read') || toolLower.includes('file')) {
+            toolGroups.set('files_read', (toolGroups.get('files_read') || 0) + count);
+          } else if (toolLower.includes('edit') || toolLower.includes('write')) {
+            toolGroups.set('files_edited', (toolGroups.get('files_edited') || 0) + count);
+          } else if (toolLower.includes('search') || toolLower.includes('grep') || toolLower.includes('glob')) {
+            toolGroups.set('searches', (toolGroups.get('searches') || 0) + count);
+          } else {
+            toolGroups.set('tools', (toolGroups.get('tools') || 0) + count);
+          }
+        }
+
+        for (const [group, count] of toolGroups.entries()) {
+          let label = '';
+          if (group === 'commands') {
+            label = count === 1 ? 'Ran 1 command' : `Ran ${count} commands`;
+          } else if (group === 'files_read') {
+            label = count === 1 ? 'Read 1 file' : `Read ${count} files`;
+          } else if (group === 'files_edited') {
+            label = count === 1 ? 'Edited 1 file' : `Edited ${count} files`;
+          } else if (group === 'searches') {
+            label = 'Searched files';
+          } else {
+            label = count === 1 ? 'Used 1 tool' : `Used ${count} tools`;
+          }
+          sseWrite("activity", {
+            label,
+            kind: "tool",
+            count,
+            requestId: reqId
+          });
         }
       }
 
@@ -1156,6 +1182,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         try {
           const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
           const fallbackSeenActivities = new Set<string>();
+          const fallbackToolCounts = new Map<string, number>();
           for await (const event of agentRuntime.runTurnStream({
             projectId,
             userId: session.userId,
@@ -1183,27 +1210,52 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             } else if (event.type === "tool_started") {
               const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
               if (ftoolName) {
-                sseWrite("activity", {
-                  label: `正在运行 ${ftoolName}`,
-                  kind: "tool",
-                  tool: ftoolName,
-                  status: "running",
-                  requestId: reqId
-                });
+                fallbackToolCounts.set(ftoolName, (fallbackToolCounts.get(ftoolName) || 0) + 1);
               }
             } else if (event.type === "tool_completed") {
-              const ftoolName2 = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
-              if (ftoolName2) {
-                sseWrite("activity", {
-                  label: `${ftoolName2} 完成`,
-                  kind: "tool",
-                  tool: ftoolName2,
-                  status: "done",
-                  requestId: reqId
-                });
-              }
+              // Tool completion is tracked via tool_started count
             } else if (event.type === "turn_completed") {
               finalText = event.message || "";
+            }
+          }
+
+          // Send aggregated tool statistics for fallback
+          if (fallbackToolCounts.size > 0) {
+            const toolGroups = new Map<string, number>();
+            for (const [toolName, count] of fallbackToolCounts.entries()) {
+              const toolLower = toolName.toLowerCase();
+              if (toolLower.includes('bash') || toolLower.includes('command') || toolLower.includes('shell')) {
+                toolGroups.set('commands', (toolGroups.get('commands') || 0) + count);
+              } else if (toolLower.includes('read') || toolLower.includes('file')) {
+                toolGroups.set('files_read', (toolGroups.get('files_read') || 0) + count);
+              } else if (toolLower.includes('edit') || toolLower.includes('write')) {
+                toolGroups.set('files_edited', (toolGroups.get('files_edited') || 0) + count);
+              } else if (toolLower.includes('search') || toolLower.includes('grep') || toolLower.includes('glob')) {
+                toolGroups.set('searches', (toolGroups.get('searches') || 0) + count);
+              } else {
+                toolGroups.set('tools', (toolGroups.get('tools') || 0) + count);
+              }
+            }
+
+            for (const [group, count] of toolGroups.entries()) {
+              let label = '';
+              if (group === 'commands') {
+                label = count === 1 ? 'Ran 1 command' : `Ran ${count} commands`;
+              } else if (group === 'files_read') {
+                label = count === 1 ? 'Read 1 file' : `Read ${count} files`;
+              } else if (group === 'files_edited') {
+                label = count === 1 ? 'Edited 1 file' : `Edited ${count} files`;
+              } else if (group === 'searches') {
+                label = 'Searched files';
+              } else {
+                label = count === 1 ? 'Used 1 tool' : `Used ${count} tools`;
+              }
+              sseWrite("activity", {
+                label,
+                kind: "tool",
+                count,
+                requestId: reqId
+              });
             }
           }
 
