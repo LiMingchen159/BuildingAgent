@@ -50,6 +50,7 @@ import {
 
 const STORAGE_KEY = "building-agent.session.v1";
 type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
+const STREAMING_INTRO = "好的，我开始处理你的问题。";
 
 type IconName =
   | "activity"
@@ -1480,7 +1481,7 @@ export default function App() {
       projectId,
       userId,
       role: "assistant",
-      content: "好的，我开始处理你的问题。"
+      content: STREAMING_INTRO
     };
 
     setMessages((current) => [...current, optimisticUser, streamingAssistant]);
@@ -1500,7 +1501,15 @@ export default function App() {
           setMessages((current) =>
             current.map((m) => {
               if (m.id !== streamingId) return m;
-              return { ...m, content: m.content === "好的，我开始处理你的问题。" ? event.message : `${m.content}\n\n${event.message}` };
+              const progressLine = event.message.trim();
+              if (!progressLine) return m;
+              if (m.content === STREAMING_INTRO) {
+                return { ...m, content: progressLine };
+              }
+              if (m.content.split("\n\n").includes(progressLine)) {
+                return m;
+              }
+              return { ...m, content: `${m.content}\n\n${progressLine}` };
             })
           );
         },

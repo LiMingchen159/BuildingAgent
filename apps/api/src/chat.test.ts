@@ -827,6 +827,39 @@ describe("chat streaming endpoint", () => {
     titleGate.resolve();
   });
 
+  it("surfaces progress events around multi-tool turns before final completion", async () => {
+    const provider: ChatProvider = {
+      metadata: { id: "stream-real", mode: "real", model: "stream-model", status: "configured" },
+      async complete() {
+        return {
+          text: "Summary",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      },
+      async *completeStream() {
+        yield { progress: "I am checking related tools and data." };
+        yield { content: "I found the relevant device list." };
+      }
+    };
+    const app = buildServer({ chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "List all devices in bldg40" }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    expect(events.some((e) => e.event === "progress")).toBe(true);
+    expect(events.find((e) => e.event === "done")?.data).toMatchObject({
+      assistantMessage: expect.objectContaining({ role: "assistant" })
+    });
+  });
+
   it("emits an error event when the provider stream ends without a final response", async () => {
     const provider: ChatProvider = {
       metadata: { id: "empty-stream", mode: "real", model: "empty-model", status: "configured" },

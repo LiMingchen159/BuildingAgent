@@ -196,6 +196,7 @@ export class AgentRuntime {
     let finalProvider = request.provider.metadata;
     let finalFallbackUsed = false;
     let iterations = 0;
+    let emittedProgressHint = false;
 
     while (iterations < maxIterations) {
       iterations += 1;
@@ -238,6 +239,10 @@ export class AgentRuntime {
         toolCount: completion.toolCalls.length,
         tools: completion.toolCalls.map((tc) => tc.function.name).join(", ")
       }));
+      if (!emittedProgressHint) {
+        yield yieldEvent(this.makeEvent("progress", "I am checking related tools and data."));
+        emittedProgressHint = true;
+      }
 
       for (const tc of completion.toolCalls) {
         let args: Record<string, unknown>;
@@ -287,6 +292,7 @@ export class AgentRuntime {
         iteration: iterations,
         completedTools: toolCallHistory.length
       }));
+      yield yieldEvent(this.makeEvent("progress", "I have some results and I am organizing the answer."));
     }
 
     if (iterations >= maxIterations && !finalText) {
