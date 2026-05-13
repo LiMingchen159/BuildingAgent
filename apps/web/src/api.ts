@@ -51,6 +51,8 @@ export interface ChatMessage {
   content: string;
   images?: ChatMessageImage[] | undefined;
   artifactId?: string | undefined;
+  activities?: ChatStreamActivityEvent[] | undefined;
+  workDuration?: number | undefined;
 }
 
 export interface KnowledgeBaseDocument {

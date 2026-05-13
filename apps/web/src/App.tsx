@@ -668,12 +668,10 @@ function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
   );
 }
 
-function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, streamingActivity, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; streamingActivity?: ChatStreamActivityEvent[]; onStop: () => void }) {
+function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, streamingActivity, streamStartTime, streamElapsed, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; streamingActivity?: ChatStreamActivityEvent[]; streamStartTime: number | null; streamElapsed: number; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
-  const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
-  const [streamElapsed, setStreamElapsed] = useState(0);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
@@ -688,26 +686,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
   const activities = streamingActivity ?? [];
 
-  // Timer for streaming elapsed time
-  useEffect(() => {
-    if (!busy || !streamStartTime) {
-      return;
-    }
-    const interval = setInterval(() => {
-      setStreamElapsed(Date.now() - streamStartTime);
-    }, 100);
-    return () => clearInterval(interval);
-  }, [busy, streamStartTime]);
-
-  // Reset timer when streaming starts
-  useEffect(() => {
-    if (busy && !streamStartTime) {
-      setStreamStartTime(Date.now());
-    } else if (!busy && streamStartTime) {
-      // Keep final elapsed time
-      setStreamStartTime(null);
-    }
-  }, [busy, streamStartTime]);
+  // Timer for streaming elapsed time is now managed by parent component
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -788,7 +767,6 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       const message = draft.trim();
       setDraft("");
       userScrolledUpRef.current = false;
-      setStreamElapsed(0);
       void onSend(message);
     }
   }
@@ -811,9 +789,11 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         {messages.map((message) => {
           const isStreaming = message.id.startsWith("streaming_");
           const isThinking = message.id.startsWith("pending_assistant_");
-          const hasActivity = isStreaming && (activities.length > 0 || (activeTools && activeTools.length > 0));
+          const messageActivities = isStreaming ? activities : (message.activities ?? []);
+          const messageDuration = isStreaming ? streamElapsed : (message.workDuration ?? 0);
+          const hasActivity = messageActivities.length > 0 || (isStreaming && activeTools && activeTools.length > 0);
           const hasContent = message.content.trim().length > 0;
-          const isCollapsed = timelineCollapsed[message.id] ?? false;
+          const isCollapsed = timelineCollapsed[message.id] ?? (hasContent && !isStreaming);
 
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
@@ -826,11 +806,11 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                       <details className="worked-timeline" open={!isCollapsed} onToggle={(e) => setTimelineCollapsed(prev => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}>
                         <summary className="worked-timeline-header">
                           <Icon name="clock" />
-                          <span>Worked for {formatElapsedTime(isStreaming ? streamElapsed : 0)}</span>
+                          <span>Worked for {formatElapsedTime(messageDuration)}</span>
                           <Icon name="chevron-down" className="worked-timeline-chevron" />
                         </summary>
                         <div className="worked-timeline-content">
-                          {activities.map((act, i) => (
+                          {messageActivities.map((act, i) => (
                             <div key={`${act.kind}-${i}`} className={`timeline-activity activity-${act.kind}`}>
                               <span className="timeline-activity-icon">
                                 {act.kind === "tool" ? <Icon name="wrench" /> :
@@ -841,7 +821,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                               <span className="timeline-activity-label">{act.label}</span>
                             </div>
                           ))}
-                          {activeTools && activeTools.length > 0 ? (
+                          {isStreaming && activeTools && activeTools.length > 0 ? (
                             <div className="timeline-tools">
                               {activeTools.map((tool) => (
                                 <div key={tool.name} className={`timeline-tool tool-${tool.status}`}>
@@ -1188,7 +1168,9 @@ function Workspace({
   onDeleteProject,
   onStop,
   activeTools,
-  streamingActivity
+  streamingActivity,
+  streamStartTime,
+  streamElapsed
 }: {
   project: ProjectSummary | null;
   projects: ProjectSummary[];
@@ -1221,6 +1203,8 @@ function Workspace({
   onDeleteProject: (projectId: string) => void;
   activeTools?: Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>;
   streamingActivity?: ChatStreamActivityEvent[];
+  streamStartTime: number | null;
+  streamElapsed: number;
 }) {
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "chat", label: "Chat" },
@@ -1263,7 +1247,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(activeTools ? { activeTools } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1343,6 +1327,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [activeTools, setActiveTools] = useState<Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>>([]);
   const [streamingActivity, setStreamingActivity] = useState<ChatStreamActivityEvent[]>([]);
+  const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
+  const [streamElapsed, setStreamElapsed] = useState(0);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1485,6 +1471,26 @@ export default function App() {
       clearInterval(interval);
     };
   }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
+
+  // Timer for streaming elapsed time
+  useEffect(() => {
+    if (!busy || !streamStartTime) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setStreamElapsed(Date.now() - streamStartTime);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [busy, streamStartTime]);
+
+  // Reset timer when streaming starts
+  useEffect(() => {
+    if (busy && !streamStartTime) {
+      setStreamStartTime(Date.now());
+    } else if (!busy && streamStartTime) {
+      setStreamStartTime(null);
+    }
+  }, [busy, streamStartTime]);
 
   // WebSocket connection for real-time reminder/message delivery
   useEffect(() => {
@@ -1684,10 +1690,16 @@ export default function App() {
           setBanner({ tone: "error", title: error.code, message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) });
         },
         onDone(response) {
+          const finalDuration = streamStartTime ? Date.now() - streamStartTime : 0;
+          const capturedActivities = [...streamingActivity];
           setMessages((current) => [
             ...current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId),
             response.message,
-            response.assistantMessage
+            {
+              ...response.assistantMessage,
+              activities: capturedActivities.length > 0 ? capturedActivities : undefined,
+              workDuration: finalDuration > 0 ? finalDuration : undefined
+            }
           ]);
           if (response.artifact) {
             setRepositoryItems((current) => [
@@ -1714,6 +1726,8 @@ export default function App() {
           setChatProviderRequestId(response.requestId);
           setActiveTools([]);
           setStreamingActivity([]);
+          setStreamStartTime(null);
+          setStreamElapsed(0);
           setBanner(null);
         }
       }, activeConversationId ?? undefined, signal);
@@ -1904,7 +1918,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} streamingActivity={streamingActivity} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} streamingActivity={streamingActivity} streamStartTime={streamStartTime} streamElapsed={streamElapsed} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );
