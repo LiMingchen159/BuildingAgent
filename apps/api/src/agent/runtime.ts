@@ -36,7 +36,11 @@ export class AgentRuntime {
   ): AsyncGenerator<AgentLifecycleEvent, ChatCompletionResult, undefined> {
     if (request.provider.completeStream) {
       let streamText = "";
-      const streamToolCalls: ChatToolCall[] = [];
+      // OpenAI streams tool_call deltas keyed by `index`, not `id` — only the first
+      // chunk for each index carries `id` and `function.name`; later chunks append
+      // `function.arguments` fragments and must be joined on index.
+      const streamToolCallsByIndex = new Map<number, ChatToolCall>();
+      let fallbackToolIndex = 0;
 
       try {
         for await (const delta of request.provider.completeStream({
@@ -56,13 +60,17 @@ export class AgentRuntime {
           }
           if (delta.toolCalls) {
             for (const tc of delta.toolCalls) {
-              const existing = streamToolCalls.find((t) => t.id === tc.id);
-              if (existing) {
-                if (tc.function.name) existing.function.name += tc.function.name;
-                if (tc.function.arguments) existing.function.arguments += tc.function.arguments;
-              } else {
-                streamToolCalls.push({ ...tc });
+              const rawIndex = (tc as { index?: unknown }).index;
+              const idx = typeof rawIndex === "number" ? rawIndex : fallbackToolIndex++;
+              let entry = streamToolCallsByIndex.get(idx);
+              if (!entry) {
+                entry = { id: tc.id ?? "", type: "function", function: { name: "", arguments: "" } };
+                streamToolCallsByIndex.set(idx, entry);
               }
+              if (tc.id) entry.id = tc.id;
+              if (tc.type) entry.type = tc.type;
+              if (tc.function?.name) entry.function.name += tc.function.name;
+              if (tc.function?.arguments) entry.function.arguments += tc.function.arguments;
             }
           }
         }
@@ -73,6 +81,11 @@ export class AgentRuntime {
         }
         return await this.callProviderWithRetry(request, messages, toolDefs, 2);
       }
+
+      const streamToolCalls = [...streamToolCallsByIndex.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([, entry]) => entry)
+        .filter((entry) => entry.id && entry.function.name);
 
       const trimmedStreamText = streamText.trim();
       if (!trimmedStreamText && streamToolCalls.length === 0) {
