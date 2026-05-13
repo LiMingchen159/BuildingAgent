@@ -1,5 +1,4 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import cors from "@fastify/cors";
 import {
   authenticateRequest,
   getPermissionsForSelectedProject,
@@ -23,13 +22,17 @@ import {
 } from "./providers.js";
 import { createGenericToolRegistry } from "./agent/genericTools.js";
 import { AgentMemoryStore } from "./agent/memory.js";
+import { ProcessRegistry } from "./agent/processRegistry.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
 import { loadStoreSync, scheduleSave } from "./persistence.js";
-import { SchedulerService, parseTimeExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
+import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { WebSocketServer } from "ws";
+import type { WebSocket } from "ws";
+import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -171,10 +174,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   memory.start();
   const skills = createGenericSkillRegistry();
 
+  // Structured JSON logging with file rotation (before scheduler so callbacks can use it)
+  const logDir = path.join(knowledgeBaseRoot(env), "..", "data");
+  const structuredLogger = new StructuredLogger({ dir: logDir, maxFileBytes: 5 * 1024 * 1024 });
+
   // Scheduler for reminders/cronjobs
   const schedulerDataDir = path.join(knowledgeBaseRoot(env), "..", "data");
   const scheduler = new SchedulerService(schedulerDataDir);
   scheduler.setOnFired((job) => {
+    structuredLogger.info("scheduler_job_fired", {
+      component: "scheduler",
+      projectId: job.projectId,
+      jobId: job.jobId,
+      jobMessage: job.message
+    });
+
     const msgs = store.messagesByProject[job.projectId] ?? [];
     const assistantMsg: ChatMessage = {
       id: nextMessageId(),
@@ -195,15 +209,43 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     store.messagesByProject[job.projectId] = msgs;
     scheduleSave(store);
+
+    // Broadcast via WebSocket for real-time delivery
+    broadcastToProject(job.projectId, {
+      type: "reminder_fired",
+      message: assistantMsg,
+      jobId: job.jobId
+    });
   });
   scheduler.start();
 
-  const tools = createGenericToolRegistry(memory, scheduler);
+  // Log when a job is scheduled
+  scheduler.onScheduled = (job) => {
+    structuredLogger.info("scheduler_job_scheduled", {
+      component: "scheduler",
+      projectId: job.projectId,
+      jobId: job.jobId,
+      jobMessage: job.message,
+      triggerAt: new Date(job.triggerAt).toISOString()
+    });
+  };
+
+  const processRegistry = new ProcessRegistry();
+  const tools = createGenericToolRegistry(memory, scheduler, processRegistry, skills);
   tools.enableLogging(path.join(knowledgeBaseRoot(env), "..", "data"));
   const agentRuntime = new AgentRuntime({ memory, tools, skills });
   const kbRoot = knowledgeBaseRoot(env);
+
   const app = Fastify({
-    logger: false,
+    logger: {
+      level: "info",
+      formatters: {
+        level(label) {
+          return { level: label };
+        }
+      },
+      timestamp: () => `,"time":"${new Date().toISOString()}"`
+    },
     genReqId: (() => {
       let sequence = 0;
       return () => {
@@ -213,7 +255,27 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     })()
   });
 
-  void app.register(cors, { origin: true });
+  // WebSocket connection tracking per project
+  const wsConnections = new Map<string, Set<WebSocket>>();
+
+  function broadcastToProject(projectId: string, data: Record<string, unknown>): void {
+    const sockets = wsConnections.get(projectId);
+    if (!sockets || sockets.size === 0) return;
+    const payload = JSON.stringify(data);
+    for (const ws of sockets) {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(payload);
+      }
+    }
+  }
+
+  // CORS disabled: @fastify/cors v9 requires Fastify v5, but we're on Fastify v4.
+  // Vite dev server proxies /api requests so CORS is not needed for development.
+  // Upgrade path: either use @fastify/cors@^8 or upgrade Fastify to v5.
+  // void app.register(cors, { origin: true });
+
+  // Attach structured request logging
+  attachStructuredLogging(app, structuredLogger);
 
   app.get("/health", async (request) => ({
     ok: true,
@@ -677,6 +739,51 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       });
     }
 
+    // Pre-process recurring time expressions (every N minutes, daily at H:00, etc.)
+    const recurExpr = parseRecurringExpression(content);
+    if (recurExpr) {
+      scheduler.schedule({
+        projectId,
+        conversationId,
+        userId: session.userId,
+        message: recurExpr.reminderText,
+        triggerAt: recurExpr.triggerAt,
+        recurrence: recurExpr.recurrence
+      });
+
+      const intervalDesc = recurExpr.recurrence.type === "interval"
+        ? `每${Math.round((recurExpr.recurrence.intervalSeconds ?? 60) / 60)}分钟`
+        : `按计划`;
+
+      const assistantMessage: ChatMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: `好的，${intervalDesc}提醒你「${recurExpr.reminderText}」。`
+      };
+      messages.push(assistantMessage);
+      conversation.messageIds.push(assistantMessage.id);
+      trimChatMessages(messages, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+
+      if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+        conversation.title = `重复提醒: ${recurExpr.reminderText}`.slice(0, 60);
+      }
+
+      scheduleSave(store);
+      return reply.status(201).send({
+        message,
+        assistantMessage,
+        conversationId,
+        conversationTitle: conversation.title,
+        provider: providerDiagnostics(provider.metadata, false),
+        fallbackUsed: false,
+        lifecycle: [],
+        requestId: requestIdFor(request)
+      });
+    }
+
     let agentTurn;
     const projectKbRoot = kbRootForProject(projectId, kbRoot);
     try {
@@ -878,6 +985,52 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       sseWrite("done", JSON.stringify({
         message: userMessage,
         assistantMessage: streamAssistantMessage,
+        conversationId,
+        conversationTitle: conversation.title,
+        provider: providerDiagnostics(provider.metadata, false),
+        fallbackUsed: false,
+        requestId: reqId
+      }));
+      reply.raw.end();
+      return;
+    }
+
+    // Pre-process recurring time expressions (streaming endpoint)
+    const streamRecurExpr = parseRecurringExpression(content);
+    if (streamRecurExpr) {
+      scheduler.schedule({
+        projectId,
+        conversationId,
+        userId: session.userId,
+        message: streamRecurExpr.reminderText,
+        triggerAt: streamRecurExpr.triggerAt,
+        recurrence: streamRecurExpr.recurrence
+      });
+
+      const intervalDesc = streamRecurExpr.recurrence.type === "interval"
+        ? `每${Math.round((streamRecurExpr.recurrence.intervalSeconds ?? 60) / 60)}分钟`
+        : `按计划`;
+
+      const streamAssistMsg: ChatMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: `好的，${intervalDesc}提醒你「${streamRecurExpr.reminderText}」。`
+      };
+      messages.push(streamAssistMsg);
+      conversation.messageIds.push(streamAssistMsg.id);
+      trimChatMessages(messages, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+
+      if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
+        conversation.title = `重复提醒: ${streamRecurExpr.reminderText}`.slice(0, 60);
+      }
+
+      scheduleSave(store);
+      sseWrite("done", JSON.stringify({
+        message: userMessage,
+        assistantMessage: streamAssistMsg,
         conversationId,
         conversationTitle: conversation.title,
         provider: providerDiagnostics(provider.metadata, false),
@@ -1308,8 +1461,58 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return sendError(request, reply, 422, "chat_invalid", "Request payload is invalid.");
     }
 
+    // Fastify content-type parser rejects empty body with application/json
+    const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+    if (code === "FST_ERR_CTP_EMPTY_JSON_BODY") {
+      return sendError(request, reply, 422, "request_invalid", "Request body must not be empty when Content-Type is application/json.");
+    }
+
     request.log.error({ err: error, requestId: requestIdFor(request) }, "Unhandled API error");
     return sendError(request, reply, 500, "internal_error", "Unexpected API error.");
+  });
+
+  // WebSocket server for real-time push notifications
+  const wss = new WebSocketServer({ noServer: true });
+
+  app.server.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    const match = /^\/api\/projects\/([^/]+)\/ws$/.exec(url.pathname);
+    if (!match) return;
+
+    const projectId = match[1]!;
+    const token = url.searchParams.get("token");
+    if (!token || !store.tokens[token]) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    const userId = store.tokens[token]!;
+    const member = store.memberships.find((m) => m.projectId === projectId && m.userId === userId);
+    if (!member || !member.permissions.includes("chat:read")) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      let sockets = wsConnections.get(projectId);
+      if (!sockets) {
+        sockets = new Set();
+        wsConnections.set(projectId, sockets);
+      }
+      sockets.add(ws);
+
+      ws.send(JSON.stringify({ type: "connected", projectId }));
+
+      ws.on("close", () => {
+        const set = wsConnections.get(projectId);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) wsConnections.delete(projectId);
+        }
+      });
+    });
   });
 
   return app;
