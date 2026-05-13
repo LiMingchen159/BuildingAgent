@@ -4677,10 +4677,11 @@ p {
 .composer-actions {
   align-items: center;
   display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
   height: 2.25rem;
   justify-content: center;
   margin: 0 0 0.015rem;
-  width: 2.25rem;
 }
 
 .composer-tools {
