@@ -3,7 +3,7 @@ import type { AgentSkillRegistry } from "./skills.js";
 import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentLifecycleEventType, AgentLoopResult, AgentTurnRequest, AgentTurnResult } from "./types.js";
 import { knowledgeBasePrompt } from "./knowledgeBase.js";
-import type { ChatCompletionDelta, ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
+import { ProviderError, type ChatCompletionDelta, type ChatCompletionResult, type ChatToolCall, type ChatToolDefinition, type ProviderChatMessage } from "../providers.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -75,8 +75,16 @@ export class AgentRuntime {
         return { completion: await this.callProviderWithRetry(request, messages, toolDefs, 2), thinking: [] };
       }
 
+      const trimmedStreamText = streamText.trim();
+      if (!trimmedStreamText && streamToolCalls.length === 0) {
+        throw new ProviderError("Chat provider stream ended without assistant text or tool calls.", {
+          code: "provider_empty_stream",
+          provider: request.provider.metadata
+        });
+      }
+
       const result: ChatCompletionResult = {
-        text: streamText,
+        text: trimmedStreamText,
         provider: request.provider.metadata,
         fallbackUsed: false
       };

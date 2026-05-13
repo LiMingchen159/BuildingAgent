@@ -50,6 +50,15 @@ import {
 
 const STORAGE_KEY = "building-agent.session.v1";
 type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
+
+const STREAM_STEP_TYPES = new Set([
+  "loop_started",
+  "provider_started",
+  "tool_started",
+  "tool_completed",
+  "memory_recalled",
+  "skills_applied"
+]);
 type IconName =
   | "activity"
   | "arrow-up"
@@ -1496,7 +1505,7 @@ export default function App() {
       projectId,
       userId,
       role: "assistant",
-      content: ""
+      content: "Starting Hermes run..."
     };
 
     setMessages((current) => [...current, optimisticUser, streamingAssistant]);
@@ -1513,6 +1522,16 @@ export default function App() {
           if (event.type === "turn_completed" && event.message) {
             setMessages((current) =>
               current.map((m) => (m.id === streamingId ? { ...m, content: event.message } : m))
+            );
+          }
+          if (STREAM_STEP_TYPES.has(event.type) && event.message) {
+            const stepLine = `\n\n> ${event.message}`;
+            setMessages((current) =>
+              current.map((m) => {
+                if (m.id !== streamingId) return m;
+                const content = m.content === "Starting Hermes run..." ? stepLine.trimStart() : `${m.content}${stepLine}`;
+                return { ...m, content };
+              })
             );
           }
           // Track tool calls
