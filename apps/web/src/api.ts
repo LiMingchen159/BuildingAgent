@@ -93,12 +93,17 @@ export interface ChatLifecycleEvent {
 }
 
 export interface ChatStreamActivityEvent {
+  id?: string;
   label: string;
   kind: "tool" | "memory" | "kb" | "file" | "response" | "context";
   tool?: string;
   status?: "running" | "done";
   raw?: string;
   requestId?: string;
+  detail?: string;
+  output?: string;
+  durationMs?: number;
+  exitCode?: number;
 }
 
 export interface ChatStreamProgressEvent {
@@ -204,12 +209,17 @@ export async function sendChatMessageStream(
                 if (typeof (parsed as Record<string, unknown>).label === "string") {
                   const act = parsed as Record<string, unknown>;
                   handlers.onActivity?.({
+                    ...(typeof act.id === "string" ? { id: act.id } : {}),
                     label: act.label as string,
                     kind: (act.kind as ChatStreamActivityEvent["kind"]) ?? "context",
                     ...(typeof act.tool === "string" ? { tool: act.tool } : {}),
                     ...(typeof act.status === "string" ? { status: act.status as "running" | "done" } : {}),
                     ...(typeof act.raw === "string" ? { raw: act.raw } : {}),
-                    ...(typeof act.requestId === "string" ? { requestId: act.requestId } : {})
+                    ...(typeof act.requestId === "string" ? { requestId: act.requestId } : {}),
+                    ...(typeof act.detail === "string" ? { detail: act.detail } : {}),
+                    ...(typeof act.output === "string" ? { output: act.output } : {}),
+                    ...(typeof act.durationMs === "number" ? { durationMs: act.durationMs } : {}),
+                    ...(typeof act.exitCode === "number" ? { exitCode: act.exitCode } : {})
                   });
                 }
                 break;

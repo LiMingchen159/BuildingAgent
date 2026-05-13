@@ -26,6 +26,7 @@ import {
   sendChatMessage,
   sendChatMessageStream,
   createProject,
+  createConversation,
   getConversations,
   selectConversation,
   deleteConversation,
@@ -649,26 +650,57 @@ function ItemList<T extends { id: string; name: string; status: string; descript
   );
 }
 
-interface ActiveTool {
-  name: string;
-  status: "running" | "done";
-  args?: Record<string, unknown>;
-  resultPreview?: string;
+interface StreamingTurnState {
+  conversationId: string | null;
+  assistantId: string | null;
+  userId: string | null;
+  activities: ChatStreamActivityEvent[];
+  startedAt: number;
 }
 
-function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
+function formatElapsedTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): IconName {
+  const normalized = label.toLowerCase();
+  if (kind === "tool" && (normalized.includes("ran") || normalized.includes("running") || normalized.includes("command"))) return "cpu";
+  if (kind === "tool" && normalized.includes("search")) return "search-code";
+  if (kind === "tool" && normalized.includes("edit")) return "file-text";
+  if (kind === "file" || normalized.includes("read")) return "file-text";
+  if (kind === "kb") return "book-open";
+  if (kind === "memory") return "clock";
+  if (kind === "response") return "message";
+  return "activity";
+}
+
+function ActivityRow({ activity, streaming }: { activity: ChatStreamActivityEvent; streaming: boolean }) {
+  const details = [activity.detail, activity.exitCode !== undefined ? `exit ${activity.exitCode}` : undefined, activity.durationMs !== undefined ? `${activity.durationMs}ms` : undefined, activity.output]
+    .filter((item): item is string => Boolean(item && item.trim()));
+  const icon = activity.status === "running" ? "rotate" : activityIcon(activity.kind, activity.label);
   return (
-    <div className={`tool-call-indicator tool-${tool.status}`} aria-label={`Tool ${tool.name} ${tool.status}`}>
-      <span className={`tool-indicator-icon${tool.status === "running" ? " tool-spinner" : ""}`}>
-        {tool.status === "running" ? <Icon name="rotate" /> : <Icon name="check-check" />}
-      </span>
-      <span className="tool-indicator-name">{tool.name}</span>
-      {tool.status === "running" ? <span className="tool-indicator-status">Running...</span> : null}
-    </div>
+    <details className={`activity-row activity-${activity.kind}${streaming && activity.status === "running" ? " is-running" : ""}`}>
+      <summary className="activity-row-summary">
+        <span className="activity-row-icon"><Icon name={icon} /></span>
+        <span className="activity-row-label">{activity.label}</span>
+        <Icon name="chevron-down" className="activity-row-chevron" />
+      </summary>
+      {details.length > 0 ? (
+        <div className="activity-row-details">
+          {details.map((detail, index) => <p key={index}>{detail}</p>)}
+        </div>
+      ) : null}
+    </details>
   );
 }
 
-function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, streamingActivity, streamStartTime, streamElapsed, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; streamingActivity?: ChatStreamActivityEvent[]; streamStartTime: number | null; streamElapsed: number; onStop: () => void }) {
+function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, streamingActivity, streamStartTime, streamElapsed, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamStartTime: number | null; streamElapsed: number; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
@@ -771,16 +803,6 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     }
   }
 
-  function formatElapsedTime(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    }
-    return `${seconds}s`;
-  }
-
   return (
     <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}${leavingEmptyState ? " chat-shell-leaving-empty" : ""}`} aria-labelledby="chat-title">
       <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
@@ -791,7 +813,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
           const isThinking = message.id.startsWith("pending_assistant_");
           const messageActivities = isStreaming ? activities : (message.activities ?? []);
           const messageDuration = isStreaming ? streamElapsed : (message.workDuration ?? 0);
-          const hasActivity = messageActivities.length > 0 || (isStreaming && activeTools && activeTools.length > 0);
+          const hasActivity = messageActivities.length > 0 || isStreaming;
           const hasContent = message.content.trim().length > 0;
           const isCollapsed = timelineCollapsed[message.id] ?? (hasContent && !isStreaming);
 
@@ -810,30 +832,16 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                           <Icon name="chevron-down" className="worked-timeline-chevron" />
                         </summary>
                         <div className="worked-timeline-content">
-                          {messageActivities.map((act, i) => (
-                            <div key={`${act.kind}-${i}`} className={`timeline-activity activity-${act.kind}`}>
-                              <span className="timeline-activity-icon">
-                                {act.kind === "tool" ? <Icon name="wrench" /> :
-                                 act.kind === "kb" ? <Icon name="book-open" /> :
-                                 act.kind === "file" ? <Icon name="file-text" /> :
-                                 <Icon name="activity" />}
-                              </span>
-                              <span className="timeline-activity-label">{act.label}</span>
+                          {messageActivities.length > 0 ? messageActivities.map((act, i) => (
+                            <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} />
+                          )) : (
+                            <div className="activity-row is-running">
+                              <div className="activity-row-summary">
+                                <span className="activity-row-icon"><Icon name="rotate" /></span>
+                                <span className="activity-row-label">Working</span>
+                              </div>
                             </div>
-                          ))}
-                          {isStreaming && activeTools && activeTools.length > 0 ? (
-                            <div className="timeline-tools">
-                              {activeTools.map((tool) => (
-                                <div key={tool.name} className={`timeline-tool tool-${tool.status}`}>
-                                  <span className="timeline-tool-icon">
-                                    {tool.status === "running" ? <Icon name="rotate" /> : <Icon name="check-check" />}
-                                  </span>
-                                  <span className="timeline-tool-name">{tool.name}</span>
-                                  {tool.status === "running" ? <span className="timeline-tool-status">Running...</span> : null}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
+                          )}
                         </div>
                       </details>
                     ) : null}
@@ -1049,8 +1057,8 @@ function WorkspaceSidebarBlock({
                 <span className="conversation-menu">
                   <button type="button" className="conversation-menu-trigger" aria-label="Conversation menu" popovertarget={`conv-menu-${conversation.id}`} style={{ anchorName: `--cm-${conversation.id.replace(/[^a-zA-Z0-9]/g, "")}` }}><Icon name="more" /></button>
                   <ul className="conversation-menu-list" id={`conv-menu-${conversation.id}`} popover="auto" style={{ positionAnchor: `--cm-${conversation.id.replace(/[^a-zA-Z0-9]/g, "")}` }}>
-                    <li><button type="button" className="conversation-menu-action" onClick={() => { const title = window.prompt("Rename conversation", conversation.title); if (title && title.trim() && title.trim() !== conversation.title) onRenameConversation(conversation.id, title.trim()); }} disabled={busy}>Rename</button></li>
-                    <li><button type="button" className="conversation-menu-action conversation-menu-action-danger" onClick={() => { if (window.confirm(`Delete "${conversation.title}"?`)) onDeleteConversation(conversation.id); }} disabled={busy}>Delete</button></li>
+                    <li><button type="button" className="conversation-menu-action" onClick={() => { const title = window.prompt("Rename conversation", conversation.title); if (title && title.trim() && title.trim() !== conversation.title) onRenameConversation(conversation.id, title.trim()); }}>Rename</button></li>
+                    <li><button type="button" className="conversation-menu-action conversation-menu-action-danger" onClick={() => { if (window.confirm(`Delete "${conversation.title}"?`)) onDeleteConversation(conversation.id); }}>Delete</button></li>
                   </ul>
                 </span>
               </li>
@@ -1167,7 +1175,6 @@ function Workspace({
   onRenameConversation,
   onDeleteProject,
   onStop,
-  activeTools,
   streamingActivity,
   streamStartTime,
   streamElapsed
@@ -1201,7 +1208,6 @@ function Workspace({
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
-  activeTools?: Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>;
   streamingActivity?: ChatStreamActivityEvent[];
   streamStartTime: number | null;
   streamElapsed: number;
@@ -1247,7 +1253,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(activeTools ? { activeTools } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1325,13 +1331,18 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
-  const [activeTools, setActiveTools] = useState<Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>>([]);
   const [streamingActivity, setStreamingActivity] = useState<ChatStreamActivityEvent[]>([]);
   const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
   const [streamElapsed, setStreamElapsed] = useState(0);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamingTurnRef = useRef<StreamingTurnState | null>(null);
+  const activeConversationIdRef = useRef<string | null>(activeConversationId);
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
 
   function clearAuth(nextBanner?: BannerState) {
     setToken("");
@@ -1422,12 +1433,12 @@ export default function App() {
             setBanner(errorBanner(error, "Could not load session"));
           }
         }
-      } finally {
-        if (!cancelled) {
-          setBootstrapping(false);
-        }
+    } finally {
+      if (!cancelled) {
+        setBootstrapping(false);
       }
     }
+  }
 
     void bootstrap();
     return () => {
@@ -1472,25 +1483,31 @@ export default function App() {
     };
   }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
 
+  const activeStreamingTurn = streamingTurnRef.current;
+  const activeStreamingVisible = Boolean(
+    activeStreamingTurn?.assistantId &&
+    messages.some((message) => message.id === activeStreamingTurn.assistantId)
+  );
+
   // Timer for streaming elapsed time
   useEffect(() => {
-    if (!busy || !streamStartTime) {
+    if (!activeStreamingVisible || !streamStartTime) {
       return;
     }
     const interval = setInterval(() => {
       setStreamElapsed(Date.now() - streamStartTime);
     }, 100);
     return () => clearInterval(interval);
-  }, [busy, streamStartTime]);
+  }, [activeStreamingVisible, streamStartTime]);
 
   // Reset timer when streaming starts
   useEffect(() => {
-    if (busy && !streamStartTime) {
+    if (activeStreamingVisible && !streamStartTime) {
       setStreamStartTime(Date.now());
-    } else if (!busy && streamStartTime) {
+    } else if (!activeStreamingVisible && streamStartTime) {
       setStreamStartTime(null);
     }
-  }, [busy, streamStartTime]);
+  }, [activeStreamingVisible, streamStartTime]);
 
   // WebSocket connection for real-time reminder/message delivery
   useEffect(() => {
@@ -1626,10 +1643,25 @@ export default function App() {
     const signal = controller.signal;
 
     setBusy(true);
-    setActiveTools([]);
     setStreamingActivity([]);
     const projectId = selectedProject.id;
     const userId = user?.id ?? "local-user";
+    let targetConversationId = activeConversationId;
+
+    if (!targetConversationId) {
+      try {
+        const created = await createConversation(token, projectId);
+        targetConversationId = created.conversation.id;
+        setActiveConversationId(created.conversation.id);
+        setConversations((current) => current.some((c) => c.id === created.conversation.id) ? current : [created.conversation, ...current]);
+        setProjectConversationCounts((current) => ({ ...current, [projectId]: (current[projectId] ?? 0) + 1 }));
+      } catch (error) {
+        abortControllerRef.current = null;
+        setBusy(false);
+        setBanner(errorBanner(error, "Could not create conversation"));
+        return;
+      }
+    }
 
     const optimisticUser: ChatMessage = {
       id: `pending_user_${Date.now()}`,
@@ -1647,60 +1679,87 @@ export default function App() {
       content: ""
     };
 
+    streamingTurnRef.current = {
+      conversationId: targetConversationId,
+      assistantId: streamingId,
+      userId: optimisticUser.id,
+      activities: [],
+      startedAt: Date.now()
+    };
+    setStreamStartTime(streamingTurnRef.current.startedAt);
+    setStreamElapsed(0);
     setMessages((current) => [...current, optimisticUser, streamingAssistant]);
 
     try {
       await sendChatMessageStream(token, projectId, message.trim(), {
         onToken(content: string) {
-          setMessages((current) =>
-            current.map((m) => (
-              m.id === streamingId
-                ? { ...m, content: m.content + content }
-                : m
-            ))
-          );
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId || turn.conversationId !== activeConversationIdRef.current) return;
+          setMessages((current) => current.map((m) => (m.id === streamingId ? { ...m, content: m.content + content } : m)));
         },
         onActivity(event: ChatStreamActivityEvent) {
-          setStreamingActivity((current) => {
-            const dupe = current.find((a) => a.label === event.label && a.kind === event.kind);
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId) return;
+          turn.activities = (() => {
+            const current = turn.activities;
+            const dupe = current.find((a) => (event.id && a.id === event.id) || (!event.id && a.label === event.label && a.kind === event.kind && a.status === event.status));
             if (dupe) {
               return current.map((a) => (a.label === event.label && a.kind === event.kind ? event : a));
             }
             return [...current, event];
-          });
+          })();
+          if (turn.conversationId === activeConversationIdRef.current) {
+            setStreamingActivity(turn.activities);
+          }
         },
         onProgress(event) {
           const label = event.message.trim();
           if (!label) return;
-          setStreamingActivity((current) => {
-            const dupe = current.find((a) => a.label === label);
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId) return;
+          turn.activities = (() => {
+            const current = turn.activities;
+            const dupe = current.find((a) => a.label === label && a.kind === "context");
             if (dupe) return current;
             return [...current, { label, kind: "context" as const }];
-          });
+          })();
+          if (turn.conversationId === activeConversationIdRef.current) {
+            setStreamingActivity(turn.activities);
+          }
         },
         onLifecycle(event: ChatLifecycleEvent) {
           if (event.type === "turn_completed" && event.message) {
+            const turn = streamingTurnRef.current;
+            if (!turn || turn.assistantId !== streamingId || turn.conversationId !== activeConversationIdRef.current) return;
             setMessages((current) =>
               current.map((m) => (m.id === streamingId ? { ...m, content: event.message } : m))
             );
           }
         },
         onError(error) {
-          setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+          const turn = streamingTurnRef.current;
+          if (turn?.conversationId === activeConversationIdRef.current) {
+            setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+            setStreamingActivity([]);
+          }
+          streamingTurnRef.current = null;
           setBanner({ tone: "error", title: error.code, message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) });
         },
         onDone(response) {
-          const finalDuration = streamStartTime ? Date.now() - streamStartTime : 0;
-          const capturedActivities = [...streamingActivity];
-          setMessages((current) => [
-            ...current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId),
-            response.message,
-            {
-              ...response.assistantMessage,
-              activities: capturedActivities.length > 0 ? capturedActivities : undefined,
-              workDuration: finalDuration > 0 ? finalDuration : undefined
-            }
-          ]);
+          const turn = streamingTurnRef.current;
+          const capturedActivities = turn?.assistantId === streamingId ? [...turn.activities] : [];
+          const finalDuration = turn?.assistantId === streamingId ? Date.now() - turn.startedAt : 0;
+          if (turn?.conversationId === activeConversationIdRef.current) {
+            setMessages((current) => [
+              ...current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId),
+              response.message,
+              {
+                ...response.assistantMessage,
+                activities: capturedActivities.length > 0 ? capturedActivities : undefined,
+                workDuration: finalDuration > 0 ? finalDuration : undefined
+              }
+            ]);
+          }
           if (response.artifact) {
             setRepositoryItems((current) => [
               ...current.filter((item) => item.id !== response.artifact!.id),
@@ -1708,7 +1767,6 @@ export default function App() {
             ]);
           }
           if (response.conversationId) {
-            setActiveConversationId(response.conversationId);
             const updatedTitle = response.conversationTitle ?? "New conversation";
             setConversations((current) => {
               const existing = current.find((c) => c.id === response.conversationId);
@@ -1724,22 +1782,32 @@ export default function App() {
           }
           setChatProviderDiagnostics(response.provider);
           setChatProviderRequestId(response.requestId);
-          setActiveTools([]);
-          setStreamingActivity([]);
+          if (turn?.conversationId === activeConversationIdRef.current) {
+            setStreamingActivity([]);
+          }
           setStreamStartTime(null);
           setStreamElapsed(0);
+          streamingTurnRef.current = null;
           setBanner(null);
         }
-      }, activeConversationId ?? undefined, signal);
+      }, targetConversationId ?? undefined, signal);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
-        setStreamingActivity([]);
+        const turn = streamingTurnRef.current;
+        if (turn?.conversationId === activeConversationIdRef.current) {
+          setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+          setStreamingActivity([]);
+        }
+        streamingTurnRef.current = null;
         setBanner(null);
         return;
       }
-      setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
-      setStreamingActivity([]);
+      const turn = streamingTurnRef.current;
+      if (turn?.conversationId === activeConversationIdRef.current) {
+        setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+        setStreamingActivity([]);
+      }
+      streamingTurnRef.current = null;
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
       } else {
@@ -1754,6 +1822,7 @@ export default function App() {
   function handleStop() {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    streamingTurnRef.current = null;
   }
 
   async function handleNewChat() {
@@ -1764,24 +1833,41 @@ export default function App() {
       setChatProviderRequestId(undefined);
       return;
     }
-    setActiveConversationId(null);
-    setMessages([]);
-    setStreamingActivity([]);
-    setChatProviderDiagnostics(null);
-    setChatProviderRequestId(undefined);
-    setActiveTab("chat");
-    setBanner({
-      tone: "info",
-      title: "New chat ready",
-      message: "Send a message to start a new conversation."
-    });
+    setBusy(true);
+    try {
+      const created = await createConversation(token, selectedProject.id);
+      setConversations((current) => current.some((c) => c.id === created.conversation.id) ? current : [created.conversation, ...current]);
+      setProjectConversationCounts((current) => ({ ...current, [selectedProject.id]: (current[selectedProject.id] ?? 0) + 1 }));
+      setActiveConversationId(created.conversation.id);
+      setMessages([]);
+      setStreamingActivity([]);
+      setChatProviderDiagnostics(null);
+      setChatProviderRequestId(undefined);
+      setActiveTab("chat");
+      setBanner({
+        tone: "info",
+        title: "New chat ready",
+        message: "Send a message to start a new conversation."
+      });
+    } catch (error) {
+      setBanner(errorBanner(error, "Could not create conversation"));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleSelectConversation(convId: string) {
     if (!token || !selectedProject) return;
     if (convId === activeConversationId) return;
-    setBusy(true);
-    setStreamingActivity([]);
+    const visibleStreamingTurn = streamingTurnRef.current;
+    const switchingAwayFromStreamingTurn = visibleStreamingTurn?.conversationId === activeConversationId;
+    if (switchingAwayFromStreamingTurn) {
+      setStreamingActivity([]);
+      setStreamStartTime(null);
+      setStreamElapsed(0);
+    } else {
+      setBusy(true);
+    }
     try {
       const result = await selectConversation(token, selectedProject.id, convId);
       setMessages(result.messages);
@@ -1794,7 +1880,9 @@ export default function App() {
         setBanner(errorBanner(error, "Could not load conversation"));
       }
     } finally {
-      setBusy(false);
+      if (!switchingAwayFromStreamingTurn) {
+        setBusy(false);
+      }
     }
   }
 
@@ -1918,7 +2006,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} streamingActivity={streamingActivity} streamStartTime={streamStartTime} streamElapsed={streamElapsed} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} streamingActivity={streamingActivity} streamStartTime={streamStartTime} streamElapsed={streamElapsed} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );
