@@ -32,6 +32,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
+import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -173,10 +174,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   memory.start();
   const skills = createGenericSkillRegistry();
 
+  // Structured JSON logging with file rotation (before scheduler so callbacks can use it)
+  const logDir = path.join(knowledgeBaseRoot(env), "..", "data");
+  const structuredLogger = new StructuredLogger({ dir: logDir, maxFileBytes: 5 * 1024 * 1024 });
+
   // Scheduler for reminders/cronjobs
   const schedulerDataDir = path.join(knowledgeBaseRoot(env), "..", "data");
   const scheduler = new SchedulerService(schedulerDataDir);
   scheduler.setOnFired((job) => {
+    structuredLogger.info("scheduler_job_fired", {
+      component: "scheduler",
+      projectId: job.projectId,
+      jobId: job.jobId,
+      jobMessage: job.message
+    });
+
     const msgs = store.messagesByProject[job.projectId] ?? [];
     const assistantMsg: ChatMessage = {
       id: nextMessageId(),
@@ -207,13 +219,33 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   });
   scheduler.start();
 
+  // Log when a job is scheduled
+  scheduler.onScheduled = (job) => {
+    structuredLogger.info("scheduler_job_scheduled", {
+      component: "scheduler",
+      projectId: job.projectId,
+      jobId: job.jobId,
+      jobMessage: job.message,
+      triggerAt: new Date(job.triggerAt).toISOString()
+    });
+  };
+
   const processRegistry = new ProcessRegistry();
-  const tools = createGenericToolRegistry(memory, scheduler, processRegistry);
+  const tools = createGenericToolRegistry(memory, scheduler, processRegistry, skills);
   tools.enableLogging(path.join(knowledgeBaseRoot(env), "..", "data"));
   const agentRuntime = new AgentRuntime({ memory, tools, skills });
   const kbRoot = knowledgeBaseRoot(env);
+
   const app = Fastify({
-    logger: false,
+    logger: {
+      level: "info",
+      formatters: {
+        level(label) {
+          return { level: label };
+        }
+      },
+      timestamp: () => `,"time":"${new Date().toISOString()}"`
+    },
     genReqId: (() => {
       let sequence = 0;
       return () => {
@@ -241,6 +273,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   // Vite dev server proxies /api requests so CORS is not needed for development.
   // Upgrade path: either use @fastify/cors@^8 or upgrade Fastify to v5.
   // void app.register(cors, { origin: true });
+
+  // Attach structured request logging
+  attachStructuredLogging(app, structuredLogger);
 
   app.get("/health", async (request) => ({
     ok: true,
@@ -1424,6 +1459,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.setErrorHandler((error, request, reply) => {
     if (error.validation) {
       return sendError(request, reply, 422, "chat_invalid", "Request payload is invalid.");
+    }
+
+    // Fastify content-type parser rejects empty body with application/json
+    const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+    if (code === "FST_ERR_CTP_EMPTY_JSON_BODY") {
+      return sendError(request, reply, 422, "request_invalid", "Request body must not be empty when Content-Type is application/json.");
     }
 
     request.log.error({ err: error, requestId: requestIdFor(request) }, "Unhandled API error");
