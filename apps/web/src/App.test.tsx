@@ -101,6 +101,21 @@ function deferredResponse() {
   return { promise, resolve };
 }
 
+function streamingResponse(chunks: string[]) {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new Response(new ReadableStream({
+    pull(controller) {
+      if (index >= chunks.length) return;
+      controller.enqueue(encoder.encode(`${chunks[index]}\n\n`));
+      index += 1;
+    },
+    cancel() {
+      index = chunks.length;
+    }
+  }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
 function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[]; artifacts?: unknown[]; documents?: unknown[] } = {}) {
   const project = options.project ?? alphaProject;
   return installFetch((url, init) => {
@@ -291,6 +306,82 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.getByRole("list", { name: /recent conversations/i })).toHaveTextContent("New conversation");
     expect(screen.queryByText("Existing context")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/provider diagnostics/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the running activity timeline expanded and only collapses it after final answer starts", async () => {
+    let releaseDone!: () => void;
+    const doneGate = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+    installFetch(async (url, init) => {
+      if (url === "/api/login") {
+        return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      }
+      if (url === "/api/session") {
+        return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      }
+      if (url === "/api/projects") {
+        return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      }
+      if (url === "/api/projects/project_alpha/select") {
+        return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
+      }
+      if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") {
+        return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      }
+      if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") {
+        return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      }
+      if (url === "/api/projects/project_alpha/conversations" && init?.method === "POST") {
+        return jsonResponse({ conversation: { id: "conv_streaming", title: "New conversation", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_new_conv" }, 201);
+      }
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        await doneGate;
+        return streamingResponse([
+          "event: activity\ndata: " + JSON.stringify({ id: "act_1", label: "I am checking project context.", kind: "context", requestId: "req_stream" }),
+          "event: activity\ndata: " + JSON.stringify({ id: "act_2", label: "Ran 2 commands", kind: "tool", tool: "shell", status: "done", detail: "git status; git fetch origin", requestId: "req_stream" }),
+          "event: token\ndata: " + JSON.stringify({ content: "Final answer ready." }),
+          "event: done\ndata: " + JSON.stringify({
+            message: { id: "msg_000001", projectId: "project_alpha", userId: "user_ada", role: "user", content: "timeline please" },
+            assistantMessage: { id: "msg_000002", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Final answer ready." },
+            conversationId: "conv_streaming",
+            conversationTitle: "Timeline please",
+            provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
+            fallbackUsed: false,
+            requestId: "req_stream"
+          })
+        ]);
+      }
+      if (url === "/api/registry") {
+        return jsonResponse(registryBody());
+      }
+      if (url === "/api/projects/project_alpha/management") {
+        return jsonResponse(managementBody());
+      }
+      if (url === `/api/projects/project_alpha/knowledge-base`) {
+        return jsonResponse({ documents: [], requestId: "req_kb" });
+      }
+      if (url === `/api/projects/project_alpha/repository`) {
+        return jsonResponse({ artifacts: [], requestId: "req_repo" });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), "timeline please");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+
+    expect(await screen.findByText(/Working for/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Worked for/i)).not.toBeInTheDocument();
+
+    releaseDone();
+
+    const assistantMessage = await screen.findByRole("article", { name: /assistant message/i });
+    expect(assistantMessage).toHaveTextContent(/Worked for/);
+    expect(assistantMessage).toHaveTextContent(/Final answer ready/);
+    expect(within(assistantMessage).getByText(/Worked for/).closest("details")).not.toHaveAttribute("open");
   });
 
   it("guards the workspace when unauthenticated and clears invalid stored tokens", async () => {

@@ -5340,7 +5340,8 @@ p {
 /* --- Worked Timeline --- */
 
 .worked-timeline {
-  margin: 0 0 var(--space-2);
+  color: #262626;
+  margin: 0 0 var(--space-3);
   padding: 0;
   background: transparent;
   border: none;
@@ -5350,18 +5351,18 @@ p {
 .worked-timeline-header {
   display: flex;
   align-items: center;
-  gap: 0.42rem;
-  font-size: var(--font-size-sm);
+  gap: 0.35rem;
+  font-size: 0.95rem;
   font-weight: var(--font-weight-normal);
-  color: #737373;
+  color: #7a7a7a;
   cursor: pointer;
   user-select: none;
   list-style: none;
-  padding: 0.15rem 0;
+  padding: 0.2rem 0 0.55rem;
 }
 
 .worked-timeline-header:hover {
-  color: #404040;
+  color: #5c5c5c;
 }
 
 .worked-timeline-header::-webkit-details-marker {
@@ -5369,38 +5370,47 @@ p {
 }
 
 .worked-timeline-header .workspace-icon {
-  width: 0.82rem;
-  height: 0.82rem;
-  opacity: 0.62;
+  width: 0.9rem;
+  height: 0.9rem;
+  opacity: 0.68;
+  stroke-width: 1.7;
 }
 
 .worked-timeline-chevron {
-  margin-left: auto;
-  transition: transform 0.2s ease;
-  opacity: 0.5;
+  margin-left: 0.1rem;
+  transition: transform 0.16s ease;
+  opacity: 0.55;
 }
 
 .worked-timeline[open] .worked-timeline-chevron {
   transform: rotate(180deg);
 }
 
-.message-streaming .worked-timeline-header {
+.worked-timeline-running .worked-timeline-header {
+  cursor: default;
+  user-select: text;
+}
+
+.message-streaming .worked-timeline-running {
   position: relative;
   overflow: hidden;
 }
 
-.message-streaming .worked-timeline-header::after {
+.message-streaming .worked-timeline-running::after {
   content: "";
   position: absolute;
   inset: 0;
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(115, 115, 115, 0.08) 48%,
+    transparent 38%,
+    rgba(255, 255, 255, 0.72) 48%,
+    rgba(170, 170, 170, 0.14) 54%,
     transparent 100%
   );
-  background-size: 220% 100%;
-  animation: timeline-shimmer 2s ease-in-out infinite;
+  background-size: 260% 100%;
+  animation: timeline-shimmer 2.35s ease-in-out infinite;
+  mix-blend-mode: screen;
   pointer-events: none;
 }
 
@@ -5410,24 +5420,23 @@ p {
 }
 
 .worked-timeline-content {
-  margin-top: 0.15rem;
   display: flex;
   flex-direction: column;
-  gap: 0.08rem;
-  padding-left: 1.25rem;
+  gap: 0.65rem;
+  padding-left: 0;
 }
 
 .activity-row {
-  color: #737373;
-  font-size: var(--font-size-sm);
+  color: #8b8b8b;
+  font-size: 0.95rem;
 }
 
 .activity-row-summary {
   display: flex;
   align-items: center;
-  gap: 0.42rem;
-  min-height: 1.5rem;
-  padding: 0.08rem 0;
+  gap: 0.48rem;
+  min-height: 1.35rem;
+  padding: 0;
   background: transparent;
   cursor: pointer;
   list-style: none;
@@ -5444,31 +5453,43 @@ p {
 }
 
 .activity-row-summary:hover {
-  color: #404040;
+  color: #6f6f6f;
 }
 
 .activity-row-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 0.86rem;
-  height: 0.86rem;
+  width: 1rem;
+  height: 1rem;
   flex-shrink: 0;
-  opacity: 0.58;
+  opacity: 0.72;
 }
 
 .activity-row-icon .workspace-icon {
-  width: 0.78rem;
-  height: 0.78rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  stroke-width: 1.65;
 }
 
 .activity-row.is-running .activity-row-icon {
-  animation: tool-spin 1.1s linear infinite;
-  opacity: 0.7;
+  animation: activity-breathe 1.55s ease-in-out infinite;
+  opacity: 0.76;
+}
+
+.activity-row.is-running .activity-row-summary::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.72) 48%, rgba(150, 150, 150, 0.12) 54%, transparent 100%);
+  background-size: 240% 100%;
+  content: "";
+  inset: 0;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  position: absolute;
+  animation: timeline-shimmer 2.1s ease-in-out infinite;
 }
 
 .activity-row-label {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5476,7 +5497,7 @@ p {
 }
 
 .activity-row-chevron {
-  margin-left: auto;
+  margin-left: 0.05rem;
   opacity: 0.46;
   transition: transform 0.16s ease;
 }
@@ -5489,7 +5510,7 @@ p {
   color: #8a8a8a;
   display: grid;
   gap: 0.1rem;
-  padding: 0 0 0.35rem 1.28rem;
+  padding: 0.28rem 0 0.1rem 1.48rem;
 }
 
 .activity-row-details p {
@@ -5498,6 +5519,22 @@ p {
   line-height: 1.45;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.activity-progress-text {
+  color: #262626;
+  font-size: 1rem;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.activity-progress-pending {
+  color: #8b8b8b;
+}
+
+@keyframes activity-breathe {
+  0%, 100% { opacity: 0.48; }
+  50% { opacity: 0.9; }
 }
 
 /* --- Final Answer --- */

@@ -65,6 +65,8 @@ type IconName =
   | "clock"
   | "copy"
   | "cpu"
+  | "edit-3"
+  | "file-search"
   | "file-chart"
   | "file-text"
   | "folder"
@@ -89,6 +91,7 @@ type IconName =
   | "shield-check"
   | "snowflake"
   | "table"
+  | "terminal"
   | "thermometer"
   | "thumbs-down"
   | "thumbs-up"
@@ -176,7 +179,9 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     clock: <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
     copy: <><rect width="14" height="14" x="8" y="8" rx="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></>,
     cpu: <><rect x="7" y="7" width="10" height="10" rx="2" /><path d="M9 1v3" /><path d="M15 1v3" /><path d="M9 20v3" /><path d="M15 20v3" /><path d="M20 9h3" /><path d="M20 14h3" /><path d="M1 9h3" /><path d="M1 14h3" /></>,
+    "edit-3": <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>,
     "file-chart": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 18v-3" /><path d="M12 18v-6" /><path d="M16 18v-4" /></>,
+    "file-search": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h7" /><path d="M14 2v6h6" /><path d="M9 15h2" /><circle cx="17" cy="17" r="3" /><path d="m21 21-1.8-1.8" /></>,
     "file-text": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 13h8" /><path d="M8 17h6" /></>,
     folder: <><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z" /></>,
     "folder-open": <><path d="m6 14 1.5-3h12.8a1.7 1.7 0 0 1 1.6 2.2l-1.8 5.4A2 2 0 0 1 18.2 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3" /></>,
@@ -200,6 +205,7 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     "shield-check": <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></>,
     snowflake: <><path d="M12 2v20" /><path d="m17 5-10 14" /><path d="m7 5 10 14" /><path d="M2 12h20" /></>,
     table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18" /><path d="M9 4v16" /></>,
+    terminal: <><path d="m4 17 6-5-6-5" /><path d="M12 19h8" /></>,
     thermometer: <><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z" /></>,
     "thumbs-down": <><path d="M17 14V2" /><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.2-7A2 2 0 0 1 6.4 3H20v11h-4.3a2 2 0 0 0-1.7 1l-3 5a2 2 0 0 1-3.7-1.5z" /></>,
     "thumbs-up": <><path d="M7 10v12" /><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.2 7a2 2 0 0 1-1.9 1.4H4V10h4.3a2 2 0 0 0 1.7-1l3-5a2 2 0 0 1 3.7 1.5z" /></>,
@@ -670,10 +676,10 @@ function formatElapsedTime(ms: number): string {
 
 function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): IconName {
   const normalized = label.toLowerCase();
-  if (kind === "tool" && (normalized.includes("ran") || normalized.includes("running") || normalized.includes("command"))) return "cpu";
-  if (kind === "tool" && normalized.includes("search")) return "search-code";
-  if (kind === "tool" && normalized.includes("edit")) return "file-text";
+  if (kind === "tool" && normalized.includes("search")) return "file-search";
+  if (kind === "tool" && normalized.includes("edit")) return "edit-3";
   if (kind === "file" || normalized.includes("read")) return "file-text";
+  if (kind === "tool" && (normalized.includes("ran") || normalized.includes("running") || normalized.includes("command"))) return "terminal";
   if (kind === "kb") return "book-open";
   if (kind === "memory") return "clock";
   if (kind === "response") return "message";
@@ -681,9 +687,12 @@ function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): Ico
 }
 
 function ActivityRow({ activity, streaming }: { activity: ChatStreamActivityEvent; streaming: boolean }) {
+  if (activity.kind !== "tool") {
+    return <p className="activity-progress-text">{activity.label}</p>;
+  }
   const details = [activity.detail, activity.exitCode !== undefined ? `exit ${activity.exitCode}` : undefined, activity.durationMs !== undefined ? `${activity.durationMs}ms` : undefined, activity.output]
     .filter((item): item is string => Boolean(item && item.trim()));
-  const icon = activity.status === "running" ? "rotate" : activityIcon(activity.kind, activity.label);
+  const icon = activityIcon(activity.kind, activity.label);
   return (
     <details className={`activity-row activity-${activity.kind}${streaming && activity.status === "running" ? " is-running" : ""}`}>
       <summary className="activity-row-summary">
@@ -815,7 +824,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
           const messageDuration = isStreaming ? streamElapsed : (message.workDuration ?? 0);
           const hasActivity = messageActivities.length > 0 || isStreaming;
           const hasContent = message.content.trim().length > 0;
-          const isCollapsed = timelineCollapsed[message.id] ?? (hasContent && !isStreaming);
+          const isCollapsed = timelineCollapsed[message.id] ?? hasContent;
 
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
@@ -824,10 +833,22 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                   <p>{message.content}</p>
                 ) : (
                   <>
-                    {hasActivity ? (
+                    {hasActivity && isStreaming && !hasContent ? (
+                      <section className="worked-timeline worked-timeline-running" aria-label="Assistant activity">
+                        <div className="worked-timeline-header" aria-live="polite">
+                          <span>Working for {formatElapsedTime(messageDuration)}</span>
+                        </div>
+                        <div className="worked-timeline-content">
+                          {messageActivities.length > 0 ? messageActivities.map((act, i) => (
+                            <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} />
+                          )) : (
+                            <p className="activity-progress-text activity-progress-pending">Working</p>
+                          )}
+                        </div>
+                      </section>
+                    ) : hasActivity ? (
                       <details className="worked-timeline" open={!isCollapsed} onToggle={(e) => setTimelineCollapsed(prev => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}>
                         <summary className="worked-timeline-header">
-                          <Icon name="clock" />
                           <span>Worked for {formatElapsedTime(messageDuration)}</span>
                           <Icon name="chevron-down" className="worked-timeline-chevron" />
                         </summary>
@@ -835,12 +856,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                           {messageActivities.length > 0 ? messageActivities.map((act, i) => (
                             <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} />
                           )) : (
-                            <div className="activity-row is-running">
-                              <div className="activity-row-summary">
-                                <span className="activity-row-icon"><Icon name="rotate" /></span>
-                                <span className="activity-row-label">Working</span>
-                              </div>
-                            </div>
+                            <p className="activity-progress-text activity-progress-pending">Worked</p>
                           )}
                         </div>
                       </details>
