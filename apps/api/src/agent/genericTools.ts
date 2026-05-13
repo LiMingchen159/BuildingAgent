@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import { exec } from "node:child_process";
 import type { AgentMemoryStore } from "./memory.js";
 import { knowledgeBaseRoot } from "./knowledgeBase.js";
+import type { AgentSkillRegistry } from "./skills.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
 import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
 import { parseCancelCommand, parseListCommand, parseTimeExpression, nextCronTime } from "../scheduler.js";
+import type { ProcessRegistry } from "./processRegistry.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_READ_BYTES = 200_000;
@@ -39,7 +41,7 @@ function resolveSafePath(baseRoot: string, requested: string): string | null {
   return normalized;
 }
 
-export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService): AgentToolRegistry {
+export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService, processRegistry?: ProcessRegistry, skills?: AgentSkillRegistry): AgentToolRegistry {
   const registry = new AgentToolRegistry();
   const tools: AgentTool[] = [
     {
@@ -739,11 +741,294 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
             return { error: `Unknown action: ${action}. Supported: list, get, create, update, pause, resume, remove, trigger.` };
         }
       }
+    },
+
+    // --- Web search tools ---
+    {
+      name: "web_search",
+      category: "web",
+      description: "Search the web using DuckDuckGo Instant Answer API. Returns abstracts, related topics, and source URLs. Free, no API key required.",
+      schema: {
+        name: "web_search",
+        description: "Search the web for information. Returns abstract, related topics, and source links. Use for looking up current information, documentation, or general knowledge.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Search query." }
+          },
+          required: ["query"]
+        }
+      },
+      async run(args, context) {
+        const query = textArg(args, "query");
+        if (!query) return { error: "query is required." };
+        try {
+          const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10_000);
+          const response = await fetch(url, { signal: controller.signal });
+          clearTimeout(timer);
+          if (!response.ok) {
+            return { error: `Search returned HTTP ${response.status}.` };
+          }
+          const data = (await response.json()) as Record<string, unknown>;
+          const results: Array<{ title: string; snippet: string; url?: string }> = [];
+
+          // Abstract
+          if (typeof data.AbstractText === "string" && data.AbstractText.trim()) {
+            const abstractUrl = typeof data.AbstractURL === "string" ? data.AbstractURL : null;
+            results.push({
+              title: (typeof data.Heading === "string" ? data.Heading : "Abstract"),
+              snippet: data.AbstractText as string,
+              ...(abstractUrl ? { url: abstractUrl } : {})
+            } as { title: string; snippet: string; url?: string });
+          }
+
+          // Related topics
+          const relatedTopics = data.RelatedTopics as Array<Record<string, unknown>> | undefined;
+          if (Array.isArray(relatedTopics)) {
+            for (const topic of relatedTopics) {
+              if (typeof topic.Text === "string") {
+                const topicUrl = typeof topic.FirstURL === "string" ? topic.FirstURL : null;
+                results.push({
+                  title: typeof topic.FirstURL === "string"
+                    ? decodeURIComponent((topic.FirstURL as string).split("/").pop() ?? "").replace(/_/g, " ")
+                    : "",
+                  snippet: topic.Text,
+                  ...(topicUrl ? { url: topicUrl } : {})
+                } as { title: string; snippet: string; url?: string });
+              }
+            }
+          }
+
+          // Answer
+          if (typeof data.Answer === "string" && data.Answer.trim()) {
+            results.unshift({
+              title: "Answer",
+              snippet: data.Answer
+            });
+          }
+
+          return {
+            query,
+            results: results.slice(0, 20),
+            resultCount: results.length,
+            source: "DuckDuckGo"
+          };
+        } catch (error) {
+          return {
+            error: error instanceof Error ? error.message : "Web search failed.",
+            query
+          };
+        }
+      }
+    },
+    {
+      name: "web_extract",
+      category: "web",
+      description: "Fetch and extract readable text content from a URL. Strips HTML tags, scripts, and styles.",
+      schema: {
+        name: "web_extract",
+        description: "Fetch a URL and extract its readable text content. Use to read documentation pages, articles, or any web content.",
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "URL to fetch and extract text from." },
+            max_length: { type: "number", description: "Maximum characters to return (default 10,000, max 50,000)." }
+          },
+          required: ["url"]
+        }
+      },
+      async run(args, context) {
+        const url = textArg(args, "url");
+        if (!url) return { error: "url is required." };
+        const maxLen = Math.min(numArg(args, "max_length", 10_000), 50_000);
+
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15_000);
+          const response = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+              "User-Agent": "BuildingAgent/1.0 (web-extract-bot)",
+              "Accept": "text/html,text/plain"
+            }
+          });
+          clearTimeout(timer);
+
+          if (!response.ok) {
+            return { error: `HTTP ${response.status} from ${url}.` };
+          }
+
+          const contentType = response.headers.get("content-type") ?? "";
+          if (!contentType.includes("text/") && !contentType.includes("application/json")) {
+            return { error: `Unsupported content type: ${contentType}. Only text content is supported.` };
+          }
+
+          const html = await response.text();
+          // Simple HTML-to-text: remove scripts, styles, tags
+          const text = html
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#x27;/g, "'")
+            .replace(/&nbsp;/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+          const truncated = text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+
+          return {
+            url,
+            text: truncated,
+            length: truncated.length,
+            truncated: text.length > maxLen
+          };
+        } catch (error) {
+          return {
+            error: error instanceof Error ? error.message : "Web extract failed.",
+            url
+          };
+        }
+      }
+    },
+
+    // --- Background process management tools ---
+    {
+      name: "process_start",
+      category: "utility",
+      description: "Start a command in the background. Returns a process_id for status checking and control.",
+      schema: {
+        name: "process_start",
+        description: "Run a shell command in the background. Use for long-running tasks. Returns a process_id for use with process_status/process_kill.",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string", description: "Shell command to run in the background." }
+          },
+          required: ["command"]
+        }
+      },
+      async run(args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const command = textArg(args, "command");
+        if (!command) return { error: "command is required." };
+        const processId = processRegistry.spawn(command);
+        const info = processRegistry.status(processId);
+        return {
+          processId,
+          command,
+          status: info?.status ?? "running",
+          startedAt: info?.startedAt ?? new Date().toISOString()
+        };
+      }
+    },
+    {
+      name: "process_status",
+      category: "utility",
+      description: "Get the current status and output of a background process.",
+      schema: {
+        name: "process_status",
+        description: "Check the status of a background process. Returns stdout, stderr, exit code, and status.",
+        parameters: {
+          type: "object",
+          properties: {
+            process_id: { type: "string", description: "Process ID from process_start." }
+          },
+          required: ["process_id"]
+        }
+      },
+      async run(args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const processId = typeof args.process_id === "string" ? args.process_id : "";
+        if (!processId) return { error: "process_id is required." };
+        const info = processRegistry.status(processId);
+        if (!info) return { error: `Process not found: ${processId}` };
+        return {
+          processId: info.processId,
+          status: info.status,
+          command: info.command,
+          stdout: info.stdout.slice(-5000),
+          stderr: info.stderr.slice(-5000),
+          exitCode: info.exitCode,
+          startedAt: info.startedAt,
+          finishedAt: info.finishedAt
+        };
+      }
+    },
+    {
+      name: "process_kill",
+      category: "utility",
+      description: "Terminate a running background process.",
+      schema: {
+        name: "process_kill",
+        description: "Kill a background process by its process_id.",
+        parameters: {
+          type: "object",
+          properties: {
+            process_id: { type: "string", description: "Process ID from process_start." }
+          },
+          required: ["process_id"]
+        }
+      },
+      async run(args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const processId = typeof args.process_id === "string" ? args.process_id : "";
+        if (!processId) return { error: "process_id is required." };
+        const ok = processRegistry.kill(processId);
+        return ok
+          ? { killed: true, processId }
+          : { error: `Could not kill process: ${processId}. It may have already finished.` };
+      }
+    },
+    {
+      name: "process_list",
+      category: "utility",
+      description: "List all background processes (newest first).",
+      schema: {
+        name: "process_list",
+        description: "List all background processes and their statuses.",
+        parameters: { type: "object", properties: {} }
+      },
+      async run(_args, context) {
+        if (!processRegistry) {
+          return { error: "Process registry is not available." };
+        }
+        const processes = processRegistry.list();
+        return {
+          processes: processes.map((p) => ({
+            processId: p.processId,
+            command: p.command.slice(0, 100),
+            status: p.status,
+            exitCode: p.exitCode,
+            startedAt: p.startedAt,
+            finishedAt: p.finishedAt
+          })),
+          count: processes.length
+        };
+      }
     }
   ];
 
   for (const tool of tools) {
     registry.register(tool);
+  }
+
+  // Register skill CRUD tools if a skill registry is available
+  if (skills) {
+    for (const tool of skills.buildCrudToolDefs()) {
+      registry.register(tool);
+    }
   }
 
   return registry;
