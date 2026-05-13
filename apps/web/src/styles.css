@@ -4800,30 +4800,32 @@ p {
   display: flex;
   flex: 1;
   gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  min-height: 2.5rem;
+  padding: 0 1rem;
 }
 
 .recording-waveform {
   align-items: center;
   display: flex;
-  gap: 0.25rem;
-  height: 1.5rem;
+  flex: 1;
+  gap: 0.5rem;
+  height: 100%;
+  justify-content: space-around;
+  min-height: 2.5rem;
 }
 
 .recording-waveform span {
-  animation: waveform-pulse 1.2s ease-in-out infinite;
-  background: #3b82f6;
-  border-radius: 2px;
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  border-radius: 3px;
+  flex: 1;
   height: 100%;
-  opacity: 0.6;
-  width: 3px;
+  max-height: 2.5rem;
+  min-width: 4px;
+  opacity: 0.8;
+  transform-origin: center;
+  transition: transform 0.1s ease-out;
+  will-change: transform;
 }
-
-.recording-waveform span:nth-child(1) { animation-delay: 0s; }
-.recording-waveform span:nth-child(2) { animation-delay: 0.15s; }
-.recording-waveform span:nth-child(3) { animation-delay: 0.3s; }
-.recording-waveform span:nth-child(4) { animation-delay: 0.45s; }
-.recording-waveform span:nth-child(5) { animation-delay: 0.6s; }
 
 @keyframes waveform-pulse {
   0%, 100% { transform: scaleY(0.3); }
@@ -4834,13 +4836,15 @@ p {
   .recording-waveform span {
     animation: none;
     opacity: 0.8;
-    transform: scaleY(0.6);
+    transform: scaleY(0.6) !important;
+    transition: none;
   }
 }
 
 .recording-label {
   color: #6b7280;
   font-size: 0.9375rem;
+  white-space: nowrap;
 }
 
 .composer-transcribing-indicator {
@@ -4856,6 +4860,12 @@ p {
 .composer-box.is-recording,
 .composer-box.is-transcribing {
   background: #f9fafb;
+  min-height: 2.5rem;
+}
+
+.composer-box.is-recording .composer-recording-indicator,
+.composer-box.is-transcribing .composer-transcribing-indicator {
+  min-height: 2.5rem;
 }
 
 

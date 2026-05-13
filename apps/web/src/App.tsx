@@ -677,12 +677,16 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing" | "error">("idle");
   const [voiceError, setVoiceError] = useState("");
+  const [audioLevels, setAudioLevels] = useState<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wasEmptyRef = useRef(messages.length === 0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
   const canWrite = project.permissions.includes("chat:write");
   const hasMessages = messages.length > 0;
   const latestMessage = messages[messages.length - 1];
@@ -750,6 +754,34 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       };
       mediaRecorder.start();
       mediaRecorderRef.current = mediaRecorder;
+
+      // Setup audio analysis for waveform visualization
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      // Start visualizing audio levels
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const updateLevels = () => {
+        if (!analyserRef.current || voiceState !== "recording") return;
+        analyser.getByteFrequencyData(dataArray);
+
+        // Sample 10 frequency bands and normalize to 0-1
+        const levels = [];
+        const step = Math.floor(dataArray.length / 10);
+        for (let i = 0; i < 10; i++) {
+          const value = dataArray[i * step] || 0;
+          levels.push(value / 255);
+        }
+        setAudioLevels(levels);
+        animationFrameRef.current = requestAnimationFrame(updateLevels);
+      };
+      updateLevels();
+
       setVoiceState("recording");
       setVoiceError("");
     } catch (error) {
@@ -764,7 +796,19 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
       mediaRecorderRef.current = null;
     }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    if (analyserRef.current) {
+      analyserRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
     audioChunksRef.current = [];
+    setAudioLevels([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     setVoiceState("idle");
     setVoiceError("");
   }
@@ -774,6 +818,19 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     const recorder = mediaRecorderRef.current;
     recorder.stop();
     recorder.stream.getTracks().forEach((track) => track.stop());
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    if (analyserRef.current) {
+      analyserRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
     setVoiceState("transcribing");
 
     try {
@@ -803,6 +860,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     } finally {
       mediaRecorderRef.current = null;
       audioChunksRef.current = [];
+      setAudioLevels([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
   }
 
@@ -839,9 +897,10 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
           {isRecording ? (
             <div className="composer-recording-indicator" aria-live="polite">
               <span className="recording-waveform" aria-hidden="true">
-                <span /><span /><span /><span /><span />
+                {audioLevels.map((level, i) => (
+                  <span key={i} style={{ transform: `scaleY(${Math.max(0.1, level)})` }} />
+                ))}
               </span>
-              <span className="recording-label">Recording...</span>
             </div>
           ) : isTranscribing ? (
             <div className="composer-transcribing-indicator" aria-live="polite">
