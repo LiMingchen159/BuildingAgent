@@ -864,26 +864,21 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         if (!analyserRef.current) return;
         analyser.getByteFrequencyData(dataArray);
 
-        // Get average volume
+        // Get average volume for the leftmost point
         const sum = dataArray.reduce((a, b) => a + b, 0);
         const average = sum / dataArray.length / 255;
 
-        // Shift all values to the right (wave propagation)
+        // Shift all values to the right (each point copies its left neighbor)
         for (let i = smoothedLevels.length - 1; i > 0; i--) {
           smoothedLevels[i] = smoothedLevels[i - 1];
         }
 
-        // Add new value at the left with smoothing
-        smoothedLevels[0] = average * 0.7 + smoothedLevels[0] * 0.3;
-
-        // Apply decay to all positions (wave fades as it travels)
-        for (let i = 0; i < smoothedLevels.length; i++) {
-          smoothedLevels[i] *= 0.95; // Slower decay for longer trails
-        }
+        // Set the leftmost point to current audio level
+        smoothedLevels[0] = average;
 
         // Copy to state with slight randomness for natural feel
         const levels = smoothedLevels.map((level) => {
-          const noise = (Math.random() - 0.5) * 0.03;
+          const noise = (Math.random() - 0.5) * 0.02;
           return Math.max(0, Math.min(1, level + noise));
         });
 
