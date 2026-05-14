@@ -932,10 +932,21 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     setVoiceState("transcribing");
 
     try {
+      // Get token from localStorage
+      const stored = window.localStorage.getItem("building-agent.session.v1");
+      const token = stored ? (JSON.parse(stored) as { token?: string }).token : "";
+
+      if (!token) {
+        throw new Error("Authentication required");
+      }
+
       const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
       const response = await fetch("/api/stt/transcribe", {
         method: "POST",
-        headers: { "Content-Type": "audio/webm" },
+        headers: {
+          "Content-Type": "audio/webm",
+          "X-Auth-Token": token
+        },
         body: audioBlob
       });
 
