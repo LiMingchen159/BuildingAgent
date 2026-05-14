@@ -28,6 +28,9 @@ import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
+import { writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { randomUUID } from "crypto";
+import { resolve, join } from "path";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,45 +101,65 @@ function nextConversationId(): string {
   return `conv_${String(conversationSequence).padStart(6, "0")}`;
 }
 
-async function transcribeAudioViaParaformer(apiKey: string, model: string, audioBuffer: Buffer): Promise<string> {
-  // Use Aliyun DashScope Paraformer file recognition RESTful API
-  // https://help.aliyun.com/zh/model-studio/developer-reference/paraformer-file-transcription-api
+async function transcribeAudioViaParaformer(apiKey: string, model: string, audioBuffer: Buffer, baseUrl: string): Promise<string> {
+  // Save audio to temp directory and provide URL for Aliyun API
+  const tempDir = resolve(process.cwd(), '.temp-audio');
+  try {
+    mkdirSync(tempDir, { recursive: true });
+  } catch {
+    // Directory already exists
+  }
 
-  const response = await fetch("https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: model,
-      input: {
-        audio: audioBuffer.toString("base64")
+  const audioId = randomUUID();
+  const audioFile = join(tempDir, `${audioId}.webm`);
+  writeFileSync(audioFile, audioBuffer);
+
+  const audioUrl = `${baseUrl}/temp-audio/${audioId}.webm`;
+
+  try {
+    const response = await fetch("https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
       },
-      parameters: {
-        language_hints: ["zh", "en", "yue"]
-      }
-    })
-  });
+      body: JSON.stringify({
+        model: model,
+        input: {
+          file_urls: [audioUrl]
+        },
+        parameters: {
+          language_hints: ["zh", "en", "yue"]
+        }
+      })
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Aliyun API error ${response.status}: ${errorText}`);
-  }
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Aliyun API error ${response.status}: ${errorText}`);
+    }
 
-  const result = await response.json() as {
-    output?: {
-      results?: Array<{ transcription_text?: string }>;
+    const result = await response.json() as {
+      output?: {
+        results?: Array<{ transcription_text?: string }>;
+      };
+      message?: string;
     };
-    message?: string;
-  };
 
-  if (result.output?.results && result.output.results.length > 0) {
-    const text = result.output.results.map(r => r.transcription_text || "").join(" ").trim();
-    return text;
+    if (result.output?.results && result.output.results.length > 0) {
+      const text = result.output.results.map(r => r.transcription_text || "").join(" ").trim();
+      return text;
+    }
+
+    throw new Error(result.message || "No transcription result");
+  } finally {
+    // Clean up temp file
+    try {
+      unlinkSync(audioFile);
+    } catch {
+      // Ignore cleanup errors
+    }
   }
-
-  throw new Error(result.message || "No transcription result");
 }
       } catch {
         // Ignore parse errors
@@ -1762,6 +1785,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   });
 
+  // Serve temporary audio files for Aliyun STT API
+  app.get("/temp-audio/:filename", async (request, reply) => {
+    const { filename } = request.params as { filename: string };
+    const tempDir = resolve(process.cwd(), '.temp-audio');
+    const filePath = join(tempDir, filename);
+
+    try {
+      const { readFileSync } = await import('fs');
+      const fileBuffer = readFileSync(filePath);
+      reply.type('audio/webm').send(fileBuffer);
+    } catch (error) {
+      return sendError(request, reply, 404, "file_not_found", "Audio file not found");
+    }
+  });
+
   app.post("/api/stt/transcribe", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) {
@@ -1785,8 +1823,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return sendError(request, reply, 422, "stt_empty_audio", "Audio data is required.");
     }
 
+    // Get base URL for temp file hosting
+    const protocol = request.headers['x-forwarded-proto'] || 'http';
+    const host = request.headers['host'] || 'localhost:3000';
+    const baseUrl = `${protocol}://${host}`;
+
     try {
-      const text = await transcribeAudioViaParaformer(apiKey, model, rawBody);
+      const text = await transcribeAudioViaParaformer(apiKey, model, rawBody, baseUrl);
       return { text, requestId: requestIdFor(request) };
     } catch (error) {
       request.log.error({ err: error, requestId: requestIdFor(request) }, "STT transcription failed");

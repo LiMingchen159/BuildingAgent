@@ -868,19 +868,20 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         const sum = dataArray.reduce((a, b) => a + b, 0);
         const average = sum / dataArray.length / 255;
 
-        // Create wave propagation effect - shift previous values
+        // Shift all values to the right (wave propagation from left to right)
         for (let i = smoothedLevels.length - 1; i > 0; i--) {
           smoothedLevels[i] = smoothedLevels[i - 1] * 0.85; // Decay as wave propagates
         }
+        // New value enters from the left
         smoothedLevels[0] = average;
 
-        // Add some randomness for natural feel
-        const levels = smoothedLevels.map((level, i) => {
-          const noise = (Math.random() - 0.5) * 0.1;
+        // Copy to state with slight randomness for natural feel
+        const levels = smoothedLevels.map((level) => {
+          const noise = (Math.random() - 0.5) * 0.05;
           return Math.max(0, Math.min(1, level + noise));
         });
 
-        setAudioLevels([...levels]);
+        setAudioLevels(levels);
         animationFrameRef.current = requestAnimationFrame(updateLevels);
       };
       updateLevels();
