@@ -4839,11 +4839,25 @@ p {
 .composer-transcribing-indicator {
   color: #6b7280;
   font-size: 0.9375rem;
+  min-height: 2.25rem;
+  line-height: 2.25rem;
 }
 
-.composer-transcribing-indicator .spinner {
-  height: 1rem;
-  width: 1rem;
+.composer-transcribing-button {
+  align-items: center;
+  background: #e5e7eb;
+  border: 0;
+  border-radius: 999px !important;
+  box-shadow: none;
+  color: #6b7280;
+  cursor: not-allowed;
+  display: inline-flex;
+  flex: 0 0 2.25rem;
+  height: 2.25rem;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 !important;
+  width: 2.25rem;
 }
 
 .composer-box.is-recording,

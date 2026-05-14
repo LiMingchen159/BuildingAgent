@@ -730,8 +730,10 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const userScrolledUpRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const pcmBuffersRef = useRef<Float32Array[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const canWrite = project.permissions.includes("chat:write");
   const hasMessages = messages.length > 0;
@@ -839,6 +841,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       audioChunksRef.current = [];
+      pcmBuffersRef.current = [];
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
@@ -847,14 +850,27 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       mediaRecorder.start();
       mediaRecorderRef.current = mediaRecorder;
 
-      // Setup audio analysis for waveform visualization
-      const audioContext = new AudioContext();
+      // Setup audio analysis for waveform visualization AND PCM extraction
+      const audioContext = new AudioContext({ sampleRate: 16000 });
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
+
+      // Create ScriptProcessorNode to extract PCM data
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Copy to our buffer
+        pcmBuffersRef.current.push(new Float32Array(inputData));
+      };
+
       source.connect(analyser);
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
       audioContextRef.current = audioContext;
       analyserRef.current = analyser;
+      processorRef.current = processor;
 
       // Start visualizing audio levels
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -921,9 +937,21 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   async function handleConfirmRecording() {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
-    recorder.stop();
+
+    setVoiceState("transcribing");
+
+    // Wait for recorder to stop and collect all data
+    await new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+      recorder.stop();
+    });
+
     recorder.stream.getTracks().forEach((track) => track.stop());
 
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
     if (audioContextRef.current) {
       audioContextRef.current.close();
       audioContextRef.current = null;
@@ -936,8 +964,6 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       animationFrameRef.current = null;
     }
 
-    setVoiceState("transcribing");
-
     try {
       // Get token from localStorage
       const stored = window.localStorage.getItem("building-agent.session.v1");
@@ -947,12 +973,66 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         throw new Error("Authentication required");
       }
 
-      const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+      // Convert Float32Array PCM buffers to WAV file
+      const pcmBuffers = pcmBuffersRef.current;
+      if (pcmBuffers.length === 0) {
+        throw new Error("No audio data recorded");
+      }
+
+      // Calculate total length
+      const totalSamples = pcmBuffers.reduce((sum, buf) => sum + buf.length, 0);
+      const pcm16 = new Int16Array(totalSamples);
+      let offset = 0;
+
+      for (const buffer of pcmBuffers) {
+        for (let i = 0; i < buffer.length; i++) {
+          // Convert float32 [-1, 1] to int16 [-32768, 32767]
+          const s = Math.max(-1, Math.min(1, buffer[i]));
+          pcm16[offset++] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+      }
+
+      // Create WAV file header
+      const sampleRate = 16000;
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+      const blockAlign = numChannels * bitsPerSample / 8;
+      const dataSize = pcm16.length * 2;
+      const wavHeader = new ArrayBuffer(44);
+      const view = new DataView(wavHeader);
+
+      // "RIFF" chunk descriptor
+      view.setUint32(0, 0x52494646, false); // "RIFF"
+      view.setUint32(4, 36 + dataSize, true); // file size - 8
+      view.setUint32(8, 0x57415645, false); // "WAVE"
+
+      // "fmt " sub-chunk
+      view.setUint32(12, 0x666d7420, false); // "fmt "
+      view.setUint32(16, 16, true); // fmt chunk size
+      view.setUint16(20, 1, true); // audio format (1 = PCM)
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+
+      // "data" sub-chunk
+      view.setUint32(36, 0x64617461, false); // "data"
+      view.setUint32(40, dataSize, true);
+
+      const audioBlob = new Blob([wavHeader, pcm16.buffer], { type: "audio/wav" });
+      console.log("Audio blob size:", audioBlob.size, "bytes (WAV 16-bit, 16kHz)");
+
+      if (audioBlob.size === 0) {
+        throw new Error("No audio data recorded");
+      }
+
       const response = await fetch("/api/stt/transcribe", {
         method: "POST",
         headers: {
-          "Content-Type": "audio/webm",
-          "X-Auth-Token": token
+          "Content-Type": "audio/wav",
+          "Authorization": `Bearer ${token}`
         },
         body: audioBlob
       });
@@ -962,7 +1042,9 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       }
 
       const result = await response.json();
+      console.log("Transcription result:", result);
       const text = result.text || "";
+      console.log("Transcribed text:", text);
       setDraft((current) => (current ? `${current} ${text}` : text).trim());
       setVoiceState("idle");
       setVoiceError("");
@@ -975,6 +1057,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       }, 3000);
     } finally {
       mediaRecorderRef.current = null;
+      pcmBuffersRef.current = [];
       audioChunksRef.current = [];
       setAudioLevels(new Array(90).fill(0));
     }
@@ -1067,7 +1150,6 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
             </div>
           ) : isTranscribing ? (
             <div className="composer-transcribing-indicator" aria-live="polite">
-              <span className="spinner" aria-hidden="true" />
               <span>Transcribing...</span>
             </div>
           ) : (
@@ -1084,7 +1166,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                 </button>
               </>
             ) : isTranscribing ? (
-              <button type="button" disabled aria-label="Transcribing">
+              <button type="button" className="composer-transcribing-button" disabled aria-label="Transcribing">
                 <Icon name="clock" />
               </button>
             ) : busy ? (

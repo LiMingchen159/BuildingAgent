@@ -100,98 +100,119 @@ function nextConversationId(): string {
   return `conv_${String(conversationSequence).padStart(6, "0")}`;
 }
 
-async function transcribeAudioViaParaformer(apiKey: string, model: string, audioBuffer: Buffer): Promise<string> {
-  // Use Aliyun DashScope Paraformer realtime WebSocket API
-  // This works for all accounts and doesn't require public URL
+async function transcribeAudioViaParaformer(apiKey: string, _model: string, audioBuffer: Buffer): Promise<string> {
+  // Strip WAV header (44 bytes) to get raw PCM data
+  // Standard WAV: RIFF(4) + fileSize(4) + WAVE(4) + fmt chunk(24) + data hdr(8) + PCM
+  let pcmData: Buffer | undefined;
+  if (audioBuffer.length > 44 && audioBuffer.readUInt32BE(0) === 0x52494646 /* "RIFF" */) {
+    // Find "data" chunk — start at byte 12 (after RIFF/WAVE header)
+    let offset = 12;
+    while (offset < audioBuffer.length - 8) {
+      const chunkId = audioBuffer.readUInt32BE(offset);
+      const chunkSize = audioBuffer.readUInt32LE(offset + 4);
+      if (chunkId === 0x64617461 /* "data" */) {
+        pcmData = audioBuffer.subarray(offset + 8, offset + 8 + chunkSize);
+        break;
+      }
+      offset += 8 + chunkSize;
+    }
+  }
+  if (!pcmData || pcmData.length === 0) {
+    throw new Error('Failed to extract PCM data from audio');
+  }
+
+  console.log(`[STT] PCM data size: ${pcmData.length} bytes (${(pcmData.length / 32000).toFixed(1)}s at 16kHz)`);
+
+  const wsUrl = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/';
 
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket("wss://dashscope.aliyuncs.com/api-ws/v1/inference", {
+    const taskId = `stt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    let fullText = '';
+    let finished = false;
+
+    const ws = new WebSocket(wsUrl, {
       headers: { Authorization: `Bearer ${apiKey}` }
     });
 
-    const taskId = randomUUID();
-    let transcriptParts: string[] = [];
-    let errorMessage = "";
+    const timeout = setTimeout(() => {
+      if (!finished) {
+        try { ws.close(); } catch { /* ignore */ }
+        reject(new Error('Transcription timeout'));
+      }
+    }, 30000);
 
-    ws.on("open", () => {
-      // Send start task message
+    ws.on('open', () => {
       ws.send(JSON.stringify({
         header: {
-          action: "run-task",
+          action: 'run-task',
           task_id: taskId,
-          streaming: "duplex"
+          streaming: 'duplex'
         },
         payload: {
-          task_group: "audio",
-          task: "asr",
-          function: "recognition",
-          model: "paraformer-realtime-v2",
+          task_group: 'audio',
+          task: 'asr',
+          function: 'recognition',
+          model: 'paraformer-realtime-v2',
           parameters: {
-            format: "pcm",
+            format: 'pcm',
             sample_rate: 16000,
-            language_hints: ["zh", "en", "yue"]
+            language_hints: ['yue', 'zh', 'en']
           },
           input: {}
         }
       }));
-
-      // Send audio in chunks (simulate realtime: 100ms chunks for 16kHz PCM)
-      const chunkSize = 3200; // 100ms at 16kHz PCM 16-bit
-      let offset = 0;
-
-      const sendInterval = setInterval(() => {
-        if (offset >= audioBuffer.length) {
-          clearInterval(sendInterval);
-          // Send finish message
-          ws.send(JSON.stringify({
-            header: {
-              action: "finish-task",
-              task_id: taskId,
-              streaming: "duplex"
-            },
-            payload: { input: {} }
-          }));
-          return;
-        }
-
-        const chunk = audioBuffer.subarray(offset, Math.min(offset + chunkSize, audioBuffer.length));
-        ws.send(chunk);
-        offset += chunkSize;
-      }, 100);
     });
 
-    ws.on("message", (data: any) => {
+    ws.on('message', (rawData: unknown) => {
+      const data = Buffer.isBuffer(rawData) ? rawData : Buffer.from(rawData as ArrayBuffer);
       try {
         const msg = JSON.parse(data.toString());
+        const event = msg.header?.event;
 
-        if (msg.header?.event === "result-generated" && msg.payload?.output?.sentence?.text) {
-          transcriptParts.push(msg.payload.output.sentence.text);
-        }
-
-        if (msg.header?.event === "task-finished") {
+        if (event === 'task-started') {
+          console.log('[STT] WebSocket task started:', taskId);
+          // Send PCM in ~100ms chunks (3200 bytes at 16kHz 16-bit mono)
+          const chunkSize = 3200;
+          for (let i = 0; i < pcmData.length; i += chunkSize) {
+            const chunk = pcmData.subarray(i, Math.min(i + chunkSize, pcmData.length));
+            ws.send(chunk);
+          }
+          // Signal end of audio stream
+          ws.send(JSON.stringify({
+            header: { action: 'finish-task', task_id: taskId, streaming: 'duplex' },
+            payload: { input: {} }
+          }));
+        } else if (event === 'result-generated') {
+          const text = msg.payload?.output?.sentence?.text;
+          if (text) fullText = text;
+        } else if (event === 'task-finished') {
+          finished = true;
+          clearTimeout(timeout);
+          console.log('[STT] WebSocket transcription result:', fullText);
+          ws.close(1000);
+          resolve(fullText.trim());
+        } else if (event === 'task-failed') {
+          finished = true;
+          clearTimeout(timeout);
+          const errMsg = msg.payload?.output?.message || msg.payload?.message || 'Recognition failed';
           ws.close();
-        }
-
-        if (msg.header?.event === "task-failed") {
-          errorMessage = msg.header?.error_message || "Task failed";
-          ws.close();
+          reject(new Error(errMsg));
         }
       } catch {
-        // Ignore parse errors
+        // Binary frames or unparseable messages — ignore
       }
     });
 
-    ws.on("close", () => {
-      if (errorMessage) {
-        reject(new Error(errorMessage));
-      } else {
-        resolve(transcriptParts.join(" ").trim() || "");
-      }
+    ws.on('error', (err: Error) => {
+      clearTimeout(timeout);
+      reject(new Error(`STT WebSocket error: ${err.message}`));
     });
 
-    ws.on("error", (err: any) => {
-      errorMessage = err.message || "WebSocket error";
-      ws.close();
+    ws.on('close', () => {
+      if (!finished) {
+        clearTimeout(timeout);
+        reject(new Error('STT connection closed unexpectedly'));
+      }
     });
   });
 }
