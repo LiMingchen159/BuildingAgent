@@ -413,7 +413,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   });
 
   // Register raw body parser for audio/* content types
-  app.addContentTypeParser("audio/*", { parseAs: "buffer" }, (req, body, done) => {
+  app.addContentTypeParser(/^audio\/.*/, { parseAs: "buffer" }, (req, body, done) => {
     done(null, body);
   });
 
