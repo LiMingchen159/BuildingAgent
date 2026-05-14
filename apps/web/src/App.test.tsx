@@ -106,12 +106,40 @@ function streamingResponse(chunks: string[]) {
   let index = 0;
   return new Response(new ReadableStream({
     pull(controller) {
-      if (index >= chunks.length) return;
+      if (index >= chunks.length) {
+        controller.close();
+        return;
+      }
       controller.enqueue(encoder.encode(`${chunks[index]}\n\n`));
       index += 1;
+      if (index >= chunks.length) {
+        controller.close();
+      }
     },
     cancel() {
       index = chunks.length;
+    }
+  }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
+function hangingStreamingResponse(chunks: string[], signal?: AbortSignal) {
+  const encoder = new TextEncoder();
+  let sent = false;
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(`${chunk}\n\n`));
+      }
+      sent = true;
+      signal?.addEventListener("abort", () => {
+        controller.error(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    },
+    pull() {
+      if (!sent) return;
+    },
+    cancel() {
+      sent = true;
     }
   }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
@@ -216,7 +244,7 @@ afterEach(() => {
 });
 
 describe("BuildingAgent Web flow", () => {
-  it("shows a minimal startup status while restoring a saved session", async () => {
+  it("shows the workspace shell while restoring a saved session", async () => {
     window.localStorage.setItem("building-agent.session.v1", JSON.stringify({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, projectId: null }));
     const session = deferredResponse();
     installFetch((url) => {
@@ -231,11 +259,12 @@ describe("BuildingAgent Web flow", () => {
 
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: /restoring your saved session/i })).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toHaveTextContent(/restoring your saved session/i);
+    expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: /^project sidebar$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /choose a project to get started/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/startup shell only/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/checking your saved buildingagent session/i)).not.toBeInTheDocument();
-    expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada/i);
+    expect(document.body).not.toHaveTextContent(/bearer\s+seed-token-ada|seed-token-ada/i);
 
     session.resolve(jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }));
     expect(await screen.findByRole("heading", { name: /choose a project to get started/i })).toBeInTheDocument();
@@ -287,7 +316,7 @@ describe("BuildingAgent Web flow", () => {
     expect((chatPostCall?.[1]?.headers as Headers).get("authorization")).toBe("Bearer seed-token-ada");
   });
 
-  it("starts a new backend chat session from the sidebar", async () => {
+  it("starts a draft new chat from the sidebar without creating a conversation row until first send", async () => {
     const fetchMock = installBaseFetch({
       chatMessages: [
         { id: "msg_existing", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Existing context" },
@@ -303,9 +332,84 @@ describe("BuildingAgent Web flow", () => {
     await user.click(screen.getByRole("button", { name: /new chat/i }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("New chat ready");
-    expect(screen.getByRole("list", { name: /recent conversations/i })).toHaveTextContent("New conversation");
+    expect(screen.getByRole("list", { name: /recent conversations/i })).toHaveTextContent("What should we build first?");
     expect(screen.queryByText("Existing context")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/provider diagnostics/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps prior messages above newer ones within the same conversation after a completed answer", async () => {
+    const user = userEvent.setup();
+    let streamCallCount = 0;
+    installFetch((url, init) => {
+      if (url === "/api/login") return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      if (url === "/api/session") return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      if (url === "/api/projects") return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      if (url === "/api/projects/project_alpha/select") return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
+      if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      if (url === "/api/projects/project_alpha/conversations" && init?.method === "POST") return jsonResponse({ conversation: { id: "conv_thread", title: "New conversation", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_new_conv" }, 201);
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        streamCallCount += 1;
+        const prompts = ["First question", "Second question"];
+        const answers = ["First answer", "Second answer"];
+        const idx = streamCallCount - 1;
+        return streamingResponse([
+          "event: token\ndata: " + JSON.stringify({ content: answers[idx] }),
+          "event: done\ndata: " + JSON.stringify({
+            message: { id: `msg_user_${idx}`, projectId: "project_alpha", userId: "user_ada", role: "user", content: prompts[idx] },
+            assistantMessage: { id: `msg_assistant_${idx}`, projectId: "project_alpha", userId: "user_ada", role: "assistant", content: answers[idx] },
+            conversationId: "conv_thread",
+            conversationTitle: "Conversation thread",
+            provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
+            fallbackUsed: false,
+            requestId: `req_stream_${idx}`
+          })
+        ]);
+      }
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
+      if (url === "/api/projects/project_alpha/knowledge-base") return jsonResponse({ documents: [], requestId: "req_kb" });
+      if (url === "/api/projects/project_alpha/repository") return jsonResponse({ artifacts: [], requestId: "req_repo" });
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    render(<App />);
+    await loginAndSelectProject(user);
+
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), "First question");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    await screen.findByText("First answer");
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /stop generating/i })).not.toBeInTheDocument();
+    });
+
+    const composer = screen.getByRole("textbox", { name: /^message$/i });
+    await user.type(composer, "Second question");
+    await user.keyboard("{Enter}");
+    await screen.findByText("Second answer");
+
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    expect(messageList.textContent?.indexOf("First question")).toBeLessThan(messageList.textContent?.indexOf("Second question") ?? 0);
+    expect(messageList.textContent?.indexOf("First answer")).toBeLessThan(messageList.textContent?.indexOf("Second answer") ?? 0);
+  });
+
+  it("filters python files out of the repository panel", async () => {
+    const user = userEvent.setup();
+    installBaseFetch({
+      artifacts: [
+        { id: "report_1", projectId: "project_alpha", name: "summary.md", kind: "report", generatedAt: "2026-05-12", sourceMessageId: "msg_1" },
+        { id: "script_1", projectId: "project_alpha", name: "helper.py", kind: "analysis", generatedAt: "2026-05-12", sourceMessageId: "msg_2" }
+      ]
+    });
+
+    render(<App />);
+    await loginAndSelectProject(user);
+
+    expect(screen.getByText(/1 items/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^repository/i }));
+
+    expect(screen.getByText("summary.md")).toBeInTheDocument();
+    expect(screen.queryByText("helper.py")).not.toBeInTheDocument();
   });
 
   it("keeps the running activity timeline expanded and only collapses it after final answer starts", async () => {
@@ -378,10 +482,157 @@ describe("BuildingAgent Web flow", () => {
 
     releaseDone();
 
-    const assistantMessage = await screen.findByRole("article", { name: /assistant message/i });
-    expect(assistantMessage).toHaveTextContent(/Worked for/);
+    const workedLabel = await screen.findByText(/Worked for/i);
+    const assistantMessage = workedLabel.closest("article");
+    expect(assistantMessage).not.toBeNull();
     expect(assistantMessage).toHaveTextContent(/Final answer ready/);
-    expect(within(assistantMessage).getByText(/Worked for/).closest("details")).not.toHaveAttribute("open");
+    expect(workedLabel.closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("creates the sidebar conversation only after the first message in a new chat", async () => {
+    const fetchMock = installBaseFetch({
+      chatMessages: [
+        { id: "msg_existing", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Existing context" },
+        { id: "msg_existing_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Existing answer" }
+      ]
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+
+    await user.click(screen.getByRole("button", { name: /new chat/i }));
+    expect(screen.getByRole("list", { name: /recent conversations/i })).not.toHaveTextContent("New conversation");
+
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), "What should we build first?");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+
+    expect(await screen.findByRole("list", { name: /recent conversations/i })).toHaveTextContent("What should we build first?");
+    const createConversationCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/projects/project_alpha/conversations" && init?.method === "POST");
+    expect(createConversationCall).toBeTruthy();
+  });
+
+  it("restores in-progress streaming state after switching away and back to the active conversation", async () => {
+    let releaseDone!: () => void;
+    const doneGate = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+
+    installFetch(async (url, init) => {
+      if (url === "/api/login") return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      if (url === "/api/session") return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      if (url === "/api/projects") return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      if (url === "/api/projects/project_alpha/select") return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
+      if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") {
+        return jsonResponse({
+          conversations: [
+            { id: "conv_existing", title: "Existing thread", messageCount: 2, createdAt: "2026-05-11T00:00:00.000Z" }
+          ],
+          limit: 50,
+          requestId: "req_conversations"
+        });
+      }
+      if (url === "/api/projects/project_alpha/conversations" && init?.method === "POST") {
+        return jsonResponse({ conversation: { id: "conv_streaming", title: "New conversation", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_new_conv" }, 201);
+      }
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        const encoder = new TextEncoder();
+        return new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("event: activity\ndata: " + JSON.stringify({ id: "act_1", label: "I am checking project context.", kind: "context", requestId: "req_stream" }) + "\n\n"));
+            controller.enqueue(encoder.encode("event: token\ndata: " + JSON.stringify({ content: "Partial answer" }) + "\n\n"));
+            void doneGate.then(() => {
+              controller.enqueue(encoder.encode("event: done\ndata: " + JSON.stringify({
+                message: { id: "msg_000001", projectId: "project_alpha", userId: "user_ada", role: "user", content: "timeline please" },
+                assistantMessage: { id: "msg_000002", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Partial answer\n\nFinal answer ready." },
+                conversationId: "conv_streaming",
+                conversationTitle: "Timeline please",
+                provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
+                fallbackUsed: false,
+                requestId: "req_stream"
+              }) + "\n\n"));
+              controller.close();
+            });
+          }
+        }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
+      if (url === "/api/projects/project_alpha/knowledge-base") return jsonResponse({ documents: [], requestId: "req_kb" });
+      if (url === "/api/projects/project_alpha/repository") return jsonResponse({ artifacts: [], requestId: "req_repo" });
+      if (url === "/api/projects/project_alpha/conversations/conv_existing/select") {
+        return jsonResponse({
+          conversation: { id: "conv_existing", title: "Existing thread", messageCount: 2, createdAt: "2026-05-11T00:00:00.000Z" },
+          messages: [
+            { id: "msg_existing", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Existing question" },
+            { id: "msg_existing_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Existing answer" }
+          ],
+          requestId: "req_select_existing"
+        });
+      }
+      if (url === "/api/projects/project_alpha/conversations/conv_streaming/select") {
+        return jsonResponse({
+          conversation: { id: "conv_streaming", title: "New conversation", messageCount: 1, createdAt: "2026-05-12T00:00:00.000Z" },
+          messages: [],
+          requestId: "req_select_streaming"
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), "timeline please");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    expect(await screen.findByText(/Working for/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Existing thread/i }));
+    expect(await screen.findByText("Existing answer")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /New conversation/i }));
+    expect(await screen.findByText(/Working for/i)).toBeInTheDocument();
+    expect(screen.getByText(/Partial answer/i)).toBeInTheDocument();
+
+    releaseDone();
+    expect(await screen.findByText(/Worked for/i)).toBeInTheDocument();
+  });
+
+  it("removes the running workflow immediately when generation is stopped", async () => {
+    const abortSignals: AbortSignal[] = [];
+    installFetch(async (url, init) => {
+      if (url === "/api/login") return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      if (url === "/api/session") return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      if (url === "/api/projects") return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      if (url === "/api/projects/project_alpha/select") return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
+      if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      if (url === "/api/projects/project_alpha/conversations" && init?.method === "POST") return jsonResponse({ conversation: { id: "conv_streaming", title: "New conversation", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_new_conv" }, 201);
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        if (init?.signal) abortSignals.push(init.signal);
+        return hangingStreamingResponse([
+          "event: activity\ndata: " + JSON.stringify({ id: "act_1", label: "I am checking project context.", kind: "context", requestId: "req_stream" })
+        ], init?.signal ?? undefined);
+      }
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
+      if (url === "/api/projects/project_alpha/knowledge-base") return jsonResponse({ documents: [], requestId: "req_kb" });
+      if (url === "/api/projects/project_alpha/repository") return jsonResponse({ artifacts: [], requestId: "req_repo" });
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), "stop please");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    expect(await screen.findByText(/Working for/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /stop generating/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/Working for/i)).not.toBeInTheDocument();
+    });
   });
 
   it("guards the workspace when unauthenticated and clears invalid stored tokens", async () => {

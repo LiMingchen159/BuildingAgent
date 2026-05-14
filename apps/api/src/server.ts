@@ -1760,9 +1760,27 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return readable;
     }
 
+    const allMessages = store.messagesByProject[request.params.projectId] ?? [];
+    const messageIndexById = new Map(allMessages.map((message, index) => [message.id, index]));
     const conversations = (store.conversationsByProject[request.params.projectId] ?? [])
       .filter((c) => c.messageIds.length > 0)
-      .map((c) => ({ id: c.id, title: c.title, messageCount: c.messageIds.length, createdAt: c.createdAt }));
+      .map((c) => {
+        const lastMessageId = c.messageIds[c.messageIds.length - 1];
+        return {
+          id: c.id,
+          title: c.title,
+          messageCount: c.messageIds.length,
+          createdAt: c.createdAt,
+          lastActivityIndex: typeof lastMessageId === "string" ? (messageIndexById.get(lastMessageId) ?? -1) : -1
+        };
+      })
+      .sort((left, right) => {
+        if (right.lastActivityIndex !== left.lastActivityIndex) {
+          return right.lastActivityIndex - left.lastActivityIndex;
+        }
+        return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+      })
+      .map(({ lastActivityIndex: _lastActivityIndex, ...conversation }) => conversation);
 
     return {
       conversations: bounded(conversations, store.maxListSize),

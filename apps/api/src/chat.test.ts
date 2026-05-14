@@ -681,6 +681,43 @@ describe("project-scoped chat contract", () => {
     expect(chatA.json().messages.length).toBe(2);
     expect(chatA.json().messages[0].content).toBe("First message");
   });
+
+  it("lists conversations newest-first by latest activity", async () => {
+    const { provider } = fakeProvider();
+    const app = buildServer({ chatProvider: provider });
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "First thread" }
+    });
+    const convA = first.json().conversationId;
+
+    const secondCreate = await app.inject({ method: "POST", url: "/api/projects/project_alpha/conversations", headers: bearer(adaToken) });
+    const convB = secondCreate.json().conversation.id;
+    await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Second thread", conversationId: convB }
+    });
+
+    let list = await app.inject({ method: "GET", url: "/api/projects/project_alpha/conversations", headers: bearer(adaToken) });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().conversations.map((conversation: { id: string }) => conversation.id)).toEqual([convB, convA]);
+
+    await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Revive first thread", conversationId: convA }
+    });
+
+    list = await app.inject({ method: "GET", url: "/api/projects/project_alpha/conversations", headers: bearer(adaToken) });
+    expect(list.json().conversations.map((conversation: { id: string }) => conversation.id)).toEqual([convA, convB]);
+  });
 });
 
 describe("chat streaming endpoint", () => {
