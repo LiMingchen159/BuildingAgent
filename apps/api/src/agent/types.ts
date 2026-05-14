@@ -1,5 +1,5 @@
 import type { ChatCompletionResult, ChatProvider, ChatToolCall, ProviderChatMessage } from "../providers.js";
-import type { ChatMessage, KnowledgeBaseDocument } from "../seed.js";
+import type { ChatMessage, ChatMessageImage, KnowledgeBaseDocument, RepositoryArtifact } from "../seed.js";
 
 export type AgentLifecycleEventType =
   | "user_message_received"
@@ -31,11 +31,13 @@ export interface AgentTurnRequest {
   providerMessages: ProviderChatMessage[];
   provider: ChatProvider;
   knowledgeBaseDocuments: KnowledgeBaseDocument[];
+  repositoryArtifacts: RepositoryArtifact[];
 }
 
 export interface AgentTurnResult {
   completion: ChatCompletionResult;
   events: AgentLifecycleEvent[];
+  generatedImages: ChatMessageImage[];
 }
 
 export interface AgentLoopResult {
@@ -43,6 +45,7 @@ export interface AgentLoopResult {
   events: AgentLifecycleEvent[];
   toolCallHistory: Array<{ name: string; args: Record<string, unknown>; result: Record<string, unknown> }>;
   iterations: number;
+  generatedImages: ChatMessageImage[];
 }
 
 export interface AgentStreamEvent {

@@ -7,7 +7,7 @@ export interface RepositoryItem {
   name: string;
   kind: RepositoryItemKind;
   generatedAt: string;
-  sourceTaskId: string;
+  sourceTaskId?: string | undefined;
   description?: string | undefined;
   content?: string | undefined;
 }

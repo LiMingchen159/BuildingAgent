@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { KnowledgeBaseDocument } from "../seed.js";
+import type { KnowledgeBaseDocument, RepositoryArtifact } from "../seed.js";
 
 function resolveKnowledgeBaseDefault(): string {
   const sourceDir = path.dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,7 @@ function resolveKnowledgeBaseDefault(): string {
 const DEFAULT_KNOWLEDGE_BASE_DIR = resolveKnowledgeBaseDefault();
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".ttl", ".rdf", ".csv", ".json", ".yaml", ".yml"]);
-const MAX_DOCUMENTS = 80;
+const MAX_DOCUMENTS = 500;
 const MAX_EXCERPT_BYTES = 600;
 
 export interface KnowledgeBaseIndexOptions {
@@ -99,6 +99,22 @@ export function knowledgeBasePrompt(documents: KnowledgeBaseDocument[]): string 
   ].join("\n");
 }
 
+export function repositoryPrompt(artifacts: RepositoryArtifact[]): string {
+  if (artifacts.length === 0) {
+    return "Repository files discovered for this project: none yet.";
+  }
+
+  return [
+    "Repository files discovered for this project:",
+    ...artifacts.slice(0, 8).map((artifact) => {
+      const location = artifact.path ?? artifact.name;
+      const description = artifact.description ? ` Summary: ${artifact.description}` : "";
+      const size = typeof artifact.sizeBytes === "number" ? `${artifact.sizeBytes} bytes` : "size unknown";
+      return `- ${location} (${artifact.kind}, ${size}).${description}`;
+    })
+  ].join("\n");
+}
+
 async function readExcerpt(filePath: string): Promise<string | undefined> {
   try {
     const buffer = await readFile(filePath);
@@ -106,6 +122,26 @@ async function readExcerpt(filePath: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
+
+function repoKind(name: string, extension: string): "note" | "analysis" | "summary" | "image" | "chart" | "report" | "table" {
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    // Heuristic: files in "chart" or "figure" paths, or with chart/figure in name, are charts
+    const lower = name.toLowerCase();
+    if (lower.includes("chart") || lower.includes("figure") || lower.includes("plot")) return "chart";
+    return "image";
+  }
+  if (extension === ".csv" || extension === ".parquet") return "table";
+  if (extension === ".ttl" || extension === ".rdf") return "analysis";
+  if (extension === ".json" || extension === ".yaml" || extension === ".yml") return "data" as "analysis";
+  if (extension === ".md" || extension === ".markdown") return "note";
+  const docKind = documentKind(extension);
+  if (docKind === "data") return "table";
+  if (docKind === "turtle") return "analysis";
+  if (docKind === "markdown") return "note";
+  return "note";
 }
 
 function documentKind(extension: string): KnowledgeBaseDocument["kind"] {
@@ -124,4 +160,109 @@ function stableId(value: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+// --- Data root (project-scoped KB + Repository) ---
+
+export function dataRoot(env: Record<string, string | undefined> = process.env): string {
+  const configured = env.BUILDING_AGENT_DATA_DIR?.trim() || env.DATA_DIR?.trim();
+  if (configured) {
+    return path.isAbsolute(configured) ? configured : path.resolve(PROJECT_ROOT, configured);
+  }
+  return path.resolve(PROJECT_ROOT, "data");
+}
+
+export function kbRootForProject(projectId: string, env: Record<string, string | undefined> = process.env): string {
+  const kbPath = path.join(dataRoot(env), projectId, "kb");
+  if (!existsSync(kbPath)) {
+    try { mkdirSync(kbPath, { recursive: true }); } catch { /* best effort */ }
+  }
+  return kbPath;
+}
+
+export function repoRootForProject(projectId: string, env: Record<string, string | undefined> = process.env): string {
+  const repoPath = path.join(dataRoot(env), projectId, "repository");
+  if (!existsSync(repoPath)) {
+    try { mkdirSync(repoPath, { recursive: true }); } catch { /* best effort */ }
+  }
+  return repoPath;
+}
+
+export async function countFiles(rootDir: string): Promise<number> {
+  let count = 0;
+
+  async function visit(dir: string): Promise<void> {
+    let children;
+    try {
+      children = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const child of children) {
+      if (child.name.startsWith(".")) continue;
+      if (child.isDirectory()) {
+        await visit(path.join(dir, child.name));
+      } else if (child.isFile()) {
+        count += 1;
+      }
+    }
+  }
+
+  if (existsSync(rootDir)) {
+    await visit(rootDir);
+  }
+  return count;
+}
+
+export async function indexRepository(projectId: string, rootDir: string): Promise<RepositoryArtifact[]> {
+  const entries: RepositoryArtifact[] = [];
+
+  async function visit(currentDir: string): Promise<void> {
+    if (entries.length >= MAX_DOCUMENTS) return;
+
+    let children;
+    try {
+      children = await readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entries.length >= MAX_DOCUMENTS || child.name.startsWith(".")) continue;
+      const absolutePath = path.join(currentDir, child.name);
+      if (child.isDirectory()) {
+        await visit(absolutePath);
+        continue;
+      }
+      if (!child.isFile()) continue;
+
+      const info = await stat(absolutePath);
+      const relativePath = path.relative(rootDir, absolutePath).split(path.sep).join("/");
+      const extension = path.extname(child.name).toLowerCase();
+
+      let excerpt: string | undefined;
+      if (TEXT_EXTENSIONS.has(extension)) {
+        try {
+          const buffer = await readFile(absolutePath);
+          excerpt = buffer.subarray(0, MAX_EXCERPT_BYTES).toString("utf8").replace(/\s+/gu, " ").trim().slice(0, 200) || undefined;
+        } catch {
+          // skip unreadable
+        }
+      }
+
+      entries.push({
+        id: `repo_${stableId(relativePath)}`,
+        projectId,
+        name: child.name,
+        path: relativePath,
+        kind: repoKind(child.name, extension),
+        sizeBytes: info.size,
+        generatedAt: info.mtime.toISOString(),
+        ...(excerpt ? { description: excerpt } : {})
+      });
+    }
+  }
+
+  await visit(rootDir);
+  return entries;
 }

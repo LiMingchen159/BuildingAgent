@@ -57,6 +57,14 @@ function parseBearer(header: unknown): string | null {
   return parts[1];
 }
 
+function parseTokenQueryValue(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
 function membershipFor(store: SeedStore, userId: string, projectId: string): SeedMembership | undefined {
   return store.memberships.find(
     (membership) => membership.userId === userId && membership.projectId === projectId
@@ -75,14 +83,11 @@ export function authenticateRequest(
   reply: FastifyReply,
   store: SeedStore
 ): ApiSessionContext | FastifyReply {
-  const authorization = request.headers.authorization;
-  if (authorization === undefined) {
-    return sendError(request, reply, 401, "auth_missing", "Missing bearer token.");
-  }
-
-  const token = parseBearer(authorization);
+  const bearerToken = parseBearer(request.headers.authorization);
+  const queryToken = parseTokenQueryValue((request.query as { token?: unknown } | undefined)?.token);
+  const token = bearerToken ?? queryToken;
   if (!token) {
-    return sendError(request, reply, 401, "auth_invalid", "Invalid bearer token.");
+    return sendError(request, reply, 401, "auth_missing", "Missing bearer token.");
   }
 
   const userId = store.tokens[token];

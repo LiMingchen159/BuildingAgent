@@ -69,11 +69,13 @@ export interface RepositoryArtifact {
   id: string;
   projectId: string;
   name: string;
-  kind: "note" | "analysis" | "summary";
+  path?: string;
+  kind: "note" | "analysis" | "summary" | "image" | "chart" | "report" | "table";
   generatedAt: string;
-  sourceMessageId: string;
-  description: string;
-  content: string;
+  sourceMessageId?: string;
+  description?: string;
+  content?: string;
+  sizeBytes?: number;
 }
 
 export interface ChatProviderDiagnostics {
@@ -700,21 +702,31 @@ function parseKnowledgeBaseDocument(value: unknown): KnowledgeBaseDocument | nul
 }
 
 function parseRepositoryArtifact(value: unknown): RepositoryArtifact | null {
-  if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || typeof value.name !== "string" || typeof value.generatedAt !== "string" || typeof value.sourceMessageId !== "string" || typeof value.description !== "string" || typeof value.content !== "string") {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || typeof value.name !== "string" || typeof value.generatedAt !== "string") {
     return null;
   }
-  if (!isStringIn<RepositoryArtifact["kind"]>(value.kind, new Set(["note", "analysis", "summary"]))) {
+  if (!isStringIn<RepositoryArtifact["kind"]>(value.kind, new Set(["note", "analysis", "summary", "image", "chart", "report", "table"]))) {
     return null;
   }
+  // sourceMessageId, description, content, sizeBytes are optional for disk-scanned files
+  if ("sourceMessageId" in value && value.sourceMessageId !== undefined && typeof value.sourceMessageId !== "string") return null;
+  if ("description" in value && value.description !== undefined && typeof value.description !== "string") return null;
+  if ("content" in value && value.content !== undefined && typeof value.content !== "string") return null;
+  if ("sizeBytes" in value && value.sizeBytes !== undefined && typeof value.sizeBytes !== "number") return null;
+  const sourceMessageId = typeof value.sourceMessageId === "string" ? value.sourceMessageId : undefined;
+  const description = typeof value.description === "string" ? value.description : undefined;
+  const content = typeof value.content === "string" ? value.content : undefined;
+  const sizeBytes = typeof value.sizeBytes === "number" ? value.sizeBytes : undefined;
   return {
     id: value.id,
     projectId: value.projectId,
     name: value.name,
     kind: value.kind,
     generatedAt: value.generatedAt,
-    sourceMessageId: value.sourceMessageId,
-    description: value.description,
-    content: value.content
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(description ? { description } : {}),
+    ...(content ? { content } : {}),
+    ...(sizeBytes !== undefined ? { sizeBytes } : {})
   };
 }
 
@@ -815,7 +827,7 @@ export async function sendChatMessage(token: string, projectId: string, message:
   };
 }
 
-export async function getKnowledgeBase(token: string, projectId: string): Promise<{ documents: KnowledgeBaseDocument[]; requestId: string }> {
+export async function getKnowledgeBase(token: string, projectId: string): Promise<{ documents: KnowledgeBaseDocument[]; totalCount: number; requestId: string }> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/knowledge-base`, { headers: authHeaders(token) });
   if (!isRecord(payload) || !Array.isArray(payload.documents) || typeof payload.requestId !== "string") {
     throw malformed("Knowledge base returned an unexpected response.");
@@ -828,11 +840,12 @@ export async function getKnowledgeBase(token: string, projectId: string): Promis
       }
       return parsed;
     }),
+    totalCount: typeof payload.totalCount === "number" ? payload.totalCount : payload.documents.length,
     requestId: payload.requestId
   };
 }
 
-export async function getRepository(token: string, projectId: string): Promise<{ artifacts: RepositoryArtifact[]; requestId: string }> {
+export async function getRepository(token: string, projectId: string): Promise<{ artifacts: RepositoryArtifact[]; totalCount: number; requestId: string }> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/repository`, { headers: authHeaders(token) });
   if (!isRecord(payload) || !Array.isArray(payload.artifacts) || typeof payload.requestId !== "string") {
     throw malformed("Repository returned an unexpected response.");
@@ -845,6 +858,7 @@ export async function getRepository(token: string, projectId: string): Promise<{
       }
       return parsed;
     }),
+    totalCount: typeof payload.totalCount === "number" ? payload.totalCount : payload.artifacts.length,
     requestId: payload.requestId
   };
 }
