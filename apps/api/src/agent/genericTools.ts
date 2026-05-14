@@ -142,7 +142,7 @@ function collectGeneratedImages(outputFiles: Array<{ path: string; name: string;
     }));
 }
 
-async function syncAndListOutputFiles(outputDir: string, kbRoot: string): Promise<{ files: Array<{ path: string; name: string; sizeBytes: number }>; synced: string[] }> {
+async function syncAndListOutputFiles(outputDir: string, kbRoot: string): Promise<{ files: Array<{ path: string; name: string; sizeBytes: number; modifiedAtMs: number }>; synced: string[] }> {
   // 1. Ensure outputs/ exists
   await mkdir(outputDir, { recursive: true });
 
@@ -163,19 +163,30 @@ async function syncAndListOutputFiles(outputDir: string, kbRoot: string): Promis
   } catch { /* kb/outputs may not exist */ }
 
   // 3. List all files now in repository/outputs/
-  const files: Array<{ path: string; name: string; sizeBytes: number }> = [];
+  const files: Array<{ path: string; name: string; sizeBytes: number; modifiedAtMs: number }> = [];
   try {
     const children = await readdir(outputDir, { withFileTypes: true });
     for (const c of children) {
       if (!c.isFile()) continue;
       try {
         const info = await stat(path.join(outputDir, c.name));
-        files.push({ path: `outputs/${c.name}`, name: c.name, sizeBytes: info.size });
+        files.push({ path: `outputs/${c.name}`, name: c.name, sizeBytes: info.size, modifiedAtMs: info.mtimeMs });
       } catch { /* skip */ }
     }
   } catch { /* output dir may not exist */ }
 
   return { files, synced };
+}
+
+function collectFreshGeneratedImages(
+  outputFiles: Array<{ path: string; name: string; sizeBytes: number; modifiedAtMs: number }>,
+  source: string,
+  startedAtMs: number
+): Array<Record<string, string>> {
+  return collectGeneratedImages(
+    outputFiles.filter((file) => file.modifiedAtMs >= startedAtMs - 1000),
+    source
+  );
 }
 
 export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService, processRegistry?: ProcessRegistry, skills?: AgentSkillRegistry): AgentToolRegistry {
@@ -439,6 +450,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         const timeout = Math.min(numArg(args, "timeout", 30), 120) * 1000;
         const { kbRoot, repoRoot } = projectFileRoots(context.projectId);
         const outputDir = path.join(repoRoot, "outputs");
+        const startedAtMs = Date.now();
 
         let result: string;
         try {
@@ -469,12 +481,12 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         }
 
         const { files: outputFiles, synced } = await syncAndListOutputFiles(outputDir, kbRoot);
-        const generatedImages = collectGeneratedImages(outputFiles, "terminal");
+        const generatedImages = collectFreshGeneratedImages(outputFiles, "terminal", startedAtMs);
 
         // Inject image paths directly into the visible output so the LLM can copy-paste them
         let augmentedOutput = result.slice(0, TERMINAL_MAX_OUTPUT);
-        if (outputFiles.length > 0) {
-          const imageList = outputFiles.map(f => `![${f.name}](${f.path})`).join("\n");
+        if (generatedImages.length > 0) {
+          const imageList = generatedImages.map(f => `![${f.filename}](${f.src})`).join("\n");
           augmentedOutput += `\n\n=== OUTPUT FILES (copy these into your answer) ===\n${imageList}`;
           if (synced.length > 0) {
             augmentedOutput += `\n(synced from kb/outputs/: ${synced.join(", ")})\nWARNING: writing to kb/outputs is invalid; files were copied into repository/outputs for compatibility.`;
@@ -520,6 +532,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         const { kbRoot, repoRoot } = projectFileRoots(context.projectId);
         const outputDir = path.join(repoRoot, "outputs");
         const tempPath = path.join(repoRoot, "_hermes_tmp.py");
+        const startedAtMs = Date.now();
 
         let stdout = "";
         let stderr = "";
@@ -555,12 +568,12 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
             );
           });
           const { files: outputFiles, synced } = await syncAndListOutputFiles(outputDir, kbRoot);
-          const generatedImages = collectGeneratedImages(outputFiles, "execute_code");
+          const generatedImages = collectFreshGeneratedImages(outputFiles, "execute_code", startedAtMs);
 
           // Inject image paths directly into stdout so the LLM can copy-paste them
           let augmentedStdout = stdout.slice(0, TERMINAL_MAX_OUTPUT);
-          if (outputFiles.length > 0) {
-            const imageList = outputFiles.map(f => `![${f.name}](${f.path})`).join("\n");
+          if (generatedImages.length > 0) {
+            const imageList = generatedImages.map(f => `![${f.filename}](${f.src})`).join("\n");
             augmentedStdout += `\n\n=== OUTPUT FILES (copy these into your answer) ===\n${imageList}`;
             if (synced.length > 0) {
               augmentedStdout += `\n(synced from kb/outputs/: ${synced.join(", ")})\nWARNING: writing to kb/outputs is invalid; files were copied into repository/outputs for compatibility.`;
