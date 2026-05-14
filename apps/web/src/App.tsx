@@ -868,16 +868,22 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         const sum = dataArray.reduce((a, b) => a + b, 0);
         const average = sum / dataArray.length / 255;
 
-        // Shift all values to the right (wave propagation from left to right)
+        // Shift all values to the right (wave propagation)
         for (let i = smoothedLevels.length - 1; i > 0; i--) {
-          smoothedLevels[i] = smoothedLevels[i - 1] * 0.85; // Decay as wave propagates
+          smoothedLevels[i] = smoothedLevels[i - 1];
         }
-        // New value enters from the left
-        smoothedLevels[0] = average;
+
+        // Add new value at the left with smoothing
+        smoothedLevels[0] = average * 0.7 + smoothedLevels[0] * 0.3;
+
+        // Apply decay to all positions (wave fades as it travels)
+        for (let i = 0; i < smoothedLevels.length; i++) {
+          smoothedLevels[i] *= 0.95; // Slower decay for longer trails
+        }
 
         // Copy to state with slight randomness for natural feel
         const levels = smoothedLevels.map((level) => {
-          const noise = (Math.random() - 0.5) * 0.05;
+          const noise = (Math.random() - 0.5) * 0.03;
           return Math.max(0, Math.min(1, level + noise));
         });
 
