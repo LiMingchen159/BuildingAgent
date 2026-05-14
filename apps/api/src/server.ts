@@ -28,12 +28,15 @@ import { createGenericSkillRegistry } from "./agent/skills.js";
 import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
+import { randomUUID } from "crypto";
+import WebSocket from "ws";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import type { WebSocket } from "ws";
 import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
+import { randomUUID } from "node:crypto";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -96,6 +99,124 @@ function nextConversationId(): string {
   conversationSequence += 1;
   return `conv_${String(conversationSequence).padStart(6, "0")}`;
 }
+
+async function transcribeAudioViaParaformer(apiKey: string, _model: string, audioBuffer: Buffer): Promise<string> {
+  // Strip WAV header (44 bytes) to get raw PCM data
+  // Standard WAV: RIFF(4) + fileSize(4) + WAVE(4) + fmt chunk(24) + data hdr(8) + PCM
+  let pcmData: Buffer | undefined;
+  if (audioBuffer.length > 44 && audioBuffer.readUInt32BE(0) === 0x52494646 /* "RIFF" */) {
+    // Find "data" chunk — start at byte 12 (after RIFF/WAVE header)
+    let offset = 12;
+    while (offset < audioBuffer.length - 8) {
+      const chunkId = audioBuffer.readUInt32BE(offset);
+      const chunkSize = audioBuffer.readUInt32LE(offset + 4);
+      if (chunkId === 0x64617461 /* "data" */) {
+        pcmData = audioBuffer.subarray(offset + 8, offset + 8 + chunkSize);
+        break;
+      }
+      offset += 8 + chunkSize;
+    }
+  }
+  if (!pcmData || pcmData.length === 0) {
+    throw new Error('Failed to extract PCM data from audio');
+  }
+
+  console.log(`[STT] PCM data size: ${pcmData.length} bytes (${(pcmData.length / 32000).toFixed(1)}s at 16kHz)`);
+
+  const wsUrl = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/';
+
+  return new Promise((resolve, reject) => {
+    const taskId = `stt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    let fullText = '';
+    let finished = false;
+
+    const ws = new WebSocket(wsUrl, {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    });
+
+    const timeout = setTimeout(() => {
+      if (!finished) {
+        try { ws.close(); } catch { /* ignore */ }
+        reject(new Error('Transcription timeout'));
+      }
+    }, 30000);
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({
+        header: {
+          action: 'run-task',
+          task_id: taskId,
+          streaming: 'duplex'
+        },
+        payload: {
+          task_group: 'audio',
+          task: 'asr',
+          function: 'recognition',
+          model: 'paraformer-realtime-v2',
+          parameters: {
+            format: 'pcm',
+            sample_rate: 16000,
+            language_hints: ['yue', 'zh', 'en']
+          },
+          input: {}
+        }
+      }));
+    });
+
+    ws.on('message', (rawData: unknown) => {
+      const data = Buffer.isBuffer(rawData) ? rawData : Buffer.from(rawData as ArrayBuffer);
+      try {
+        const msg = JSON.parse(data.toString());
+        const event = msg.header?.event;
+
+        if (event === 'task-started') {
+          console.log('[STT] WebSocket task started:', taskId);
+          // Send PCM in ~100ms chunks (3200 bytes at 16kHz 16-bit mono)
+          const chunkSize = 3200;
+          for (let i = 0; i < pcmData.length; i += chunkSize) {
+            const chunk = pcmData.subarray(i, Math.min(i + chunkSize, pcmData.length));
+            ws.send(chunk);
+          }
+          // Signal end of audio stream
+          ws.send(JSON.stringify({
+            header: { action: 'finish-task', task_id: taskId, streaming: 'duplex' },
+            payload: { input: {} }
+          }));
+        } else if (event === 'result-generated') {
+          const text = msg.payload?.output?.sentence?.text;
+          if (text) fullText = text;
+        } else if (event === 'task-finished') {
+          finished = true;
+          clearTimeout(timeout);
+          console.log('[STT] WebSocket transcription result:', fullText);
+          ws.close(1000);
+          resolve(fullText.trim());
+        } else if (event === 'task-failed') {
+          finished = true;
+          clearTimeout(timeout);
+          const errMsg = msg.payload?.output?.message || msg.payload?.message || 'Recognition failed';
+          ws.close();
+          reject(new Error(errMsg));
+        }
+      } catch {
+        // Binary frames or unparseable messages — ignore
+      }
+    });
+
+    ws.on('error', (err: Error) => {
+      clearTimeout(timeout);
+      reject(new Error(`STT WebSocket error: ${err.message}`));
+    });
+
+    ws.on('close', () => {
+      if (!finished) {
+        clearTimeout(timeout);
+        reject(new Error('STT connection closed unexpectedly'));
+      }
+    });
+  });
+}
+
 
 function restoreSequences(store: SeedStore): void {
   let maxMsg = 0;
@@ -292,7 +413,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         sequence += 1;
         return `req_${String(sequence).padStart(6, "0")}`;
       };
-    })()
+    })(),
+    bodyLimit: 10485760 // 10MB for audio uploads
+  });
+
+  // Register raw body parser for audio/* content types
+  app.addContentTypeParser(/^audio\/.*/, { parseAs: "buffer" }, (req, body, done) => {
+    done(null, body);
   });
 
   // WebSocket connection tracking per project
@@ -1692,6 +1819,41 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId,
       requestId: requestIdFor(request)
     };
+  });
+
+  app.post("/api/stt/transcribe", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const apiKey = env.DASHSCOPE_API_KEY;
+    const model = env.ALIYUN_STT_MODEL || "paraformer-v2";
+
+    if (!apiKey) {
+      return sendError(request, reply, 503, "stt_unavailable", "Speech-to-text service is not configured.");
+    }
+
+    const contentType = request.headers["content-type"] ?? "";
+    if (!contentType.startsWith("audio/")) {
+      return sendError(request, reply, 415, "stt_invalid_format", "Content-Type must be audio/* (e.g., audio/webm, audio/wav).");
+    }
+
+    const rawBody = await request.body;
+    if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) {
+      return sendError(request, reply, 422, "stt_empty_audio", "Audio data is required.");
+    }
+
+    try {
+      const text = await transcribeAudioViaParaformer(apiKey, model, rawBody);
+      return { text, requestId: requestIdFor(request) };
+    } catch (error) {
+      request.log.error({ err: error, requestId: requestIdFor(request) }, "STT transcription failed");
+      if (error instanceof Error && error.message.includes("401")) {
+        return sendError(request, reply, 503, "stt_auth_failed", "Speech-to-text authentication failed.");
+      }
+      return sendError(request, reply, 500, "stt_failed", "Speech-to-text transcription failed.");
+    }
   });
 
   app.setErrorHandler((error, request, reply) => {

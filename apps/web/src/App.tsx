@@ -719,12 +719,22 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
+  const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing" | "error">("idle");
+  const [voiceError, setVoiceError] = useState("");
+  const [audioLevels, setAudioLevels] = useState<number[]>(new Array(90).fill(0));
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<HTMLElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wasEmptyRef = useRef(messages.length === 0);
   const userScrolledUpRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const pcmBuffersRef = useRef<Float32Array[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
   const canWrite = project.permissions.includes("chat:write");
   const hasMessages = messages.length > 0;
   const latestMessage = messages[messages.length - 1];
@@ -732,6 +742,8 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const latestMessageKey = `${messages.length}:${latestMessageId}`;
   const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
   const activities = streamingActivity ?? [];
+  const isRecording = voiceState === "recording";
+  const isTranscribing = voiceState === "transcribing";
 
   // Timer for streaming elapsed time is now managed by parent component
 
@@ -818,6 +830,239 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     }
   }
 
+  async function handleStartRecording() {
+    if (!canWrite || busy) return;
+
+    // Set recording state first
+    setVoiceState("recording");
+    setVoiceError("");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      pcmBuffersRef.current = [];
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      mediaRecorder.start();
+      mediaRecorderRef.current = mediaRecorder;
+
+      // Setup audio analysis for waveform visualization AND PCM extraction
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+
+      // Create ScriptProcessorNode to extract PCM data
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Copy to our buffer
+        pcmBuffersRef.current.push(new Float32Array(inputData));
+      };
+
+      source.connect(analyser);
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      processorRef.current = processor;
+
+      // Start visualizing audio levels
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const smoothedLevels = new Array(90).fill(0);
+
+      const updateLevels = () => {
+        if (!analyserRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
+
+        // Get average volume for the leftmost point
+        const sum = dataArray.reduce((a, b) => a + b, 0);
+        const average = sum / dataArray.length / 255;
+
+        // Amplify the signal for better visibility (3x boost)
+        const amplified = Math.min(1, average * 3);
+
+        // Shift all values to the right (each point copies its left neighbor)
+        for (let i = smoothedLevels.length - 1; i > 0; i--) {
+          smoothedLevels[i] = smoothedLevels[i - 1];
+        }
+
+        // Set the leftmost point to current audio level
+        smoothedLevels[0] = amplified;
+
+        // Copy to state with slight randomness for natural feel
+        const levels = smoothedLevels.map((level) => {
+          const noise = (Math.random() - 0.5) * 0.04;
+          return Math.max(0, Math.min(1, level + noise));
+        });
+
+        setAudioLevels(levels);
+        animationFrameRef.current = requestAnimationFrame(updateLevels);
+      };
+      updateLevels();
+    } catch (error) {
+      setVoiceState("error");
+      setVoiceError(error instanceof Error && error.name === "NotAllowedError" ? "Microphone permission denied" : "Could not access microphone");
+    }
+  }
+
+  function handleCancelRecording() {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    if (analyserRef.current) {
+      analyserRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    audioChunksRef.current = [];
+    setAudioLevels(new Array(90).fill(0));
+    setVoiceState("idle");
+    setVoiceError("");
+  }
+
+  async function handleConfirmRecording() {
+    if (!mediaRecorderRef.current) return;
+    const recorder = mediaRecorderRef.current;
+
+    setVoiceState("transcribing");
+
+    // Wait for recorder to stop and collect all data
+    await new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+      recorder.stop();
+    });
+
+    recorder.stream.getTracks().forEach((track) => track.stop());
+
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    if (analyserRef.current) {
+      analyserRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    try {
+      // Get token from localStorage
+      const stored = window.localStorage.getItem("building-agent.session.v1");
+      const token = stored ? (JSON.parse(stored) as { token?: string }).token : "";
+
+      if (!token) {
+        throw new Error("Authentication required");
+      }
+
+      // Convert Float32Array PCM buffers to WAV file
+      const pcmBuffers = pcmBuffersRef.current;
+      if (pcmBuffers.length === 0) {
+        throw new Error("No audio data recorded");
+      }
+
+      // Calculate total length
+      const totalSamples = pcmBuffers.reduce((sum, buf) => sum + buf.length, 0);
+      const pcm16 = new Int16Array(totalSamples);
+      let offset = 0;
+
+      for (const buffer of pcmBuffers) {
+        for (let i = 0; i < buffer.length; i++) {
+          // Convert float32 [-1, 1] to int16 [-32768, 32767]
+          const s = Math.max(-1, Math.min(1, buffer[i]));
+          pcm16[offset++] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+      }
+
+      // Create WAV file header
+      const sampleRate = 16000;
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+      const blockAlign = numChannels * bitsPerSample / 8;
+      const dataSize = pcm16.length * 2;
+      const wavHeader = new ArrayBuffer(44);
+      const view = new DataView(wavHeader);
+
+      // "RIFF" chunk descriptor
+      view.setUint32(0, 0x52494646, false); // "RIFF"
+      view.setUint32(4, 36 + dataSize, true); // file size - 8
+      view.setUint32(8, 0x57415645, false); // "WAVE"
+
+      // "fmt " sub-chunk
+      view.setUint32(12, 0x666d7420, false); // "fmt "
+      view.setUint32(16, 16, true); // fmt chunk size
+      view.setUint16(20, 1, true); // audio format (1 = PCM)
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+
+      // "data" sub-chunk
+      view.setUint32(36, 0x64617461, false); // "data"
+      view.setUint32(40, dataSize, true);
+
+      const audioBlob = new Blob([wavHeader, pcm16.buffer], { type: "audio/wav" });
+      console.log("Audio blob size:", audioBlob.size, "bytes (WAV 16-bit, 16kHz)");
+
+      if (audioBlob.size === 0) {
+        throw new Error("No audio data recorded");
+      }
+
+      const response = await fetch("/api/stt/transcribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "audio/wav",
+          "Authorization": `Bearer ${token}`
+        },
+        body: audioBlob
+      });
+
+      if (!response.ok) {
+        throw new Error("Transcription failed");
+      }
+
+      const result = await response.json();
+      console.log("Transcription result:", result);
+      const text = result.text || "";
+      console.log("Transcribed text:", text);
+      setDraft((current) => (current ? `${current} ${text}` : text).trim());
+      setVoiceState("idle");
+      setVoiceError("");
+    } catch (error) {
+      setVoiceState("error");
+      setVoiceError(error instanceof Error ? error.message : "Transcription failed");
+      setTimeout(() => {
+        setVoiceState("idle");
+        setVoiceError("");
+      }, 3000);
+    } finally {
+      mediaRecorderRef.current = null;
+      pcmBuffersRef.current = [];
+      audioChunksRef.current = [];
+      setAudioLevels(new Array(90).fill(0));
+    }
+  }
+
   return (
     <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}${leavingEmptyState ? " chat-shell-leaving-empty" : ""}`} aria-labelledby="chat-title">
       <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
@@ -888,22 +1133,64 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       </section>
       <form className="composer" onSubmit={handleSubmit}>
         {(!hasMessages || leavingEmptyState) ? <p className="composer-empty-greeting">{emptyChatGreeting}</p> : null}
-        <div className="composer-box">
+        <div className={`composer-box${isRecording ? " is-recording" : ""}${isTranscribing ? " is-transcribing" : ""}`}>
           <label className="visually-hidden" htmlFor="chat-message">Message</label>
-          <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
+          {isRecording ? (
+            <div className="composer-recording-indicator" aria-live="polite">
+              <span className="recording-waveform" aria-hidden="true">
+                {audioLevels.map((level, i) => {
+                  const hasSound = level > 0.05;
+                  return hasSound ? (
+                    <span key={i} style={{ transform: `scaleY(${Math.max(0.2, level)})` }} />
+                  ) : (
+                    <span key={i} />
+                  );
+                })}
+              </span>
+            </div>
+          ) : isTranscribing ? (
+            <div className="composer-transcribing-indicator" aria-live="polite">
+              <span>Transcribing...</span>
+            </div>
+          ) : (
+            <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
+          )}
           <div className="composer-actions">
-            {busy ? (
+            {isRecording ? (
+              <>
+                <button type="button" className="composer-voice-button" onClick={handleCancelRecording} title="Cancel recording" aria-label="Cancel recording">
+                  <Icon name="x" />
+                </button>
+                <button type="button" className="composer-voice-confirm" onClick={handleConfirmRecording} title="Confirm and transcribe" aria-label="Confirm and transcribe">
+                  <Icon name="check-check" />
+                </button>
+              </>
+            ) : isTranscribing ? (
+              <button type="button" className="composer-transcribing-button" disabled aria-label="Transcribing">
+                <Icon name="clock" />
+              </button>
+            ) : busy ? (
               <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
                 <Icon name="x" />
               </button>
             ) : (
-              <button type="submit" disabled={!canWrite || !draft.trim()} aria-label="Send message">
-                <Icon name="arrow-up" />
-              </button>
+              <>
+                <button type="button" className="composer-voice-button" onClick={handleStartRecording} disabled={!canWrite} title="Voice input" aria-label="Voice input">
+                  <svg className="workspace-icon" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <path d="M12 19v3" />
+                  </svg>
+                </button>
+                <button type="submit" disabled={!canWrite || !draft.trim()} aria-label="Send message">
+                  <Icon name="arrow-up" />
+                </button>
+              </>
             )}
           </div>
         </div>
         {!canWrite ? <p className="field-error composer-readonly" role="status">This project does not grant chat write permission.</p> : null}
+        {voiceError ? <p className="field-error" role="alert">{voiceError}</p> : null}
       </form>
     </section>
   );
