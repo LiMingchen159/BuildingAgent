@@ -65,6 +65,20 @@ export interface SeedMembership {
   permissions: Permission[];
 }
 
+export interface ChatMessageActivity {
+  id?: string;
+  label: string;
+  kind: "tool" | "memory" | "kb" | "file" | "response" | "context";
+  tool?: string;
+  status?: "running" | "done";
+  raw?: string;
+  requestId?: string;
+  detail?: string;
+  output?: string;
+  durationMs?: number;
+  exitCode?: number;
+}
+
 export interface ChatMessage {
   id: string;
   projectId: string;
@@ -72,6 +86,8 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   artifactId?: string | undefined;
+  activities?: ChatMessageActivity[] | undefined;
+  workDuration?: number | undefined;
 }
 
 export interface KnowledgeBaseDocument {

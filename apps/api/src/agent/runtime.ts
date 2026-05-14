@@ -54,7 +54,10 @@ export class AgentRuntime {
           toolChoice: "auto"
         })) {
           if (delta.progress) {
-            yield this.makeEvent("progress", delta.progress);
+            yield this.makeEvent("progress", delta.progress.label, {
+              progressKind: delta.progress.kind,
+              ...(delta.progress.raw ? { progressRaw: delta.progress.raw } : {})
+            });
           }
           if (delta.content) {
             streamText += delta.content;
@@ -274,6 +277,7 @@ export class AgentRuntime {
 
         yield yieldEvent(this.makeEvent("tool_started", `Running tool: ${tc.function.name}`, {
           tool: tc.function.name,
+          toolCallId: tc.id,
           args: JSON.stringify(args).slice(0, 200)
         }));
 
@@ -291,6 +295,7 @@ export class AgentRuntime {
 
         yield yieldEvent(this.makeEvent("tool_completed", `Tool ${tc.function.name} completed.`, {
           tool: tc.function.name,
+          toolCallId: tc.id,
           resultPreview: JSON.stringify(dispatchResult.result).slice(0, 300)
         }));
 

@@ -56,10 +56,19 @@ export interface ChatToolCall {
   };
 }
 
+export interface ProgressEvent {
+  /** User-facing activity label */
+  label: string;
+  /** Machine-readable activity kind for dedup / icons */
+  kind: "tool" | "memory" | "kb" | "file" | "response" | "context";
+  /** Raw event name for debug panel (hidden from users) */
+  raw?: string;
+}
+
 export interface ChatCompletionDelta {
   content?: string;
   toolCalls?: ChatToolCall[];
-  progress?: string;
+  progress?: ProgressEvent;
 }
 
 export interface ChatCompletionStreamResult {
@@ -164,35 +173,69 @@ function createProviderNotConfiguredError(metadata: ProviderMetadata): ProviderE
   });
 }
 
-function mapProgressEvent(eventName: string | null, payload: Record<string, unknown> | null, metadata: ProviderMetadata): string {
+function mapProgressEvent(eventName: string | null, payload: Record<string, unknown> | null, _metadata: ProviderMetadata): ProgressEvent {
   const normalizedName = (eventName ?? "").toLowerCase();
-  if (normalizedName === "hermes.tool.progress") {
-    return "I am checking related tools and data.";
-  }
+
   if (normalizedName.includes("tool")) {
-    return "I am checking related tools and data.";
+    const tool = typeof payload?.tool === "string" ? payload.tool : null;
+    const result: ProgressEvent = {
+      label: tool ? `I am using ${tool}` : "I am running analysis tools",
+      kind: "tool"
+    };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (normalizedName.includes("memory")) {
-    return "I am checking project context and memory.";
+    const result: ProgressEvent = { label: "I am checking project context", kind: "memory" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (normalizedName.includes("knowledge") || normalizedName.includes("search")) {
+    const result: ProgressEvent = { label: "I am querying the knowledge base", kind: "kb" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (normalizedName.includes("file") || normalizedName.includes("read")) {
+    const result: ProgressEvent = { label: "I am reading relevant files", kind: "file" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (normalizedName.includes("response")) {
-    return "I am organizing the response.";
+    const result: ProgressEvent = { label: "I am organizing the answer", kind: "response" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
 
   const stage = typeof payload?.stage === "string" ? payload.stage.toLowerCase() : "";
   if (stage.includes("tool")) {
-    return "I am checking related tools and data.";
+    const result: ProgressEvent = { label: "I am running analysis tools", kind: "tool" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (stage.includes("memory")) {
-    return "I am checking project context and memory.";
+    const result: ProgressEvent = { label: "I am checking project context", kind: "memory" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (stage.includes("knowledge") || stage.includes("search") || stage.includes("kb")) {
+    const result: ProgressEvent = { label: "I am querying the knowledge base", kind: "kb" };
+    if (eventName) result.raw = eventName;
+    return result;
+  }
+  if (stage.includes("file") || stage.includes("read")) {
+    const result: ProgressEvent = { label: "I am reading relevant files", kind: "file" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
   if (stage.includes("final") || stage.includes("respond")) {
-    return "I am organizing the response.";
+    const result: ProgressEvent = { label: "I am organizing the answer", kind: "response" };
+    if (eventName) result.raw = eventName;
+    return result;
   }
 
-  return metadata.mode === "real"
-    ? "I am processing your request."
-    : "I am preparing a response.";
+  const result: ProgressEvent = { label: "I am processing the request", kind: "context" };
+  if (eventName) result.raw = eventName;
+  return result;
 }
 
 export function createDeterministicMockProvider(reason = "local_default"): ChatProvider {
