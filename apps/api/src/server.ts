@@ -161,25 +161,6 @@ async function transcribeAudioViaParaformer(apiKey: string, model: string, audio
     }
   }
 }
-      } catch {
-        // Ignore parse errors
-      }
-    });
-
-    ws.on("close", () => {
-      if (errorMessage) {
-        reject(new Error(errorMessage));
-      } else {
-        resolve(transcriptParts.join(" ").trim() || "");
-      }
-    });
-
-    ws.on("error", (err: any) => {
-      errorMessage = err.message || "WebSocket error";
-      ws.close();
-    });
-  });
-}
 
 
 function restoreSequences(store: SeedStore): void {
