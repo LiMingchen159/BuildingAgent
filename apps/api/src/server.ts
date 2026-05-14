@@ -98,57 +98,46 @@ function nextConversationId(): string {
   return `conv_${String(conversationSequence).padStart(6, "0")}`;
 }
 
-async function transcribeAudioViaParaformer(apiKey: string, audioBuffer: Buffer): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // @ts-ignore - ws WebSocket constructor accepts options but types are incomplete
-    const ws = new WSWebSocket("wss://dashscope.aliyuncs.com/api-ws/v1/inference", {
-      headers: { Authorization: `Bearer ${apiKey}` }
-    }) as any;
+async function transcribeAudioViaParaformer(apiKey: string, model: string, audioBuffer: Buffer): Promise<string> {
+  // Use Aliyun DashScope Paraformer file recognition RESTful API
+  // https://help.aliyun.com/zh/model-studio/developer-reference/paraformer-file-transcription-api
 
-    const taskId = randomUUID();
-    let transcriptParts: string[] = [];
-    let errorMessage = "";
+  const response = await fetch("https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: model,
+      input: {
+        audio: audioBuffer.toString("base64")
+      },
+      parameters: {
+        language_hints: ["zh", "en", "yue"]
+      }
+    })
+  });
 
-    ws.on("open", () => {
-      ws.send(JSON.stringify({
-        header: { action: "run-task", task_id: taskId, streaming: "duplex" },
-        payload: {
-          task_group: "audio",
-          task: "asr",
-          function: "recognition",
-          model: "paraformer-realtime-v2",
-          parameters: { format: "pcm", sample_rate: 16000, language_hints: ["zh", "en", "yue"] },
-          input: {}
-        }
-      }));
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Aliyun API error ${response.status}: ${errorText}`);
+  }
 
-      // Send audio in chunks (100ms = 1600 samples * 2 bytes = 3200 bytes for 16kHz PCM)
-      const chunkSize = 3200;
-      let offset = 0;
-      const interval = setInterval(() => {
-        if (offset >= audioBuffer.length) {
-          clearInterval(interval);
-          ws.send(JSON.stringify({
-            header: { action: "finish-task", task_id: taskId, streaming: "duplex" },
-            payload: { input: {} }
-          }));
-          return;
-        }
-        const chunk = audioBuffer.subarray(offset, Math.min(offset + chunkSize, audioBuffer.length));
-        ws.send(chunk);
-        offset += chunkSize;
-      }, 100);
-    });
+  const result = await response.json() as {
+    output?: {
+      results?: Array<{ transcription_text?: string }>;
+    };
+    message?: string;
+  };
 
-    ws.on("message", (data: any) => {
-      try {
-        const msg = JSON.parse(data.toString());
-        if (msg.header?.event === "result-generated" && msg.payload?.output?.sentence?.text) {
-          transcriptParts.push(msg.payload.output.sentence.text);
-        }
-        if (msg.header?.event === "task-finished") {
-          ws.close();
-        }
+  if (result.output?.results && result.output.results.length > 0) {
+    const text = result.output.results.map(r => r.transcription_text || "").join(" ").trim();
+    return text;
+  }
+
+  throw new Error(result.message || "No transcription result");
+}
       } catch {
         // Ignore parse errors
       }
@@ -1780,6 +1769,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     const apiKey = env.DASHSCOPE_API_KEY;
+    const model = env.ALIYUN_STT_MODEL || "paraformer-v2";
+
     if (!apiKey) {
       return sendError(request, reply, 503, "stt_unavailable", "Speech-to-text service is not configured.");
     }
@@ -1795,7 +1786,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     try {
-      const text = await transcribeAudioViaParaformer(apiKey, rawBody);
+      const text = await transcribeAudioViaParaformer(apiKey, model, rawBody);
       return { text, requestId: requestIdFor(request) };
     } catch (error) {
       request.log.error({ err: error, requestId: requestIdFor(request) }, "STT transcription failed");

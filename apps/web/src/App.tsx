@@ -830,6 +830,11 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
 
   async function handleStartRecording() {
     if (!canWrite || busy) return;
+
+    // Set recording state first
+    setVoiceState("recording");
+    setVoiceError("");
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -856,7 +861,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       const smoothedLevels = new Array(90).fill(0);
 
       const updateLevels = () => {
-        if (!analyserRef.current || voiceState !== "recording") return;
+        if (!analyserRef.current) return;
         analyser.getByteFrequencyData(dataArray);
 
         // Get average volume
@@ -879,9 +884,6 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         animationFrameRef.current = requestAnimationFrame(updateLevels);
       };
       updateLevels();
-
-      setVoiceState("recording");
-      setVoiceError("");
     } catch (error) {
       setVoiceState("error");
       setVoiceError(error instanceof Error && error.name === "NotAllowedError" ? "Microphone permission denied" : "Could not access microphone");
