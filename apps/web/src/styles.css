@@ -2080,45 +2080,29 @@ p {
 }
 
 .chat-image-card {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-faint);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
   cursor: zoom-in;
-  display: grid;
-  gap: var(--space-2);
+  display: block;
   overflow: hidden;
   padding: 0;
   text-align: left;
-  transition: transform var(--duration-base) var(--easing-standard);
+  transition: transform var(--duration-fast) var(--easing-standard);
 }
 
 .chat-image-card:hover,
 .chat-image-card:focus-visible {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
 }
 
 .chat-image-card img {
   display: block;
+  border-radius: var(--radius-sm);
   height: auto;
   max-height: 180px;
   object-fit: cover;
   width: 100%;
-}
-
-.chat-image-card-meta {
-  display: grid;
-  font-size: var(--font-size-xs);
-  gap: 2px;
-  padding: var(--space-2) var(--space-3) var(--space-3);
-}
-
-.chat-image-card-meta strong {
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-}
-
-.chat-image-card-meta span {
-  color: var(--color-text-muted);
 }
 
 .chat-image-lightbox {
@@ -2180,7 +2164,7 @@ p {
   max-height: 320px;
   max-width: 100%;
   object-fit: contain;
-  transition: transform 120ms var(--ease-out);
+  transition: transform 120ms var(--easing-standard);
 }
 .md-image:hover {
   transform: scale(1.01);

@@ -11,9 +11,7 @@ export function ChatImageGallery({ images, messageId, resolveImageUrl }: ChatIma
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    if (activeIndex === null) {
-      return;
-    }
+    if (activeIndex === null) return;
     function handleKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setActiveIndex(null);
@@ -27,9 +25,7 @@ export function ChatImageGallery({ images, messageId, resolveImageUrl }: ChatIma
     return () => window.removeEventListener("keydown", handleKey);
   }, [activeIndex, images.length]);
 
-  if (images.length === 0) {
-    return null;
-  }
+  if (images.length === 0) return null;
 
   const resolvedImages = images.map((image) => ({
     ...image,
@@ -42,18 +38,13 @@ export function ChatImageGallery({ images, messageId, resolveImageUrl }: ChatIma
     <div className="chat-image-gallery" role="group" aria-label="Image attachments">
       {resolvedImages.map((image, index) => (
         <button
-          type="button"
           key={`${messageId}-image-${index}`}
+          type="button"
           className="chat-image-card"
           onClick={() => setActiveIndex(index)}
           aria-label={`Enlarge image ${image.filename ?? image.alt}`}
         >
           <img src={image.src} alt={image.alt} loading="lazy" />
-          <span className="chat-image-card-meta">
-            <strong>{image.filename ?? image.alt}</strong>
-            {image.capturedAt ? <span>Captured: {image.capturedAt}</span> : null}
-            {image.source ? <span>Source: {image.source}</span> : null}
-          </span>
         </button>
       ))}
       {active ? (

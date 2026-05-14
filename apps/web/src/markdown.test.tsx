@@ -105,19 +105,18 @@ describe("ChatImageGallery", () => {
     { src: "/mock/b.png", alt: "Mock B", filename: "beta.png" }
   ];
 
-  it("renders a clickable card per image and opens a lightbox preview with metadata", async () => {
+  it("renders a clickable image per attachment and opens a lightbox preview", async () => {
     render(<ChatImageGallery images={images} messageId="msg-1" resolveImageUrl={(url) => `/resolved/${url}`} />);
 
     const cards = screen.getAllByRole("button", { name: /enlarge image/i });
     expect(cards).toHaveLength(2);
-    expect(screen.getByText("alpha.png")).toBeInTheDocument();
-    expect(screen.getByText(/Captured: 2026-05-11/)).toBeInTheDocument();
     expect(screen.getAllByRole("img")[0]).toHaveAttribute("src", "/resolved//mock/a.png");
 
     const user = userEvent.setup();
     await user.click(cards[0]!);
     const dialog = screen.getByRole("dialog", { name: "alpha.png" });
-    expect(within(dialog).getByText(/Source task_alpha/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "/resolved//mock/a.png");
+    expect(within(dialog).getByText(/Captured 2026-05-11/)).toBeInTheDocument();
   });
 
   it("closes the lightbox on Escape and on close-button click", async () => {
