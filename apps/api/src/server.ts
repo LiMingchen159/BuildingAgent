@@ -25,7 +25,7 @@ import { AgentMemoryStore } from "./agent/memory.js";
 import { ProcessRegistry } from "./agent/processRegistry.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
-import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js";
+import { indexKnowledgeBase, indexRepository, knowledgeBaseRoot, repoRootForProject } from "./agent/knowledgeBase.js";
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
 import { randomUUID } from "crypto";
@@ -790,9 +790,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return readable;
     }
 
+    // Scan repository directory on disk and merge with in-memory artifacts
+    const repoRoot = repoRootForProject(request.params.projectId);
+    const diskArtifacts = await indexRepository(request.params.projectId, repoRoot);
+    const memoryArtifacts = store.repositoryByProject[request.params.projectId] ?? [];
+
+    // Merge: disk first, then in-memory items not already present by id or path
+    const diskIds = new Set(diskArtifacts.map((a) => a.id));
+    const diskPaths = new Set(diskArtifacts.map((a) => a.path).filter(Boolean));
+    const merged = [
+      ...diskArtifacts,
+      ...memoryArtifacts.filter((a) => !diskIds.has(a.id) && (!a.path || !diskPaths.has(a.path)))
+    ];
+
+    // Update in-memory store so sidebar counts stay in sync
+    store.repositoryByProject[request.params.projectId] = merged;
+
     return {
       projectId: request.params.projectId,
-      artifacts: bounded(store.repositoryByProject[request.params.projectId] ?? [], store.maxListSize),
+      artifacts: bounded(merged, store.maxListSize),
       requestId: requestIdFor(request)
     };
   });

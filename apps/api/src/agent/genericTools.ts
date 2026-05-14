@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
-import { readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec } from "node:child_process";
 import type { AgentMemoryStore } from "./memory.js";
-import { knowledgeBaseRoot } from "./knowledgeBase.js";
+import { knowledgeBaseRoot, repoRootForProject } from "./knowledgeBase.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
@@ -39,6 +39,30 @@ function resolveSafePath(baseRoot: string, requested: string): string | null {
     return null;
   }
   return normalized;
+}
+
+function projectFileRoots(projectId: string): { kbRoot: string; repoRoot: string } {
+  return {
+    kbRoot: path.join(knowledgeBaseRoot(), projectId),
+    repoRoot: repoRootForProject(projectId)
+  };
+}
+
+function resolveForRead(projectId: string, requested: string): string | null {
+  const { kbRoot, repoRoot } = projectFileRoots(projectId);
+  // Try KB first, then repo
+  for (const root of [kbRoot, repoRoot]) {
+    if (!existsSync(root)) continue;
+    const safe = resolveSafePath(root, requested);
+    if (safe && existsSync(safe)) return safe;
+  }
+  // If neither exists, default to KB root for a cleaner error message
+  return resolveSafePath(kbRoot, requested);
+}
+
+function resolveForWrite(projectId: string, requested: string): string | null {
+  const { repoRoot } = projectFileRoots(projectId);
+  return resolveSafePath(repoRoot, requested);
 }
 
 export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService, processRegistry?: ProcessRegistry, skills?: AgentSkillRegistry): AgentToolRegistry {
@@ -116,14 +140,14 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "read_file",
       category: "file",
-      description: "Read a file from the project Knowledge Base. Returns text content with line numbers.",
+      description: "Read a file from the project Knowledge Base or Repository. Returns text content with line numbers.",
       schema: {
         name: "read_file",
         description: "Read a file from the project Knowledge Base. Use this to inspect TTL, CSV, Markdown, and other text files in the knowledge base.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to the file, relative to the project Knowledge Base directory." },
+            path: { type: "string", description: "Path to the file, relative to the project Knowledge Base or Repository directory." },
             offset: { type: "number", description: "Line number to start reading from (1-indexed, default 1)." },
             limit: { type: "number", description: "Maximum number of lines to read (default 200, max 500)." }
           },
@@ -135,10 +159,9 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         if (!requestedPath) {
           return { error: "path is required" };
         }
-        const kbRoot = knowledgeBaseRoot();
-        const safePath = resolveSafePath(kbRoot, requestedPath);
-        if (!safePath) {
-          return { error: "Path traversal is not allowed." };
+        const safePath = resolveForRead(context.projectId, requestedPath);
+        if (!safePath || !existsSync(safePath)) {
+          return { error: "Path not found in project Knowledge Base or Repository." };
         }
         try {
           const info = await stat(safePath);
@@ -174,10 +197,10 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "search_files",
       category: "file",
-      description: "Search for files in the project Knowledge Base by glob pattern or find text in file contents.",
+      description: "Search for files in the project Knowledge Base or Repository by glob pattern or find text in file contents.",
       schema: {
         name: "search_files",
-        description: "Search for files in the project Knowledge Base. Use mode='files' to find files by name pattern (glob). Use mode='content' to grep for text inside files.",
+        description: "Search for files in the project Knowledge Base or Repository. Use mode='files' to find files by name pattern (glob). Use mode='content' to grep for text inside files.",
         parameters: {
           type: "object",
           properties: {
@@ -194,11 +217,11 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           return { error: "pattern is required" };
         }
         const mode = textArg(args, "mode") || "files";
-        const kbRoot = knowledgeBaseRoot();
+        const { kbRoot, repoRoot } = projectFileRoots(context.projectId);
         const results: string[] = [];
         const MAX_RESULTS = 50;
 
-        async function visit(dir: string): Promise<void> {
+        async function visit(dir: string, root: string): Promise<void> {
           if (results.length >= MAX_RESULTS) return;
           let children;
           try {
@@ -211,27 +234,27 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
             if (child.name.startsWith(".")) continue;
             const absolute = path.join(dir, child.name);
             if (child.isDirectory()) {
-              await visit(absolute);
+              await visit(absolute, root);
               continue;
             }
-            const relative = path.relative(kbRoot, absolute).split(path.sep).join("/");
+            const relative = path.relative(root, absolute).split(path.sep).join("/");
             if (mode === "files") {
               // Simple glob matching
               const regex = new RegExp(pattern.replace(/\*\*/g, "___GLOBSTAR___").replace(/\*/g, "[^/]*").replace(/\?/g, ".").replace(/___GLOBSTAR___/g, ".*"));
               if (regex.test(relative)) {
-                results.push(relative);
+                results.push(`${root === repoRoot ? "repo" : "kb"}:/${relative}`);
               }
             } else {
               // Content search
               const ext = path.extname(child.name).toLowerCase();
               if (!TEXT_EXTENSIONS.has(ext)) continue;
-              const size = (await stat(absolute).catch(() => ({ size: 0 }))).size;
-              if (size > MAX_READ_BYTES) continue;
+              const fileStat = await stat(absolute).catch(() => null);
+              if (!fileStat || fileStat.size > MAX_READ_BYTES) continue;
               try {
                 const content = await readFile(absolute, "utf8");
                 if (content.includes(pattern)) {
                   const firstLine = content.split("\n").find((line) => line.includes(pattern))?.trim().slice(0, 120) ?? "";
-                  results.push(`${relative}: ${firstLine}`);
+                  results.push(`${root === repoRoot ? "repo" : "kb"}:/${relative}: ${firstLine}`);
                 }
               } catch {
                 // skip unreadable
@@ -240,13 +263,20 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           }
         }
 
+        // Search both project KB and repo
         const globFilter = textArg(args, "glob");
-        await visit(kbRoot);
+        for (const root of [kbRoot, repoRoot]) {
+          if (existsSync(root)) await visit(root, root);
+        }
 
         let filtered = results;
-        if (globFilter && mode === "content") {
+        if (globFilter) {
           const globRegex = new RegExp(globFilter.replace(/\*\*/g, "___GLOBSTAR___").replace(/\*/g, "[^/]*").replace(/\?/g, ".").replace(/___GLOBSTAR___/g, ".*"));
-          filtered = results.filter((r) => globRegex.test(r.split(":")[0]!));
+          // Strip kb:/repo: prefix before testing glob
+          filtered = results.filter((r) => {
+            const pathPart = r.slice(r.indexOf(":/") + 2).split(":")[0]!;
+            return globRegex.test(pathPart);
+          });
         }
 
         return {
@@ -281,7 +311,8 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           return { error: "command is required" };
         }
         const timeout = Math.min(numArg(args, "timeout", 30), 120) * 1000;
-        const kbRoot = knowledgeBaseRoot();
+        // Use project KB root as working directory; repo is accessible via ../data/<projectId>/repository/
+        const { kbRoot } = projectFileRoots(context.projectId);
 
         let result: string;
         try {
@@ -337,7 +368,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           return { error: "code is required" };
         }
         const timeout = Math.min(numArg(args, "timeout", 30), 120) * 1000;
-        const kbRoot = knowledgeBaseRoot();
+        const { kbRoot } = projectFileRoots(context.projectId);
         const tempPath = path.join(kbRoot, "_hermes_tmp.py");
 
         let stdout = "";
@@ -386,14 +417,14 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "write_file",
       category: "file",
-      description: "Create or overwrite a file in the project Knowledge Base.",
+      description: "Create or overwrite a file in the project Repository. All model-generated outputs should go to Repository.",
       schema: {
         name: "write_file",
         description: "Create or overwrite a text file in the project Knowledge Base. Creates parent directories automatically.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to the file, relative to the project Knowledge Base directory." },
+            path: { type: "string", description: "Path to the file, relative to the project Knowledge Base or Repository directory." },
             content: { type: "string", description: "File content to write." }
           },
           required: ["path", "content"]
@@ -411,18 +442,18 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         if (content.length > MAX_WRITE_BYTES) {
           return { error: `Content too large (${content.length} bytes). Maximum is ${MAX_WRITE_BYTES} bytes.` };
         }
-        const kbRoot = knowledgeBaseRoot();
-        const safePath = resolveSafePath(kbRoot, requestedPath);
+        const safePath = resolveForWrite(context.projectId, requestedPath);
         if (!safePath) {
           return { error: "Path traversal is not allowed." };
         }
         try {
+          await mkdir(path.dirname(safePath), { recursive: true });
           await writeFile(safePath, content, "utf8");
           const written = await stat(safePath);
           return {
             path: requestedPath,
             size: written.size,
-            message: `File written successfully (${written.size} bytes).`
+            message: `File written to repository successfully (${written.size} bytes).`
           };
         } catch (error) {
           return { error: error instanceof Error ? error.message : "Could not write file." };
@@ -434,14 +465,14 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "patch",
       category: "file",
-      description: "Replace a string in a Knowledge Base file. Provide the exact old string and the new string. Only the first match is replaced. Use read_file first to see the current content.",
+      description: "Replace a string in a project Knowledge Base or Repository file. Provide the exact old string and the new string. Only the first match is replaced. Use read_file first to see the current content.",
       schema: {
         name: "patch",
         description: "Make a targeted edit to a text file in the project Knowledge Base. Provide the exact old_string to find and the new_string to replace it with. Only the first occurrence is replaced.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to the file, relative to the project Knowledge Base directory." },
+            path: { type: "string", description: "Path to the file, relative to the project Knowledge Base or Repository directory." },
             old_string: { type: "string", description: "Exact text to replace." },
             new_string: { type: "string", description: "Replacement text." }
           },
@@ -454,9 +485,8 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         const newStr = textArg(args, "new_string");
         if (!requestedPath) return { error: "path is required" };
         if (!oldStr) return { error: "old_string is required" };
-        const kbRoot = knowledgeBaseRoot();
-        const safePath = resolveSafePath(kbRoot, requestedPath);
-        if (!safePath) return { error: "Path traversal is not allowed." };
+        const safePath = resolveForRead(context.projectId, requestedPath);
+        if (!safePath || !existsSync(safePath)) return { error: "Path not found in project Knowledge Base or Repository." };
         try {
           const info = await stat(safePath);
           if (!info.isFile()) return { error: "Not a file." };

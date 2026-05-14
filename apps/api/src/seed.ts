@@ -104,11 +104,13 @@ export interface RepositoryArtifact {
   id: string;
   projectId: string;
   name: string;
+  path?: string;
   kind: "note" | "analysis" | "summary";
   generatedAt: string;
-  sourceMessageId: string;
-  description: string;
-  content: string;
+  sourceMessageId?: string;
+  description?: string;
+  content?: string;
+  sizeBytes?: number;
 }
 
 export interface Conversation {
