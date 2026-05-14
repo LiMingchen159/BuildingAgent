@@ -29,6 +29,7 @@ import { indexKnowledgeBase, knowledgeBaseRoot } from "./agent/knowledgeBase.js"
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
 import { randomUUID } from "crypto";
+import WebSocket from "ws";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,117 +100,100 @@ function nextConversationId(): string {
   return `conv_${String(conversationSequence).padStart(6, "0")}`;
 }
 
-async function transcribeAudioViaParaformer(apiKey: string, model: string, audioBuffer: Buffer, baseUrl: string): Promise<string> {
-  // Use Aliyun DashScope Paraformer async file recognition API
-  // Step 1: Submit transcription task
-  const audioId = randomUUID();
-  const audioUrl = `${baseUrl}/temp-audio/${audioId}.webm`;
+async function transcribeAudioViaParaformer(apiKey: string, model: string, audioBuffer: Buffer): Promise<string> {
+  // Use Aliyun DashScope Paraformer realtime WebSocket API
+  // This works for all accounts and doesn't require public URL
 
-  // Save audio file temporarily
-  const { writeFileSync, unlinkSync, mkdirSync } = await import('fs');
-  const { resolve, join } = await import('path');
-  const tempDir = resolve(process.cwd(), '.temp-audio');
-  try {
-    mkdirSync(tempDir, { recursive: true });
-  } catch {
-    // Directory exists
-  }
-  const audioFile = join(tempDir, `${audioId}.webm`);
-  writeFileSync(audioFile, audioBuffer);
-
-  try {
-    // Submit task
-    const submitResponse = await fetch("https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: model,
-        input: {
-          file_urls: [audioUrl]
-        },
-        parameters: {
-          language_hints: ["zh", "en", "yue"]
-        }
-      })
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket("wss://dashscope.aliyuncs.com/api-ws/v1/inference", {
+      headers: { Authorization: `Bearer ${apiKey}` }
     });
 
-    if (!submitResponse.ok) {
-      const errorText = await submitResponse.text();
-      throw new Error(`Submit task failed ${submitResponse.status}: ${errorText}`);
-    }
+    const taskId = randomUUID();
+    let transcriptParts: string[] = [];
+    let errorMessage = "";
 
-    const submitResult = await submitResponse.json() as {
-      output?: { task_id?: string };
-      message?: string;
-    };
-
-    const taskId = submitResult.output?.task_id;
-    if (!taskId) {
-      throw new Error("No task_id returned");
-    }
-
-    // Step 2: Poll for result (max 30 seconds)
-    const maxAttempts = 30;
-    const pollInterval = 1000; // 1 second
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-
-      const queryResponse = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`
+    ws.on("open", () => {
+      // Send start task message
+      ws.send(JSON.stringify({
+        header: {
+          action: "run-task",
+          task_id: taskId,
+          streaming: "duplex"
+        },
+        payload: {
+          task_group: "audio",
+          task: "asr",
+          function: "recognition",
+          model: "paraformer-realtime-v2",
+          parameters: {
+            format: "pcm",
+            sample_rate: 16000,
+            language_hints: ["zh", "en", "yue"]
+          },
+          input: {}
         }
-      });
+      }));
 
-      if (!queryResponse.ok) {
-        continue; // Retry
-      }
+      // Send audio in chunks (simulate realtime: 100ms chunks for 16kHz PCM)
+      const chunkSize = 3200; // 100ms at 16kHz PCM 16-bit
+      let offset = 0;
 
-      const queryResult = await queryResponse.json() as {
-        output?: {
-          task_status?: string;
-          results?: Array<{
-            transcription_url?: string;
-            subtask_status?: string;
-          }>;
-        };
-      };
-
-      const taskStatus = queryResult.output?.task_status;
-
-      if (taskStatus === "SUCCEEDED") {
-        const results = queryResult.output?.results || [];
-        if (results.length > 0 && results[0].subtask_status === "SUCCEEDED") {
-          const transcriptionUrl = results[0].transcription_url;
-          if (transcriptionUrl) {
-            // Fetch transcription result
-            const transcriptionResponse = await fetch(transcriptionUrl);
-            const transcription = await transcriptionResponse.json() as {
-              transcripts?: Array<{ text?: string }>;
-            };
-            const text = transcription.transcripts?.map(t => t.text || "").join(" ").trim() || "";
-            return text;
-          }
+      const sendInterval = setInterval(() => {
+        if (offset >= audioBuffer.length) {
+          clearInterval(sendInterval);
+          // Send finish message
+          ws.send(JSON.stringify({
+            header: {
+              action: "finish-task",
+              task_id: taskId,
+              streaming: "duplex"
+            },
+            payload: { input: {} }
+          }));
+          return;
         }
-      } else if (taskStatus === "FAILED") {
-        throw new Error("Transcription task failed");
-      }
-      // Continue polling if PENDING or RUNNING
-    }
 
-    throw new Error("Transcription timeout");
-  } finally {
-    // Clean up temp file
-    try {
-      unlinkSync(audioFile);
-    } catch {
-      // Ignore
-    }
-  }
+        const chunk = audioBuffer.subarray(offset, Math.min(offset + chunkSize, audioBuffer.length));
+        ws.send(chunk);
+        offset += chunkSize;
+      }, 100);
+    });
+
+    ws.on("message", (data: any) => {
+      try {
+        const msg = JSON.parse(data.toString());
+
+        if (msg.header?.event === "result-generated" && msg.payload?.output?.sentence?.text) {
+          transcriptParts.push(msg.payload.output.sentence.text);
+        }
+
+        if (msg.header?.event === "task-finished") {
+          ws.close();
+        }
+
+        if (msg.header?.event === "task-failed") {
+          errorMessage = msg.header?.error_message || "Task failed";
+          ws.close();
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    });
+
+    ws.on("close", () => {
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+      } else {
+        resolve(transcriptParts.join(" ").trim() || "");
+      }
+    });
+
+    ws.on("error", (err: any) => {
+      errorMessage = err.message || "WebSocket error";
+      ws.close();
+    });
+  });
 }
 
 
@@ -1816,22 +1800,6 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   });
 
-  // Serve temporary audio files for Aliyun STT API
-  app.get("/temp-audio/:filename", async (request, reply) => {
-    const { filename } = request.params as { filename: string };
-    const { resolve, join } = await import('path');
-    const { readFileSync } = await import('fs');
-    const tempDir = resolve(process.cwd(), '.temp-audio');
-    const filePath = join(tempDir, filename);
-
-    try {
-      const fileBuffer = readFileSync(filePath);
-      reply.type('audio/webm').send(fileBuffer);
-    } catch (error) {
-      return sendError(request, reply, 404, "file_not_found", "Audio file not found");
-    }
-  });
-
   app.post("/api/stt/transcribe", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) {
@@ -1855,13 +1823,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return sendError(request, reply, 422, "stt_empty_audio", "Audio data is required.");
     }
 
-    // Get base URL for temp file hosting
-    const protocol = request.headers['x-forwarded-proto'] || 'http';
-    const host = request.headers['host'] || 'localhost:3000';
-    const baseUrl = `${protocol}://${host}`;
-
     try {
-      const text = await transcribeAudioViaParaformer(apiKey, model, rawBody, baseUrl);
+      const text = await transcribeAudioViaParaformer(apiKey, model, rawBody);
       return { text, requestId: requestIdFor(request) };
     } catch (error) {
       request.log.error({ err: error, requestId: requestIdFor(request) }, "STT transcription failed");
