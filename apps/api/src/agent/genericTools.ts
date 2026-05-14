@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink, writeFile, copyFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec } from "node:child_process";
 import type { AgentMemoryStore } from "./memory.js";
-import { knowledgeBaseRoot, repoRootForProject } from "./knowledgeBase.js";
+import { kbRootForProject, repoRootForProject } from "./knowledgeBase.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
@@ -18,6 +18,7 @@ const MAX_WRITE_BYTES = 500_000;
 const TERMINAL_TIMEOUT_MS = 30_000;
 const TERMINAL_MAX_OUTPUT = 100_000;
 const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".ttl", ".rdf", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".hpp", ".sh", ".bash", ".zsh", ".sql", ".graphql", ".proto", ".toml", ".ini", ".cfg", ".conf", ".env", ".log"]);
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
 
 function textArg(args: Record<string, unknown>, key: string): string {
   const value = args[key];
@@ -43,26 +44,138 @@ function resolveSafePath(baseRoot: string, requested: string): string | null {
 
 function projectFileRoots(projectId: string): { kbRoot: string; repoRoot: string } {
   return {
-    kbRoot: path.join(knowledgeBaseRoot(), projectId),
+    kbRoot: kbRootForProject(projectId),
     repoRoot: repoRootForProject(projectId)
   };
 }
 
-function resolveForRead(projectId: string, requested: string): string | null {
-  const { kbRoot, repoRoot } = projectFileRoots(projectId);
-  // Try KB first, then repo
-  for (const root of [kbRoot, repoRoot]) {
-    if (!existsSync(root)) continue;
-    const safe = resolveSafePath(root, requested);
-    if (safe && existsSync(safe)) return safe;
-  }
-  // If neither exists, default to KB root for a cleaner error message
-  return resolveSafePath(kbRoot, requested);
+type ScopedRoot = "kb" | "repo";
+
+interface ResolvedProjectPath {
+  root: ScopedRoot;
+  relativePath: string;
+  absolutePath: string;
 }
 
-function resolveForWrite(projectId: string, requested: string): string | null {
+function normalizeRelativePath(requested: string): string {
+  return requested.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function parseScopedPath(requested: string): { scope: ScopedRoot | null; relativePath: string } {
+  const trimmed = requested.trim();
+  if (/^kb:\//i.test(trimmed)) {
+    return { scope: "kb", relativePath: normalizeRelativePath(trimmed.replace(/^kb:\//i, "")) };
+  }
+  if (/^repo:\//i.test(trimmed)) {
+    return { scope: "repo", relativePath: normalizeRelativePath(trimmed.replace(/^repo:\//i, "")) };
+  }
+  return { scope: null, relativePath: normalizeRelativePath(trimmed) };
+}
+
+function formatScopedPath(root: ScopedRoot, relativePath: string): string {
+  return `${root}:/${relativePath}`;
+}
+
+function resolveReadPath(projectId: string, requested: string): ResolvedProjectPath | null {
+  const { kbRoot, repoRoot } = projectFileRoots(projectId);
+  const parsed = parseScopedPath(requested);
+  const candidates: Array<{ root: ScopedRoot; base: string }> =
+    parsed.scope === "kb" ? [{ root: "kb", base: kbRoot }]
+      : parsed.scope === "repo" ? [{ root: "repo", base: repoRoot }]
+        : [{ root: "kb", base: kbRoot }, { root: "repo", base: repoRoot }];
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate.base)) continue;
+    const safe = resolveSafePath(candidate.base, parsed.relativePath);
+    if (safe && existsSync(safe)) {
+      return {
+        root: candidate.root,
+        relativePath: parsed.relativePath,
+        absolutePath: safe
+      };
+    }
+  }
+  return null;
+}
+
+function resolveRepoWritePath(projectId: string, requested: string): ResolvedProjectPath | null {
   const { repoRoot } = projectFileRoots(projectId);
-  return resolveSafePath(repoRoot, requested);
+  const parsed = parseScopedPath(requested);
+  if (parsed.scope === "kb") {
+    return null;
+  }
+  const safe = resolveSafePath(repoRoot, parsed.relativePath);
+  if (!safe) {
+    return null;
+  }
+  return {
+    root: "repo",
+    relativePath: parsed.relativePath,
+    absolutePath: safe
+  };
+}
+
+function terminalCommandGuard(command: string): { error: string } | null {
+  const normalized = command.replace(/\r\n/g, "\n");
+  if (/python\s+-\s+<<['"]?PY['"]?/i.test(normalized)) {
+    return {
+      error: "Bash heredoc syntax (`python - <<'PY'`) is not supported in this Windows PowerShell environment. Use the execute_code tool for Python snippets, or run Python with a real script file."
+    };
+  }
+  if (/\/mnt\/data|\/workspace|\/app/.test(normalized)) {
+    return {
+      error: "This command is probing Linux/container paths (`/mnt/data`, `/workspace`, `/app`) that do not match this local project runtime. Use `os.environ['KB_DIR']` for source data and `os.environ['OUTPUT_DIR']` for generated outputs."
+    };
+  }
+  return null;
+}
+
+function collectGeneratedImages(outputFiles: Array<{ path: string; name: string; sizeBytes: number }>, source: string): Array<Record<string, string>> {
+  return outputFiles
+    .filter((file) => IMAGE_EXTENSIONS.has(path.extname(file.name).toLowerCase()))
+    .map((file) => ({
+      src: file.path,
+      alt: path.parse(file.name).name,
+      filename: file.name,
+      capturedAt: new Date().toISOString(),
+      source
+    }));
+}
+
+async function syncAndListOutputFiles(outputDir: string, kbRoot: string): Promise<{ files: Array<{ path: string; name: string; sizeBytes: number }>; synced: string[] }> {
+  // 1. Ensure outputs/ exists
+  await mkdir(outputDir, { recursive: true });
+
+  // 2. Migrate any files wrongly written to kb/outputs/ → repository/outputs/
+  const synced: string[] = [];
+  const kbOutputsDir = path.join(kbRoot, "outputs");
+  try {
+    const kbFiles = await readdir(kbOutputsDir, { withFileTypes: true });
+    for (const c of kbFiles) {
+      if (!c.isFile()) continue;
+      const src = path.join(kbOutputsDir, c.name);
+      const dst = path.join(outputDir, c.name);
+      try {
+        await copyFile(src, dst);
+        synced.push(c.name);
+      } catch { /* skip */ }
+    }
+  } catch { /* kb/outputs may not exist */ }
+
+  // 3. List all files now in repository/outputs/
+  const files: Array<{ path: string; name: string; sizeBytes: number }> = [];
+  try {
+    const children = await readdir(outputDir, { withFileTypes: true });
+    for (const c of children) {
+      if (!c.isFile()) continue;
+      try {
+        const info = await stat(path.join(outputDir, c.name));
+        files.push({ path: `outputs/${c.name}`, name: c.name, sizeBytes: info.size });
+      } catch { /* skip */ }
+    }
+  } catch { /* output dir may not exist */ }
+
+  return { files, synced };
 }
 
 export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: SchedulerService, processRegistry?: ProcessRegistry, skills?: AgentSkillRegistry): AgentToolRegistry {
@@ -159,23 +272,23 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         if (!requestedPath) {
           return { error: "path is required" };
         }
-        const safePath = resolveForRead(context.projectId, requestedPath);
-        if (!safePath || !existsSync(safePath)) {
+        const resolved = resolveReadPath(context.projectId, requestedPath);
+        if (!resolved || !existsSync(resolved.absolutePath)) {
           return { error: "Path not found in project Knowledge Base or Repository." };
         }
         try {
-          const info = await stat(safePath);
+          const info = await stat(resolved.absolutePath);
           if (!info.isFile()) {
             return { error: "Not a file." };
           }
-          const ext = path.extname(safePath).toLowerCase();
+          const ext = path.extname(resolved.absolutePath).toLowerCase();
           if (!TEXT_EXTENSIONS.has(ext) && ext !== "") {
             return { error: `Cannot read binary files (extension: ${ext}).` };
           }
           if (info.size > MAX_READ_BYTES) {
             return { error: `File too large (${info.size} bytes). Maximum is ${MAX_READ_BYTES} bytes.` };
           }
-          const content = await readFile(safePath, "utf8");
+          const content = await readFile(resolved.absolutePath, "utf8");
           const lines = content.split("\n");
           const offset = numArg(args, "offset", 1);
           const limit = Math.min(numArg(args, "limit", 200), 500);
@@ -184,6 +297,8 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           const result = slice.map((line, i) => `${String(start + i + 1).padStart(6, " ")}\t${line}`).join("\n");
           return {
             path: requestedPath,
+            resolvedPath: formatScopedPath(resolved.root, resolved.relativePath),
+            source: resolved.root === "repo" ? "repository" : "kb",
             totalLines: lines.length,
             offset: start + 1,
             lines: slice.length,
@@ -218,7 +333,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         }
         const mode = textArg(args, "mode") || "files";
         const { kbRoot, repoRoot } = projectFileRoots(context.projectId);
-        const results: string[] = [];
+        const results: Array<{ path: string; source: "kb" | "repository"; preview?: string }> = [];
         const MAX_RESULTS = 50;
 
         async function visit(dir: string, root: string): Promise<void> {
@@ -242,7 +357,10 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
               // Simple glob matching
               const regex = new RegExp(pattern.replace(/\*\*/g, "___GLOBSTAR___").replace(/\*/g, "[^/]*").replace(/\?/g, ".").replace(/___GLOBSTAR___/g, ".*"));
               if (regex.test(relative)) {
-                results.push(`${root === repoRoot ? "repo" : "kb"}:/${relative}`);
+                results.push({
+                  path: `${root === repoRoot ? "repo" : "kb"}:/${relative}`,
+                  source: root === repoRoot ? "repository" : "kb"
+                });
               }
             } else {
               // Content search
@@ -254,7 +372,11 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
                 const content = await readFile(absolute, "utf8");
                 if (content.includes(pattern)) {
                   const firstLine = content.split("\n").find((line) => line.includes(pattern))?.trim().slice(0, 120) ?? "";
-                  results.push(`${root === repoRoot ? "repo" : "kb"}:/${relative}: ${firstLine}`);
+                  results.push({
+                    path: `${root === repoRoot ? "repo" : "kb"}:/${relative}`,
+                    source: root === repoRoot ? "repository" : "kb",
+                    preview: firstLine
+                  });
                 }
               } catch {
                 // skip unreadable
@@ -274,7 +396,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           const globRegex = new RegExp(globFilter.replace(/\*\*/g, "___GLOBSTAR___").replace(/\*/g, "[^/]*").replace(/\?/g, ".").replace(/___GLOBSTAR___/g, ".*"));
           // Strip kb:/repo: prefix before testing glob
           filtered = results.filter((r) => {
-            const pathPart = r.slice(r.indexOf(":/") + 2).split(":")[0]!;
+            const pathPart = r.path.slice(r.path.indexOf(":/") + 2);
             return globRegex.test(pathPart);
           });
         }
@@ -292,10 +414,10 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "terminal",
       category: "utility",
-      description: "Execute a shell command. Use this to run Python scripts, SPARQL queries, shell commands, or any CLI tool. The working directory is the project Knowledge Base root. Commands time out after 30 seconds.",
+      description: "Execute a shell command. Use this to run Python scripts, SPARQL queries, shell commands, or any CLI tool. The working directory is the project Repository. KB files are READ-ONLY input data at $KB_DIR. Outputs MUST go to the absolute path $OUTPUT_DIR — use os.environ['OUTPUT_DIR'] in Python. NEVER write to ../kb/. When done, check markdownHint in the result for the exact Markdown image paths to use.",
       schema: {
         name: "terminal",
-        description: "Execute a shell command with a timeout. Use for Python scripts, SPARQL queries, shell commands, git operations, or any CLI tool. The working directory is the project Knowledge Base root.",
+        description: "Execute a shell command with a timeout. Use for Python scripts, SPARQL queries, shell commands, git operations, or any CLI tool. The working directory is the project Repository root. Outputs MUST go to the absolute path $OUTPUT_DIR (os.environ['OUTPUT_DIR'] in Python). NEVER use relative paths or ../kb/.",
         parameters: {
           type: "object",
           properties: {
@@ -310,19 +432,29 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         if (!command) {
           return { error: "command is required" };
         }
+        const guard = terminalCommandGuard(command);
+        if (guard) {
+          return guard;
+        }
         const timeout = Math.min(numArg(args, "timeout", 30), 120) * 1000;
-        // Use project KB root as working directory; repo is accessible via ../data/<projectId>/repository/
-        const { kbRoot } = projectFileRoots(context.projectId);
+        const { kbRoot, repoRoot } = projectFileRoots(context.projectId);
+        const outputDir = path.join(repoRoot, "outputs");
 
         let result: string;
         try {
+          await mkdir(outputDir, { recursive: true });
+
+          // Force correct output path — replace ../kb/outputs with the actual OUTPUT_DIR
+          const outputDirForward = outputDir.replace(/\\/g, "/");
+          const patchedCommand = command.replace(/\.\.\/kb\/outputs/g, outputDirForward);
+
           result = await new Promise<string>((resolve, reject) => {
-            const child = exec(command, {
-              cwd: kbRoot,
+            const child = exec(patchedCommand, {
+              cwd: repoRoot,
               timeout,
               maxBuffer: TERMINAL_MAX_OUTPUT,
               shell: process.env.SHELL ?? (process.platform === "win32" ? "cmd.exe" : "/bin/bash"),
-              env: { ...process.env, PYTHONUNBUFFERED: "1" }
+              env: { ...process.env, PYTHONUNBUFFERED: "1", MPLBACKEND: "Agg", REPO_DIR: repoRoot, KB_DIR: kbRoot, OUTPUT_DIR: outputDir }
             }, (error, stdout, stderr) => {
               if (error && !stdout && !stderr) {
                 reject(error);
@@ -336,11 +468,28 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           result = error instanceof Error ? error.message : "Command failed";
         }
 
+        const { files: outputFiles, synced } = await syncAndListOutputFiles(outputDir, kbRoot);
+        const generatedImages = collectGeneratedImages(outputFiles, "terminal");
+
+        // Inject image paths directly into the visible output so the LLM can copy-paste them
+        let augmentedOutput = result.slice(0, TERMINAL_MAX_OUTPUT);
+        if (outputFiles.length > 0) {
+          const imageList = outputFiles.map(f => `![${f.name}](${f.path})`).join("\n");
+          augmentedOutput += `\n\n=== OUTPUT FILES (copy these into your answer) ===\n${imageList}`;
+          if (synced.length > 0) {
+            augmentedOutput += `\n(synced from kb/outputs/: ${synced.join(", ")})\nWARNING: writing to kb/outputs is invalid; files were copied into repository/outputs for compatibility.`;
+          }
+        }
+
         return {
           command,
-          cwd: kbRoot,
-          output: result.slice(0, TERMINAL_MAX_OUTPUT),
-          truncated: result.length > TERMINAL_MAX_OUTPUT
+          cwd: repoRoot,
+          outputDir,
+          output: augmentedOutput,
+          truncated: result.length > TERMINAL_MAX_OUTPUT,
+          outputFiles,
+          synced,
+          generatedImages
         };
       }
     },
@@ -349,10 +498,10 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "execute_code",
       category: "utility",
-      description: "Execute Python code in a sandboxed subprocess. Writes code to a temp file, runs it with timeout, captures stdout/stderr. Use this instead of terminal for running Python snippets.",
+      description: "Execute Python code in a sandboxed subprocess. Writes code to a temp file, runs it with timeout, captures stdout/stderr. Use this instead of terminal for running Python snippets. Outputs MUST go to the absolute path os.environ['OUTPUT_DIR']. NEVER use relative paths or ../kb/. When done, check markdownHint for exact image paths.",
       schema: {
         name: "execute_code",
-        description: "Execute Python code in a subprocess. Use this for data analysis, computations, or processing files in the Knowledge Base. The working directory is the project Knowledge Base root.",
+        description: "Execute Python code in a subprocess. Use this for data analysis, computations, charts, and processing project files. The working directory is the project Repository root. Outputs MUST go to the absolute path os.environ['OUTPUT_DIR']. NEVER use relative paths or ../kb/. Reference generated files in Markdown as outputs/filename.png.",
         parameters: {
           type: "object",
           properties: {
@@ -368,22 +517,31 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           return { error: "code is required" };
         }
         const timeout = Math.min(numArg(args, "timeout", 30), 120) * 1000;
-        const { kbRoot } = projectFileRoots(context.projectId);
-        const tempPath = path.join(kbRoot, "_hermes_tmp.py");
+        const { kbRoot, repoRoot } = projectFileRoots(context.projectId);
+        const outputDir = path.join(repoRoot, "outputs");
+        const tempPath = path.join(repoRoot, "_hermes_tmp.py");
 
         let stdout = "";
         let stderr = "";
         try {
-          await writeFile(tempPath, code, "utf8");
+          await mkdir(outputDir, { recursive: true });
+
+          // Force the correct output directory — replace any ../kb/outputs paths
+          const patchedCode = code
+            .replace(/Path\(['"]\.\.\/kb\/outputs['"]\)/g, `Path(os.environ['OUTPUT_DIR'])`)
+            .replace(/['"]\.\.\/kb\/outputs\//g, `os.environ['OUTPUT_DIR'] + "/`)
+            .replace(/['"]\.\.\/kb\/outputs['"]/g, `os.environ['OUTPUT_DIR']`);
+
+          await writeFile(tempPath, patchedCode, "utf8");
           const result = await new Promise<string>((resolve, reject) => {
             const child = exec(
               `python "${tempPath}"`,
               {
-                cwd: kbRoot,
+                cwd: repoRoot,
                 timeout,
                 maxBuffer: TERMINAL_MAX_OUTPUT,
                 shell: process.platform === "win32" ? "cmd.exe" : "/bin/bash",
-                env: { ...process.env, PYTHONUNBUFFERED: "1" }
+                env: { ...process.env, PYTHONUNBUFFERED: "1", MPLBACKEND: "Agg", REPO_DIR: repoRoot, KB_DIR: kbRoot, OUTPUT_DIR: outputDir }
               },
               (error, out, err) => {
                 if (error && !out && !err) {
@@ -396,16 +554,35 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
               }
             );
           });
+          const { files: outputFiles, synced } = await syncAndListOutputFiles(outputDir, kbRoot);
+          const generatedImages = collectGeneratedImages(outputFiles, "execute_code");
+
+          // Inject image paths directly into stdout so the LLM can copy-paste them
+          let augmentedStdout = stdout.slice(0, TERMINAL_MAX_OUTPUT);
+          if (outputFiles.length > 0) {
+            const imageList = outputFiles.map(f => `![${f.name}](${f.path})`).join("\n");
+            augmentedStdout += `\n\n=== OUTPUT FILES (copy these into your answer) ===\n${imageList}`;
+            if (synced.length > 0) {
+              augmentedStdout += `\n(synced from kb/outputs/: ${synced.join(", ")})\nWARNING: writing to kb/outputs is invalid; files were copied into repository/outputs for compatibility.`;
+            }
+          }
+
           return {
-            stdout: stdout.slice(0, TERMINAL_MAX_OUTPUT),
+            stdout: augmentedStdout,
             stderr: stderr.slice(0, TERMINAL_MAX_OUTPUT),
-            truncated: stdout.length > TERMINAL_MAX_OUTPUT || stderr.length > TERMINAL_MAX_OUTPUT
+            repoRoot,
+            outputDir,
+            truncated: stdout.length > TERMINAL_MAX_OUTPUT || stderr.length > TERMINAL_MAX_OUTPUT,
+            outputFiles,
+            synced,
+            generatedImages
           };
         } catch (error) {
           return {
             stdout: stdout.slice(0, TERMINAL_MAX_OUTPUT),
             stderr: stderr.slice(0, TERMINAL_MAX_OUTPUT) || (error instanceof Error ? error.message : "Execution failed"),
-            error: error instanceof Error ? error.message : "Execution failed"
+            error: error instanceof Error ? error.message : "Execution failed",
+            outputDir
           };
         } finally {
           try { await unlink(tempPath); } catch { /* best effort cleanup */ }
@@ -420,11 +597,11 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
       description: "Create or overwrite a file in the project Repository. All model-generated outputs should go to Repository.",
       schema: {
         name: "write_file",
-        description: "Create or overwrite a text file in the project Knowledge Base. Creates parent directories automatically.",
+        description: "Create or overwrite a text file in the project Repository. Creates parent directories automatically. Use outputs/ for user-facing generated artifacts.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to the file, relative to the project Knowledge Base or Repository directory." },
+            path: { type: "string", description: "Path to the file, relative to the project Repository directory." },
             content: { type: "string", description: "File content to write." }
           },
           required: ["path", "content"]
@@ -442,16 +619,17 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         if (content.length > MAX_WRITE_BYTES) {
           return { error: `Content too large (${content.length} bytes). Maximum is ${MAX_WRITE_BYTES} bytes.` };
         }
-        const safePath = resolveForWrite(context.projectId, requestedPath);
-        if (!safePath) {
-          return { error: "Path traversal is not allowed." };
+        const resolved = resolveRepoWritePath(context.projectId, requestedPath);
+        if (!resolved) {
+          return { error: "Writes are only allowed inside the project Repository." };
         }
         try {
-          await mkdir(path.dirname(safePath), { recursive: true });
-          await writeFile(safePath, content, "utf8");
-          const written = await stat(safePath);
+          await mkdir(path.dirname(resolved.absolutePath), { recursive: true });
+          await writeFile(resolved.absolutePath, content, "utf8");
+          const written = await stat(resolved.absolutePath);
           return {
-            path: requestedPath,
+            path: resolved.relativePath,
+            resolvedPath: formatScopedPath("repo", resolved.relativePath),
             size: written.size,
             message: `File written to repository successfully (${written.size} bytes).`
           };
@@ -465,10 +643,10 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "patch",
       category: "file",
-      description: "Replace a string in a project Knowledge Base or Repository file. Provide the exact old string and the new string. Only the first match is replaced. Use read_file first to see the current content.",
+      description: "Replace a string in a project Repository file. Provide the exact old string and the new string. Only the first match is replaced. Use read_file first to see the current content.",
       schema: {
         name: "patch",
-        description: "Make a targeted edit to a text file in the project Knowledge Base. Provide the exact old_string to find and the new_string to replace it with. Only the first occurrence is replaced.",
+        description: "Make a targeted edit to a text file in the project Repository. Provide the exact old_string to find and the new_string to replace it with. Only the first occurrence is replaced.",
         parameters: {
           type: "object",
           properties: {
@@ -485,19 +663,20 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
         const newStr = textArg(args, "new_string");
         if (!requestedPath) return { error: "path is required" };
         if (!oldStr) return { error: "old_string is required" };
-        const safePath = resolveForRead(context.projectId, requestedPath);
-        if (!safePath || !existsSync(safePath)) return { error: "Path not found in project Knowledge Base or Repository." };
+        const resolved = resolveRepoWritePath(context.projectId, requestedPath);
+        if (!resolved || !existsSync(resolved.absolutePath)) return { error: "Path not found in project Repository." };
         try {
-          const info = await stat(safePath);
+          const info = await stat(resolved.absolutePath);
           if (!info.isFile()) return { error: "Not a file." };
           if (info.size > MAX_READ_BYTES) return { error: `File too large (${info.size} bytes).` };
-          const content = await readFile(safePath, "utf8");
+          const content = await readFile(resolved.absolutePath, "utf8");
           const idx = content.indexOf(oldStr);
           if (idx === -1) return { error: "old_string not found in file. Use read_file to verify the exact content." };
           const patched = content.slice(0, idx) + newStr + content.slice(idx + oldStr.length);
-          await writeFile(safePath, patched, "utf8");
+          await writeFile(resolved.absolutePath, patched, "utf8");
           return {
-            path: requestedPath,
+            path: resolved.relativePath,
+            resolvedPath: formatScopedPath("repo", resolved.relativePath),
             replaced: oldStr.length > 80 ? oldStr.slice(0, 80) + "..." : oldStr,
             message: `Replaced 1 occurrence. File now ${patched.length} chars.`
           };

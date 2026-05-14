@@ -4,9 +4,10 @@ import type { ChatMessageImage } from "../api";
 export interface ChatImageGalleryProps {
   images: ReadonlyArray<ChatMessageImage>;
   messageId: string;
+  resolveImageUrl?: (url: string) => string;
 }
 
-export function ChatImageGallery({ images, messageId }: ChatImageGalleryProps) {
+export function ChatImageGallery({ images, messageId, resolveImageUrl }: ChatImageGalleryProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   useEffect(() => {
@@ -30,11 +31,16 @@ export function ChatImageGallery({ images, messageId }: ChatImageGalleryProps) {
     return null;
   }
 
-  const active = activeIndex !== null ? images[activeIndex] : null;
+  const resolvedImages = images.map((image) => ({
+    ...image,
+    src: resolveImageUrl ? resolveImageUrl(image.src) : image.src
+  }));
+
+  const active = activeIndex !== null ? resolvedImages[activeIndex] : null;
 
   return (
     <div className="chat-image-gallery" role="group" aria-label="Image attachments">
-      {images.map((image, index) => (
+      {resolvedImages.map((image, index) => (
         <button
           type="button"
           key={`${messageId}-image-${index}`}

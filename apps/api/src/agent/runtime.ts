@@ -2,9 +2,10 @@ import type { AgentMemoryStore } from "./memory.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentLifecycleEventType, AgentLoopResult, AgentTurnRequest, AgentTurnResult } from "./types.js";
-import { knowledgeBasePrompt } from "./knowledgeBase.js";
+import { knowledgeBasePrompt, repositoryPrompt } from "./knowledgeBase.js";
 import type { ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
 import { ContextCompressor } from "./compressor.js";
+import type { ChatMessageImage } from "../seed.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -18,6 +19,28 @@ interface WorkingToolCall {
   call: ChatToolCall;
   args: Record<string, unknown>;
   result: Record<string, unknown>;
+}
+
+function parseGeneratedImages(result: Record<string, unknown>): ChatMessageImage[] {
+  if (!Array.isArray(result.generatedImages)) {
+    return [];
+  }
+  return result.generatedImages.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.src !== "string" || typeof record.alt !== "string") {
+      return [];
+    }
+    return [{
+      src: record.src,
+      alt: record.alt,
+      ...(typeof record.filename === "string" ? { filename: record.filename } : {}),
+      ...(typeof record.capturedAt === "string" ? { capturedAt: record.capturedAt } : {}),
+      ...(typeof record.source === "string" ? { source: record.source } : {})
+    }];
+  });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -147,6 +170,7 @@ export class AgentRuntime {
     const maxIterations = this.options.maxIterations ?? 20;
     const events: AgentLifecycleEvent[] = [];
     const toolCallHistory: Array<{ name: string; args: Record<string, unknown>; result: Record<string, unknown> }> = [];
+    const generatedImages = new Map<string, ChatMessageImage>();
 
     const yieldEvent = (event: AgentLifecycleEvent) => {
       events.push(event);
@@ -197,11 +221,18 @@ export class AgentRuntime {
       "Plan your work: tell the user what you're going to do, then do it step by step.",
       "You can schedule reminders for users. When a user asks to be reminded, use schedule_reminder with an appropriate delay.",
       "Be concise, actionable, and explicit about mocked BIM/Brick/IFC/timeseries data.",
+      "CRITICAL — Output files (charts, plots, images, reports) MUST be saved to os.environ['OUTPUT_DIR']. This is the ONLY valid output location.",
+      "In Python: output_dir = os.environ['OUTPUT_DIR']; out = os.path.join(output_dir, 'filename.png'). The cwd is the Repository root — do NOT use relative paths for output.",
+      "After generating an image, you MUST include a Markdown image link like ![alt](outputs/filename). Use exactly outputs/filename — the frontend resolves this relative to the Repository.",
       "Never expose secrets or hidden credentials.",
       skillHints ? `Available skills:\n${skillHints}` : "",
       `Available tools: ${this.options.tools.schemas().map((tool) => tool.name).join(", ")}`,
       recalled.length > 0 ? `Project memory:\n${recalled.map((entry) => `- ${entry.content}`).join("\n")}` : "Project memory: none yet.",
-      knowledgeBasePrompt(request.knowledgeBaseDocuments)
+      "Project inputs may come from two places: the Knowledge Base and the Repository workspace.",
+      "The Knowledge Base is strictly read-only reference material.",
+      "The Repository is the working directory. You may read and update repository files, but all generated outputs must stay inside the Repository.",
+      knowledgeBasePrompt(request.knowledgeBaseDocuments),
+      repositoryPrompt(request.repositoryArtifacts)
     ].filter(Boolean).join("\n\n");
 
     const conversationMessages: ProviderChatMessage[] = [
@@ -304,6 +335,9 @@ export class AgentRuntime {
           args,
           result: dispatchResult.result
         });
+        for (const image of parseGeneratedImages(dispatchResult.result)) {
+          generatedImages.set(image.src, image);
+        }
 
         // Append tool result to conversation
         conversationMessages.push({
@@ -357,17 +391,21 @@ export class AgentRuntime {
       finalText,
       events,
       toolCallHistory,
-      iterations
+      iterations,
+      generatedImages: [...generatedImages.values()]
     };
   }
 
   async runTurn(request: AgentTurnRequest): Promise<AgentTurnResult> {
     const events: AgentLifecycleEvent[] = [];
     let finalText = "";
-    let finalProvider = request.provider.metadata;
     let finalFallbackUsed = false;
+    let generatedImages: ChatMessageImage[] = [];
 
-    for await (const event of this.runTurnStream(request)) {
+    const stream = this.runTurnStream(request);
+    let next = await stream.next();
+    while (!next.done) {
+      const event = next.value;
       events.push(event);
       if (event.type === "turn_completed") {
         finalText = event.message;
@@ -375,15 +413,18 @@ export class AgentRuntime {
       if (event.metadata?.fallbackUsed !== undefined) {
         finalFallbackUsed = Boolean(event.metadata.fallbackUsed);
       }
+      next = await stream.next();
     }
+    generatedImages = next.value.generatedImages;
 
     return {
       completion: {
         text: finalText,
-        provider: finalProvider,
+        provider: request.provider.metadata,
         fallbackUsed: finalFallbackUsed
       },
-      events
+      events,
+      generatedImages
     };
   }
 

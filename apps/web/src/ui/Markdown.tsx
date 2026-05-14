@@ -170,13 +170,13 @@ function escape(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
+function renderInline(text: string, keyPrefix: string, resolveImageUrl?: (url: string) => string): ReactNode[] {
   if (!text) {
     return [];
   }
   const tokens: ReactNode[] = [];
   let cursor = 0;
-  const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(__[^_\n]+__)|(_[^_\n]+_)|(\[([^\]]+)\]\(([^)\s]+)\))/g;
+  const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(__[^_\n]+__)|(_[^_\n]+_)|(!\[([^\]]+)\]\(([^)\s]+)\))|(\[([^\]]+)\]\(([^)\s]+)\))/g;
   let match: RegExpExecArray | null;
   let counter = 0;
   while ((match = pattern.exec(text)) !== null) {
@@ -188,6 +188,11 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     counter += 1;
     if (segment.startsWith("`")) {
       tokens.push(<code className="md-inline-code" key={key}>{segment.slice(1, -1)}</code>);
+    } else if (segment.startsWith("![")) {
+      const alt = match[7] ?? "";
+      const rawUrl = match[8] ?? "";
+      const src = resolveImageUrl ? resolveImageUrl(rawUrl) : rawUrl;
+      tokens.push(<img className="md-image" key={key} src={src} alt={alt} loading="lazy" />);
     } else if (segment.startsWith("**")) {
       tokens.push(<strong key={key}>{segment.slice(2, -2)}</strong>);
     } else if (segment.startsWith("__")) {
@@ -197,8 +202,8 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     } else if (segment.startsWith("_")) {
       tokens.push(<em key={key}>{segment.slice(1, -1)}</em>);
     } else if (segment.startsWith("[")) {
-      const label = match[7] ?? "";
-      const href = match[8] ?? "";
+      const label = match[10] ?? "";
+      const href = match[11] ?? "";
       const safe = href.startsWith("http://") || href.startsWith("https://") || href.startsWith("mailto:") || href.startsWith("/") || href.startsWith("#");
       if (safe) {
         tokens.push(
@@ -263,9 +268,10 @@ export interface MarkdownProps {
   source: string;
   className?: string | undefined;
   onCopyCode?: ((value: string) => void) | undefined;
+  resolveImageUrl?: ((url: string) => string) | undefined;
 }
 
-export function Markdown({ source, className, onCopyCode }: MarkdownProps) {
+export function Markdown({ source, className, onCopyCode, resolveImageUrl }: MarkdownProps) {
   const blocks = parseBlocks(source);
   return (
     <div className={["markdown", className].filter(Boolean).join(" ")}>
@@ -276,14 +282,14 @@ export function Markdown({ source, className, onCopyCode }: MarkdownProps) {
         }
         if (block.kind === "heading") {
           const Tag = (`h${Math.min(6, block.level)}`) as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-          return <Tag key={key}>{renderInline(block.text, key)}</Tag>;
+          return <Tag key={key}>{renderInline(block.text, key, resolveImageUrl)}</Tag>;
         }
         if (block.kind === "list") {
           if (block.ordered) {
             return (
               <ol key={key} className="md-list md-list-ordered">
                 {block.items.map((item, itemIndex) => (
-                  <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>
+                  <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`, resolveImageUrl)}</li>
                 ))}
               </ol>
             );
@@ -291,13 +297,13 @@ export function Markdown({ source, className, onCopyCode }: MarkdownProps) {
           return (
             <ul key={key} className="md-list md-list-unordered">
               {block.items.map((item, itemIndex) => (
-                <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>
+                <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`, resolveImageUrl)}</li>
               ))}
             </ul>
           );
         }
         if (block.kind === "blockquote") {
-          return <blockquote key={key}>{renderInline(block.text, key)}</blockquote>;
+          return <blockquote key={key}>{renderInline(block.text, key, resolveImageUrl)}</blockquote>;
         }
         if (block.kind === "table") {
           return (
@@ -306,7 +312,7 @@ export function Markdown({ source, className, onCopyCode }: MarkdownProps) {
                 <thead>
                   <tr>
                     {block.header.map((cell, cellIndex) => (
-                      <th key={`${key}-h-${cellIndex}`}>{renderInline(cell, `${key}-h-${cellIndex}`)}</th>
+                      <th key={`${key}-h-${cellIndex}`}>{renderInline(cell, `${key}-h-${cellIndex}`, resolveImageUrl)}</th>
                     ))}
                   </tr>
                 </thead>
@@ -314,7 +320,7 @@ export function Markdown({ source, className, onCopyCode }: MarkdownProps) {
                   {block.rows.map((row, rowIndex) => (
                     <tr key={`${key}-r-${rowIndex}`}>
                       {row.map((cell, cellIndex) => (
-                        <td key={`${key}-r-${rowIndex}-${cellIndex}`}>{renderInline(cell, `${key}-r-${rowIndex}-${cellIndex}`)}</td>
+                        <td key={`${key}-r-${rowIndex}-${cellIndex}`}>{renderInline(cell, `${key}-r-${rowIndex}-${cellIndex}`, resolveImageUrl)}</td>
                       ))}
                     </tr>
                   ))}
@@ -326,7 +332,7 @@ export function Markdown({ source, className, onCopyCode }: MarkdownProps) {
         if (block.kind === "hr") {
           return <hr key={key} />;
         }
-        return <p key={key}>{renderInline(block.text, key)}</p>;
+        return <p key={key}>{renderInline(block.text, key, resolveImageUrl)}</p>;
       })}
     </div>
   );

@@ -79,6 +79,14 @@ export interface ChatMessageActivity {
   exitCode?: number;
 }
 
+export interface ChatMessageImage {
+  src: string;
+  alt: string;
+  filename?: string | undefined;
+  capturedAt?: string | undefined;
+  source?: string | undefined;
+}
+
 export interface ChatMessage {
   id: string;
   projectId: string;
@@ -86,6 +94,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   artifactId?: string | undefined;
+  images?: ChatMessageImage[] | undefined;
   activities?: ChatMessageActivity[] | undefined;
   workDuration?: number | undefined;
 }
@@ -105,7 +114,7 @@ export interface RepositoryArtifact {
   projectId: string;
   name: string;
   path?: string;
-  kind: "note" | "analysis" | "summary";
+  kind: "note" | "analysis" | "summary" | "image" | "chart" | "report" | "table";
   generatedAt: string;
   sourceMessageId?: string;
   description?: string;

@@ -8,7 +8,7 @@ import {
   requireSelectedProject,
   sendError
 } from "./auth.js";
-import { createSeedStore, type ChatMessage, type Conversation, type RepositoryArtifact, type SeedStore } from "./seed.js";
+import { createSeedStore, type ChatMessage, type ChatMessageImage, type Conversation, type RepositoryArtifact, type SeedStore } from "./seed.js";
 import {
   ProviderError,
   createDeterministicMockProvider,
@@ -25,16 +25,14 @@ import { AgentMemoryStore } from "./agent/memory.js";
 import { ProcessRegistry } from "./agent/processRegistry.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
-import { indexKnowledgeBase, indexRepository, knowledgeBaseRoot, repoRootForProject } from "./agent/knowledgeBase.js";
+import { countFiles, dataRoot, indexKnowledgeBase, indexRepository, kbRootForProject, repoRootForProject } from "./agent/knowledgeBase.js";
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
-import { randomUUID } from "crypto";
-import WebSocket from "ws";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
-import type { WebSocket } from "ws";
 import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
 import { randomUUID } from "node:crypto";
 
@@ -87,6 +85,52 @@ interface ChatBody {
   message?: unknown;
 }
 
+const MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".pdf": "application/pdf",
+  ".json": "application/json",
+  ".csv": "text/csv",
+  ".yaml": "text/yaml",
+  ".yml": "text/yaml",
+  ".md": "text/markdown",
+  ".txt": "text/plain",
+  ".html": "text/html",
+  ".css": "text/css",
+  ".js": "application/javascript",
+  ".ts": "text/typescript"
+};
+
+function normalizeRepositoryImagePath(rawPath: string): string {
+  let normalized = rawPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const kbMatch = normalized.match(/(?:^|\.\.\/|\/)kb\/outputs\/(.+)/i);
+  if (kbMatch) {
+    normalized = `outputs/${kbMatch[1]}`;
+  }
+  return normalized;
+}
+
+function dedupeChatImages(images: ChatMessageImage[] | undefined): ChatMessageImage[] | undefined {
+  if (!images || images.length === 0) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const deduped: ChatMessageImage[] = [];
+  for (const image of images) {
+    const normalized = normalizeRepositoryImagePath(image.src);
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push({ ...image, src: normalized });
+  }
+  return deduped.length > 0 ? deduped : undefined;
+}
+
 let messageSequence = 0;
 let conversationSequence = 0;
 
@@ -130,7 +174,7 @@ async function transcribeAudioViaParaformer(apiKey: string, _model: string, audi
     let fullText = '';
     let finished = false;
 
-    const ws = new WebSocket(wsUrl, {
+    const ws = new WSWebSocket(wsUrl, {
       headers: { Authorization: `Bearer ${apiKey}` }
     });
 
@@ -175,7 +219,7 @@ async function transcribeAudioViaParaformer(apiKey: string, _model: string, audi
           const chunkSize = 3200;
           for (let i = 0; i < pcmData.length; i += chunkSize) {
             const chunk = pcmData.subarray(i, Math.min(i + chunkSize, pcmData.length));
-            ws.send(chunk);
+          ws.send(chunk as Buffer);
           }
           // Signal end of audio stream
           ws.send(JSON.stringify({
@@ -235,14 +279,6 @@ function restoreSequences(store: SeedStore): void {
   }
   messageSequence = maxMsg;
   conversationSequence = maxConv;
-}
-
-function kbRootForProject(projectId: string, baseRoot: string): string {
-  const projectDir = path.join(baseRoot, projectId);
-  if (!existsSync(projectDir)) {
-    try { mkdirSync(projectDir, { recursive: true }); } catch { /* best effort */ }
-  }
-  return projectDir;
 }
 
 function bounded<T>(items: T[], limit: number): T[] {
@@ -331,16 +367,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   restoreSequences(store);
 
   const provider = options.chatProvider ?? providerResolver(env);
-  const memory = new AgentMemoryStore(path.join(knowledgeBaseRoot(env), "..", "data"));
+  const memory = new AgentMemoryStore(dataRoot(env));
   memory.start();
   const skills = createGenericSkillRegistry();
 
   // Structured JSON logging with file rotation (before scheduler so callbacks can use it)
-  const logDir = path.join(knowledgeBaseRoot(env), "..", "data");
+  const logDir = dataRoot(env);
   const structuredLogger = new StructuredLogger({ dir: logDir, maxFileBytes: 5 * 1024 * 1024 });
 
   // Scheduler for reminders/cronjobs
-  const schedulerDataDir = path.join(knowledgeBaseRoot(env), "..", "data");
+  const schedulerDataDir = dataRoot(env);
   const scheduler = new SchedulerService(schedulerDataDir);
   scheduler.setOnFired((job) => {
     structuredLogger.info("scheduler_job_fired", {
@@ -393,9 +429,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
   const processRegistry = new ProcessRegistry();
   const tools = createGenericToolRegistry(memory, scheduler, processRegistry, skills);
-  tools.enableLogging(path.join(knowledgeBaseRoot(env), "..", "data"));
+  tools.enableLogging(dataRoot(env));
   const agentRuntime = new AgentRuntime({ memory, tools, skills });
-  const kbRoot = knowledgeBaseRoot(env);
 
   const app = Fastify({
     logger: {
@@ -423,14 +458,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   });
 
   // WebSocket connection tracking per project
-  const wsConnections = new Map<string, Set<WebSocket>>();
+  const wsConnections = new Map<string, Set<WSWebSocket>>();
 
   function broadcastToProject(projectId: string, data: Record<string, unknown>): void {
     const sockets = wsConnections.get(projectId);
     if (!sockets || sockets.size === 0) return;
     const payload = JSON.stringify(data);
     for (const ws of sockets) {
-      if (ws.readyState === ws.OPEN) {
+      if (ws.readyState === WSWebSocket.OPEN) {
         ws.send(payload);
       }
     }
@@ -757,14 +792,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return readable;
     }
 
-    const projectKbRoot = kbRootForProject(request.params.projectId, kbRoot);
-    const documents = await indexKnowledgeBase(request.params.projectId, { rootDir: projectKbRoot });
+    const projectKbRoot = kbRootForProject(request.params.projectId);
+    const [documents, totalCount] = await Promise.all([
+      indexKnowledgeBase(request.params.projectId, { rootDir: projectKbRoot }),
+      countFiles(projectKbRoot)
+    ]);
     store.knowledgeBaseByProject[request.params.projectId] = documents;
 
     return {
       projectId: request.params.projectId,
-      documents: bounded(documents, store.maxListSize),
-      rootConfigured: Boolean(kbRoot),
+      documents: bounded(documents, Math.max(store.maxListSize, 200)),
+      totalCount,
+      rootConfigured: Boolean(projectKbRoot),
       requestId: requestIdFor(request)
     };
   });
@@ -792,7 +831,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     // Scan repository directory on disk and merge with in-memory artifacts
     const repoRoot = repoRootForProject(request.params.projectId);
-    const diskArtifacts = await indexRepository(request.params.projectId, repoRoot);
+    const [diskArtifacts, totalCount] = await Promise.all([
+      indexRepository(request.params.projectId, repoRoot),
+      countFiles(repoRoot)
+    ]);
     const memoryArtifacts = store.repositoryByProject[request.params.projectId] ?? [];
 
     // Merge: disk first, then in-memory items not already present by id or path
@@ -809,8 +851,53 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return {
       projectId: request.params.projectId,
       artifacts: bounded(merged, store.maxListSize),
+      totalCount: totalCount + memoryArtifacts.filter((a) => !diskIds.has(a.id) && (!a.path || !diskPaths.has(a.path))).length,
       requestId: requestIdFor(request)
     };
+  });
+
+  // Serve individual files from the project's repository directory.
+  // Wildcard path parameter is captured as request.params["*"].
+  app.get<{ Params: ProjectParams & { "*": string } }>("/api/projects/:projectId/repository/files/*", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const repoRoot = path.resolve(repoRootForProject(request.params.projectId));
+    const requestedPath = (request.params["*"] ?? "").replace(/\\/g, "/");
+    if (!requestedPath || requestedPath.includes("..") || requestedPath.startsWith("/")) {
+      return sendError(request, reply, 400, "repo_invalid_path", "Invalid file path.");
+    }
+
+    const absolutePath = path.resolve(repoRoot, requestedPath);
+    if (!absolutePath.startsWith(repoRoot + path.sep) && absolutePath !== repoRoot) {
+      return sendError(request, reply, 403, "repo_path_traversal", "Path traversal is not allowed.");
+    }
+
+    if (!existsSync(absolutePath)) {
+      return sendError(request, reply, 404, "repo_file_not_found", "File not found.");
+    }
+
+    try {
+      const info = await stat(absolutePath);
+      if (info.isDirectory()) {
+        return sendError(request, reply, 404, "repo_file_not_found", "File not found.");
+      }
+      const data = await readFile(absolutePath);
+      const ext = path.extname(absolutePath).toLowerCase();
+      const mime = MIME_TYPES[ext] ?? "application/octet-stream";
+      return reply.header("Content-Type", mime).header("Cache-Control", "public, max-age=3600").send(data);
+    } catch {
+      return sendError(request, reply, 500, "repo_read_error", "Failed to read file.");
+    }
   });
 
   app.post<{ Params: ProjectParams; Body: ChatBody & { conversationId?: unknown } }>("/api/projects/:projectId/chat", async (request, reply) => {
@@ -969,10 +1056,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     let agentTurn;
-    const projectKbRoot = kbRootForProject(projectId, kbRoot);
+    const projectKbRoot = kbRootForProject(projectId);
+    const projectRepoRoot = repoRootForProject(projectId);
     try {
-      const knowledgeBaseDocuments = await indexKnowledgeBase(projectId, { rootDir: projectKbRoot });
+      const [knowledgeBaseDocuments, repositoryArtifacts] = await Promise.all([
+        indexKnowledgeBase(projectId, { rootDir: projectKbRoot }),
+        indexRepository(projectId, projectRepoRoot)
+      ]);
       store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
+      store.repositoryByProject[projectId] = repositoryArtifacts;
       agentTurn = await agentRuntime.runTurn({
         projectId,
         userId: session.userId,
@@ -981,7 +1073,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         messages,
         providerMessages: chatHistoryForProvider(messages),
         provider,
-        knowledgeBaseDocuments
+        knowledgeBaseDocuments,
+        repositoryArtifacts
       });
     } catch (error) {
       if (!allowProviderFallback) {
@@ -998,6 +1091,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         providerErrorCode(error)
       );
       const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
+      const repositoryArtifacts = store.repositoryByProject[projectId] ?? [];
       agentTurn = await agentRuntime.runTurn({
         projectId,
         userId: session.userId,
@@ -1006,7 +1100,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         messages,
         providerMessages: chatHistoryForProvider(messages),
         provider: fallbackProvider,
-        knowledgeBaseDocuments
+        knowledgeBaseDocuments,
+        repositoryArtifacts
       });
     }
 
@@ -1015,7 +1110,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: agentTurn.completion.text
+      content: agentTurn.completion.text,
+      ...(dedupeChatImages(agentTurn.generatedImages) ? { images: dedupeChatImages(agentTurn.generatedImages) } : {})
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);
@@ -1229,6 +1325,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     let finalText = "";
     let finalProviderDiagnostics: ReturnType<typeof providerDiagnostics> | null = null;
     let streamError: string | null = null;
+    let streamGeneratedImages: ChatMessageImage[] = [];
     const turnStartedAt = Date.now();
     const capturedActivities: import("./seed.js").ChatMessageActivity[] = [];
     const captureActivity = (payload: Record<string, unknown>): import("./seed.js").ChatMessageActivity | null => {
@@ -1250,9 +1347,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
 
     try {
-      const projectKbRoot = kbRootForProject(projectId, kbRoot);
-      const knowledgeBaseDocuments = await indexKnowledgeBase(projectId, { rootDir: projectKbRoot });
+      const projectKbRoot = kbRootForProject(projectId);
+      const projectRepoRoot = repoRootForProject(projectId);
+      const [knowledgeBaseDocuments, repositoryArtifacts] = await Promise.all([
+        indexKnowledgeBase(projectId, { rootDir: projectKbRoot }),
+        indexRepository(projectId, projectRepoRoot)
+      ]);
       store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
+      store.repositoryByProject[projectId] = repositoryArtifacts;
 
       const seenActivities = new Map<string, number>();
       let activitySequence = 0;
@@ -1302,7 +1404,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         });
         sseWrite("token_reset", { requestId: reqId });
       };
-      for await (const event of agentRuntime.runTurnStream({
+      const primaryStream = agentRuntime.runTurnStream({
         projectId,
         userId: session.userId,
         requestId: reqId,
@@ -1310,8 +1412,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         messages,
         providerMessages: chatHistoryForProvider(messages),
         provider,
-        knowledgeBaseDocuments
-      })) {
+        knowledgeBaseDocuments,
+        repositoryArtifacts
+      });
+      let primaryStep = await primaryStream.next();
+      while (!primaryStep.done) {
+        const event = primaryStep.value;
         if (event.type === "thinking") {
           pendingThinking += event.message;
           sseWrite("token", { content: event.message });
@@ -1360,7 +1466,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           pendingThinking = "";
           finalText = event.message || "";
         }
+        primaryStep = await primaryStream.next();
       }
+      streamGeneratedImages = primaryStep.value.generatedImages;
 
       finalProviderDiagnostics = providerDiagnostics(provider.metadata, false);
     } catch (error) {
@@ -1373,6 +1481,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
         try {
           const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
+          const repositoryArtifacts = store.repositoryByProject[projectId] ?? [];
           const fallbackSeenActivities = new Map<string, number>();
           let fallbackActivitySequence = 0;
           const sanitizeFallbackToolDetail = (value: unknown): string | undefined => {
@@ -1414,7 +1523,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             });
             sseWrite("token_reset", { requestId: reqId });
           };
-          for await (const event of agentRuntime.runTurnStream({
+          const fallbackStream = agentRuntime.runTurnStream({
             projectId,
             userId: session.userId,
             requestId: reqId,
@@ -1422,8 +1531,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             messages,
             providerMessages: chatHistoryForProvider(messages),
             provider: fallbackProvider,
-            knowledgeBaseDocuments
-          })) {
+            knowledgeBaseDocuments,
+            repositoryArtifacts
+          });
+          let fallbackStep = await fallbackStream.next();
+          while (!fallbackStep.done) {
+            const event = fallbackStep.value;
             if (event.type === "thinking") {
               fallbackPendingThinking += event.message;
               sseWrite("token", { content: event.message });
@@ -1470,7 +1583,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
               fallbackPendingThinking = "";
               finalText = event.message || "";
             }
+            fallbackStep = await fallbackStream.next();
           }
+          streamGeneratedImages = fallbackStep.value.generatedImages;
 
           finalProviderDiagnostics = providerDiagnostics(fallbackProvider.metadata, true);
         } catch (fallbackError) {
@@ -1499,12 +1614,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     // Store assistant message
+    const finalGeneratedImages = dedupeChatImages(streamGeneratedImages);
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
       content: finalText || "I wasn't able to complete the analysis.",
+      ...(finalGeneratedImages ? { images: finalGeneratedImages } : {}),
       ...(capturedActivities.length > 0 ? { activities: capturedActivities } : {}),
       workDuration: Date.now() - turnStartedAt
     };

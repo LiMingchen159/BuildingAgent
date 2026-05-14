@@ -34,6 +34,7 @@ import {
   deleteProject,
   type ChatProviderDiagnostics,
   type ChatLifecycleEvent,
+  type ChatMessageImage,
   type ChatStreamActivityEvent,
   type BuildingCapabilitySummary,
   type ChatMessage,
@@ -154,6 +155,41 @@ function artifactToRepositoryItem(artifact: RepositoryArtifact): RepositoryItem 
     description: artifact.description,
     content: artifact.content
   };
+}
+
+function normalizeChatImagePath(rawUrl: string): string {
+  let normalized = rawUrl.replace(/\\/g, "/").replace(/^\/+/, "");
+  const kbMatch = normalized.match(/(?:^|\.\.\/|\/)kb\/outputs\/(.+)/i);
+  if (kbMatch) {
+    normalized = `outputs/${kbMatch[1]}`;
+  }
+  return normalized;
+}
+
+function extractMarkdownImagePaths(content: string): string[] {
+  const matches = content.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g);
+  return [...matches].map((match) => normalizeChatImagePath(match[1] ?? ""));
+}
+
+function dedupeMessageImages(images: ChatMessageImage[] | undefined, content: string): ChatMessageImage[] | undefined {
+  if (!images || images.length === 0) {
+    return undefined;
+  }
+  const markdownPaths = new Set(extractMarkdownImagePaths(content).map((value) => value.toLowerCase()));
+  const seen = new Set<string>();
+  const deduped = images.filter((image) => {
+    const normalized = normalizeChatImagePath(image.src);
+    const key = normalized.toLowerCase();
+    if (seen.has(key) || markdownPaths.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  }).map((image) => ({
+    ...image,
+    src: normalizeChatImagePath(image.src)
+  }));
+  return deduped.length > 0 ? deduped : undefined;
 }
 
 function Icon({ name, className = "", ...props }: { name: IconName; className?: string } & SVGProps<SVGSVGElement>) {
@@ -715,10 +751,11 @@ function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActi
   );
 }
 
-function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, streamingActivity, streamStartTime, streamElapsed, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamStartTime: number | null; streamElapsed: number; onStop: () => void }) {
+function ChatWorkspace({ project, user, token, messages, activeConversationId, onSend, busy, provider, requestId, streamingActivity, streamStartTime, streamElapsed, onStop }: { project: ProjectSummary; user: UserSummary | null; token: string; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamStartTime: number | null; streamElapsed: number; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
+  const [lightbox, setLightbox] = useState<{ images: string[]; alts: string[]; index: number } | null>(null);
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing" | "error">("idle");
   const [voiceError, setVoiceError] = useState("");
   const [audioLevels, setAudioLevels] = useState<number[]>(new Array(90).fill(0));
@@ -744,6 +781,40 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const activities = streamingActivity ?? [];
   const isRecording = voiceState === "recording";
   const isTranscribing = voiceState === "transcribing";
+
+  const resolveImageUrl = (rawUrl: string): string => {
+    if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://") || rawUrl.startsWith("/") || rawUrl.startsWith("#") || rawUrl.startsWith("mailto:") || rawUrl.startsWith("data:")) {
+      return rawUrl;
+    }
+    // Normalize wrong paths: ../kb/outputs/foo.png or kb/outputs/foo.png → outputs/foo.png
+    let normalized = rawUrl;
+    const kbMatch = normalized.match(/(?:^|\.\.\/|\/)kb\/outputs\/(.+)/);
+    if (kbMatch) {
+      normalized = `outputs/${kbMatch[1]}`;
+    }
+    const params = new URLSearchParams();
+    if (token) {
+      params.set("token", token);
+    }
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    return `/api/projects/${encodeURIComponent(project.id)}/repository/files/${normalized}${query}`;
+  };
+
+  // Lightbox keyboard navigation
+  useEffect(() => {
+    if (!lightbox) return;
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setLightbox(null);
+      } else if (event.key === "ArrowRight") {
+        setLightbox((cur) => cur ? { ...cur, index: Math.min(cur.images.length - 1, cur.index + 1) } : null);
+      } else if (event.key === "ArrowLeft") {
+        setLightbox((cur) => cur ? { ...cur, index: Math.max(0, cur.index - 1) } : null);
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [lightbox]);
 
   // Timer for streaming elapsed time is now managed by parent component
 
@@ -987,7 +1058,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
       for (const buffer of pcmBuffers) {
         for (let i = 0; i < buffer.length; i++) {
           // Convert float32 [-1, 1] to int16 [-32768, 32767]
-          const s = Math.max(-1, Math.min(1, buffer[i]));
+          const s = Math.max(-1, Math.min(1, buffer[i] ?? 0));
           pcm16[offset++] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
       }
@@ -1079,7 +1150,22 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
 
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
-              <div className="message-content">
+              <div className="message-content" onClick={(event) => {
+                const target = event.target as HTMLElement;
+                if (!target.classList.contains("md-image")) return;
+                const article = target.closest(".message");
+                if (!article) return;
+                const imgs = article.querySelectorAll<HTMLImageElement>(".md-image");
+                const imgArray: string[] = [];
+                const altArray: string[] = [];
+                let clickedIndex = 0;
+                imgs.forEach((img, i) => {
+                  imgArray.push(img.src);
+                  altArray.push(img.alt);
+                  if (img === target) clickedIndex = i;
+                });
+                if (imgArray.length > 0) setLightbox({ images: imgArray, alts: altArray, index: clickedIndex });
+              }}>
                 {message.role === "user" ? (
                   <p>{message.content}</p>
                 ) : (
@@ -1114,7 +1200,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                     ) : null}
                     {hasContent ? (
                       <div className="final-answer">
-                        <Markdown source={message.content} />
+                        <Markdown source={message.content} resolveImageUrl={resolveImageUrl} />
                       </div>
                     ) : isStreaming && !hasActivity ? (
                       <div className="final-answer-placeholder">
@@ -1124,7 +1210,10 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                     ) : null}
                   </>
                 )}
-                {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
+                {(() => {
+                  const galleryImages = dedupeMessageImages(message.images, message.content);
+                  return galleryImages && galleryImages.length > 0 ? <ChatImageGallery images={galleryImages} messageId={message.id} resolveImageUrl={resolveImageUrl} /> : null;
+                })()}
               </div>
             </article>
           );
@@ -1192,6 +1281,20 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         {!canWrite ? <p className="field-error composer-readonly" role="status">This project does not grant chat write permission.</p> : null}
         {voiceError ? <p className="field-error" role="alert">{voiceError}</p> : null}
       </form>
+      {lightbox ? (
+        <div className="chat-image-lightbox" role="dialog" aria-modal="true" aria-label={lightbox.alts[lightbox.index] || "Image preview"} onClick={() => setLightbox(null)}>
+          <figure className="chat-image-lightbox-figure" onClick={(event) => event.stopPropagation()}>
+            <img src={lightbox.images[lightbox.index]} alt={lightbox.alts[lightbox.index]} />
+            <figcaption>
+              <strong>{lightbox.alts[lightbox.index]}</strong>
+              <span> · {lightbox.index + 1} of {lightbox.images.length}</span>
+            </figcaption>
+            <button type="button" className="chat-image-lightbox-close" onClick={() => setLightbox(null)} aria-label="Close image preview">
+              Close
+            </button>
+          </figure>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1458,11 +1561,14 @@ function Workspace({
   project,
   projects,
   user,
+  token,
   messages,
   conversations,
   activeConversationId,
   kbDocuments,
   repoItems,
+  kbTotalCount,
+  repoTotalCount,
   providerDiagnostics,
   providerRequestId,
   registry,
@@ -1491,11 +1597,14 @@ function Workspace({
   project: ProjectSummary | null;
   projects: ProjectSummary[];
   user: UserSummary | null;
+  token: string;
   messages: ChatMessage[];
   conversations: ConversationSummary[];
   activeConversationId: string | null;
   kbDocuments: KnowledgeBaseDocument[];
   repoItems: RepositoryItem[];
+  kbTotalCount: number;
+  repoTotalCount: number;
   providerDiagnostics: ChatProviderDiagnostics | null;
   providerRequestId: string | undefined;
   registry: RegistryResponse | null;
@@ -1562,7 +1671,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1594,8 +1703,8 @@ function Workspace({
             project={project}
             projects={projects}
             user={user}
-            kbCount={project ? kbDocuments.length : 0}
-            repoCount={project ? repoItems.length : 0}
+            kbCount={project ? kbTotalCount : 0}
+            repoCount={project ? repoTotalCount : 0}
             conversations={project ? conversations : []}
             activeConversationId={project ? activeConversationId : null}
             busy={busy}
@@ -1631,6 +1740,8 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [knowledgeBaseDocuments, setKnowledgeBaseDocuments] = useState<KnowledgeBaseDocument[]>([]);
   const [repositoryItems, setRepositoryItems] = useState<RepositoryItem[]>([]);
+  const [kbTotalCount, setKbTotalCount] = useState(0);
+  const [repoTotalCount, setRepoTotalCount] = useState(0);
   const [projectConversationCounts, setProjectConversationCounts] = useState<Record<string, number>>({});
   const [projectAssetCounts, setProjectAssetCounts] = useState<Record<string, number>>({});
   const [chatProviderDiagnostics, setChatProviderDiagnostics] = useState<ChatProviderDiagnostics | null>(null);
@@ -1664,6 +1775,8 @@ export default function App() {
     setActiveConversationId(null);
     setKnowledgeBaseDocuments([]);
     setRepositoryItems([]);
+    setKbTotalCount(0);
+    setRepoTotalCount(0);
     setProjectConversationCounts({});
     setProjectAssetCounts({});
     setChatProviderDiagnostics(null);
@@ -1681,14 +1794,16 @@ export default function App() {
       getProjectManagement(currentToken, projectId)
     ]);
     const [kbResponse, repoResponse] = await Promise.all([
-      getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], requestId: "" })),
-      getRepository(currentToken, projectId).catch(() => ({ artifacts: [], requestId: "" }))
+      getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
+      getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
     ]);
     setRegistry(registryResponse);
     setManagement(managementResponse);
     setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
     setRepositoryItems(repoResponse.artifacts.map(artifactToRepositoryItem));
-    setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.documents.length + repoResponse.artifacts.length }));
+    setKbTotalCount(kbResponse.totalCount);
+    setRepoTotalCount(repoResponse.totalCount);
+    setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + repoResponse.totalCount }));
     return { registryResponse, managementResponse, kbResponse, repoResponse };
   }
 
@@ -1718,19 +1833,21 @@ export default function App() {
             getConversations(token, restoredProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" }))
           ]);
           const [kbResponse, repoResponse] = await Promise.all([
-            getKnowledgeBase(token, restoredProject.id).catch(() => ({ documents: [], requestId: "" })),
-            getRepository(token, restoredProject.id).catch(() => ({ artifacts: [], requestId: "" }))
+            getKnowledgeBase(token, restoredProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
+            getRepository(token, restoredProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
           ]);
           if (!cancelled) {
             setMessages(chatResponse.messages);
             setConversations(convResponse.conversations);
             setProjectConversationCounts((current) => ({ ...current, [restoredProject.id]: convResponse.conversations.length }));
-            setProjectAssetCounts((current) => ({ ...current, [restoredProject.id]: kbResponse.documents.length + repoResponse.artifacts.length }));
+            setProjectAssetCounts((current) => ({ ...current, [restoredProject.id]: kbResponse.totalCount + repoResponse.totalCount }));
             setActiveConversationId(chatResponse.activeConversationId ?? null);
             setRegistry(registryResponse);
             setManagement(managementResponse);
             setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
             setRepositoryItems(repoResponse.artifacts.map(artifactToRepositoryItem));
+            setKbTotalCount(kbResponse.totalCount);
+            setRepoTotalCount(repoResponse.totalCount);
           }
         }
         setBanner(null);
@@ -1922,6 +2039,8 @@ export default function App() {
       setActiveConversationId(null);
       setKnowledgeBaseDocuments([]);
       setRepositoryItems([]);
+      setKbTotalCount(0);
+      setRepoTotalCount(0);
       setProjectConversationCounts((current) => ({ ...current, [project.id]: 0 }));
       setProjectAssetCounts((current) => ({ ...current, [project.id]: 0 }));
       setChatProviderDiagnostics(null);
@@ -2088,10 +2207,14 @@ export default function App() {
             ]);
           }
           if (response.artifact) {
-            setRepositoryItems((current) => [
-              ...current.filter((item) => item.id !== response.artifact!.id),
-              artifactToRepositoryItem(response.artifact!)
-            ]);
+            setRepositoryItems((current) => {
+              const exists = current.some((item) => item.id === response.artifact!.id);
+              if (!exists) setRepoTotalCount((c) => c + 1);
+              return [
+                ...current.filter((item) => item.id !== response.artifact!.id),
+                artifactToRepositoryItem(response.artifact!)
+              ];
+            });
           }
           if (response.conversationId) {
             const updatedTitle = response.conversationTitle ?? "New conversation";
@@ -2268,6 +2391,8 @@ export default function App() {
         setActiveConversationId(null);
         setKnowledgeBaseDocuments([]);
         setRepositoryItems([]);
+        setKbTotalCount(0);
+        setRepoTotalCount(0);
         setChatProviderDiagnostics(null);
         setChatProviderRequestId(undefined);
         setRegistry(null);
@@ -2333,7 +2458,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} streamingActivity={streamingActivity} streamStartTime={streamStartTime} streamElapsed={streamElapsed} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} token={token} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} kbTotalCount={kbTotalCount} repoTotalCount={repoTotalCount} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} streamingActivity={streamingActivity} streamStartTime={streamStartTime} streamElapsed={streamElapsed} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );

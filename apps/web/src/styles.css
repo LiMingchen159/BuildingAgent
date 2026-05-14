@@ -2171,6 +2171,21 @@ p {
   top: var(--space-3);
 }
 
+/* Inline markdown images in chat messages */
+.md-image {
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: block;
+  margin: var(--space-3) 0;
+  max-height: 320px;
+  max-width: 100%;
+  object-fit: contain;
+  transition: transform 120ms var(--ease-out);
+}
+.md-image:hover {
+  transform: scale(1.01);
+}
+
 /* ===== Knowledge Base panel (Slice 6: #110, #111) ===== */
 
 .kb-panel {

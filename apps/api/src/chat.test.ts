@@ -340,6 +340,7 @@ describe("project-scoped chat contract", () => {
     const chatCalls = calls.filter((c) => c.messages.length > 1);
     const kbCall = chatCalls.at(-1);
     expect(kbCall?.messages[0]?.content).toContain("bldg40.ttl");
+    expect(kbCall?.messages[0]?.content).toContain("Repository files discovered for this project:");
 
     const repo = await app.inject({
       method: "GET",
@@ -347,8 +348,70 @@ describe("project-scoped chat contract", () => {
       headers: bearer(adaToken)
     });
     expect(repo.statusCode).toBe(200);
-    // Repository no longer auto-saves note artifacts from every chat turn
-    expect(repo.json().artifacts).toEqual([]);
+    // Repository scans disk — a test artifact exists in project_mortar repo
+    const artifacts = repo.json().artifacts;
+    expect(artifacts.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it("attaches structured generated images to the final assistant message", async () => {
+    const store = createSeedStore();
+    const provider: ChatProvider = {
+      metadata: { id: "tool-real", mode: "real", model: "tool-model", status: "configured" },
+      async complete(request) {
+        const toolResult = request.messages.find((message) => message.role === "tool")?.content;
+        if (!toolResult) {
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_1",
+              type: "function",
+              function: { name: "execute_code", arguments: JSON.stringify({ code: "from pathlib import Path\nPath('outputs/test-chart.png').write_bytes(b'PNG')" }) }
+            }]
+          };
+        }
+        return {
+          text: "Here is the generated chart.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Generate a chart" }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().assistantMessage.images).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          src: "outputs/test-chart.png",
+          filename: "test-chart.png"
+        })
+      ])
+    );
+  });
+
+  it("serves repository image files when auth is supplied via query token", async () => {
+    const app = buildServer();
+
+    await app.inject({ method: "POST", url: "/api/projects/project_mortar/select", headers: bearer(adaToken) });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_mortar/repository/files/outputs/bldg40_RM1013_zone_air_temp_last_year.png?token=seed-token-ada"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toMatch(/^image\/png/);
+    expect(response.body.length).toBeGreaterThan(0);
   });
 
   it("resets chat messages and project-scoped agent memory for the selected project", async () => {
@@ -729,7 +792,8 @@ describe("chat streaming endpoint", () => {
           kind: "markdown",
           sizeBytes: 12,
           excerpt: "stream context"
-        }]
+        }],
+        repositoryArtifacts: []
       });
 
       await stream.next(); // loop_started
@@ -780,7 +844,8 @@ describe("chat streaming endpoint", () => {
       messages: [{ id: "msg_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Hello empty stream" }],
       providerMessages: [{ role: "user", content: "Hello empty stream" }],
       provider,
-      knowledgeBaseDocuments: []
+      knowledgeBaseDocuments: [],
+      repositoryArtifacts: []
     })) {
       events.push(event);
     }

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./ui/Markdown";
 import { ChatImageGallery } from "./ui/ChatImageGallery";
+import type { ChatMessageImage } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -105,12 +106,13 @@ describe("ChatImageGallery", () => {
   ];
 
   it("renders a clickable card per image and opens a lightbox preview with metadata", async () => {
-    render(<ChatImageGallery images={images} messageId="msg-1" />);
+    render(<ChatImageGallery images={images} messageId="msg-1" resolveImageUrl={(url) => `/resolved/${url}`} />);
 
     const cards = screen.getAllByRole("button", { name: /enlarge image/i });
     expect(cards).toHaveLength(2);
     expect(screen.getByText("alpha.png")).toBeInTheDocument();
     expect(screen.getByText(/Captured: 2026-05-11/)).toBeInTheDocument();
+    expect(screen.getAllByRole("img")[0]).toHaveAttribute("src", "/resolved//mock/a.png");
 
     const user = userEvent.setup();
     await user.click(cards[0]!);
@@ -131,5 +133,20 @@ describe("ChatImageGallery", () => {
     await user.click(screen.getAllByRole("button", { name: /enlarge image/i })[0]!);
     await user.click(screen.getByRole("button", { name: /close image preview/i }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("can render a deduped single image when markdown already references the same file", () => {
+    const images: ChatMessageImage[] = [
+      { src: "outputs/chart.png", alt: "Chart", filename: "chart.png" }
+    ];
+
+    render(
+      <>
+        <Markdown source={"![Chart](outputs/chart.png)"} resolveImageUrl={(url) => `/api/projects/project_alpha/repository/files/${url}`} />
+        <ChatImageGallery images={images} messageId="msg-dedupe" resolveImageUrl={(url) => `/api/projects/project_alpha/repository/files/${url}`} />
+      </>
+    );
+
+    expect(screen.getAllByRole("img", { name: /chart/i }).length).toBeGreaterThanOrEqual(1);
   });
 });
