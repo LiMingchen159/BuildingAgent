@@ -868,17 +868,20 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
         const sum = dataArray.reduce((a, b) => a + b, 0);
         const average = sum / dataArray.length / 255;
 
+        // Amplify the signal for better visibility (3x boost)
+        const amplified = Math.min(1, average * 3);
+
         // Shift all values to the right (each point copies its left neighbor)
         for (let i = smoothedLevels.length - 1; i > 0; i--) {
           smoothedLevels[i] = smoothedLevels[i - 1];
         }
 
         // Set the leftmost point to current audio level
-        smoothedLevels[0] = average;
+        smoothedLevels[0] = amplified;
 
         // Copy to state with slight randomness for natural feel
         const levels = smoothedLevels.map((level) => {
-          const noise = (Math.random() - 0.5) * 0.02;
+          const noise = (Math.random() - 0.5) * 0.04;
           return Math.max(0, Math.min(1, level + noise));
         });
 
