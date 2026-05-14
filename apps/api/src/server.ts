@@ -1165,12 +1165,79 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     let finalText = "";
     let finalProviderDiagnostics: ReturnType<typeof providerDiagnostics> | null = null;
     let streamError: string | null = null;
+    const turnStartedAt = Date.now();
+    const capturedActivities: import("./seed.js").ChatMessageActivity[] = [];
+    const captureActivity = (payload: Record<string, unknown>): import("./seed.js").ChatMessageActivity | null => {
+      if (typeof payload.label !== "string" || typeof payload.kind !== "string") return null;
+      const act: import("./seed.js").ChatMessageActivity = {
+        label: payload.label,
+        kind: payload.kind as import("./seed.js").ChatMessageActivity["kind"]
+      };
+      if (typeof payload.id === "string") act.id = payload.id;
+      if (typeof payload.tool === "string") act.tool = payload.tool;
+      if (payload.status === "running" || payload.status === "done") act.status = payload.status;
+      if (typeof payload.raw === "string") act.raw = payload.raw;
+      if (typeof payload.requestId === "string") act.requestId = payload.requestId;
+      if (typeof payload.detail === "string") act.detail = payload.detail;
+      if (typeof payload.output === "string") act.output = payload.output;
+      if (typeof payload.durationMs === "number") act.durationMs = payload.durationMs;
+      if (typeof payload.exitCode === "number") act.exitCode = payload.exitCode;
+      return act;
+    };
 
     try {
       const projectKbRoot = kbRootForProject(projectId, kbRoot);
       const knowledgeBaseDocuments = await indexKnowledgeBase(projectId, { rootDir: projectKbRoot });
       store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
 
+      const seenActivities = new Map<string, number>();
+      let activitySequence = 0;
+      const sanitizeToolDetail = (value: unknown): string | undefined => {
+        if (typeof value !== "string") return undefined;
+        const trimmed = value.replace(/[A-Za-z0-9_./\\-]*(?:api[_-]?key|token|secret|password)[A-Za-z0-9_./\\-]*/gi, "[redacted]").trim();
+        return trimmed ? trimmed.slice(0, 180) : undefined;
+      };
+      const toolLabelFor = (toolName: string, state: "running" | "done"): string => {
+        const lower = toolName.toLowerCase();
+        if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
+        if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";
+        if (lower.includes("read") || lower.includes("file") || lower.includes("knowledge")) return state === "running" ? "Reading file" : "Read file";
+        if (lower.includes("bash") || lower.includes("command") || lower.includes("shell")) return state === "running" ? "Running command" : "Ran command";
+        return state === "running" ? "Using tool" : "Used tool";
+      };
+      const emitActivity = (payload: Record<string, unknown>): void => {
+        activitySequence += 1;
+        const enriched = { id: `act_${reqId}_${activitySequence}`, requestId: reqId, ...payload };
+        sseWrite("activity", enriched);
+        const captured = captureActivity(enriched);
+        if (!captured) return;
+        // Replace by id so paired tool started/completed events collapse to one row in history.
+        if (captured.id) {
+          const existingIndex = capturedActivities.findIndex((a) => a.id === captured.id);
+          if (existingIndex >= 0) {
+            capturedActivities[existingIndex] = captured;
+            return;
+          }
+        }
+        capturedActivities.push(captured);
+      };
+      // Thinking tokens for the current iteration are streamed live to the client
+      // as `token` events. If the iteration ends up calling tools, the same text
+      // was interim narration, not the final answer — we then move it to a
+      // context activity and send `token_reset` so the client drops it from the
+      // streamed answer body. If the iteration ends without tool calls, the
+      // buffered text IS the final answer and stays in the answer body.
+      let pendingThinking = "";
+      const promotePendingToActivity = (): void => {
+        const trimmed = pendingThinking.trim();
+        pendingThinking = "";
+        if (!trimmed) return;
+        emitActivity({
+          label: trimmed.slice(0, 600),
+          kind: "context"
+        });
+        sseWrite("token_reset", { requestId: reqId });
+      };
       for await (const event of agentRuntime.runTurnStream({
         projectId,
         userId: session.userId,
@@ -1182,10 +1249,51 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         knowledgeBaseDocuments
       })) {
         if (event.type === "thinking") {
+          pendingThinking += event.message;
           sseWrite("token", { content: event.message });
         } else if (event.type === "progress") {
-          sseWrite("progress", { message: event.message, requestId: reqId });
+          const kind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
+          const dedupKey = `${kind}:${event.message}`;
+          const now = Date.now();
+          if ((seenActivities.get(dedupKey) ?? 0) + 1200 < now) {
+            seenActivities.set(dedupKey, now);
+            emitActivity({
+              label: event.message,
+              kind,
+              ...(event.metadata?.progressRaw ? { raw: event.metadata.progressRaw } : {})
+            });
+          }
+        } else if (event.type === "tool_started") {
+          const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+          if (toolName) {
+            // Any thinking streamed in this iteration was interim narration, not
+            // the final answer. Roll it back on the client and promote to activity.
+            promotePendingToActivity();
+            const toolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
+            emitActivity({
+              ...(toolCallId ? { id: `tool_${reqId}_${toolCallId}` } : {}),
+              label: toolLabelFor(toolName, "running"),
+              kind: "tool",
+              tool: toolName,
+              status: "running",
+              ...(sanitizeToolDetail(event.metadata?.args) ? { detail: sanitizeToolDetail(event.metadata?.args) } : {})
+            });
+          }
+        } else if (event.type === "tool_completed") {
+          const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+          if (toolName) {
+            const toolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
+            emitActivity({
+              ...(toolCallId ? { id: `tool_${reqId}_${toolCallId}` } : {}),
+              label: toolLabelFor(toolName, "done"),
+              kind: "tool",
+              tool: toolName,
+              status: "done",
+              ...(sanitizeToolDetail(event.metadata?.resultPreview) ? { output: sanitizeToolDetail(event.metadata?.resultPreview) } : {})
+            });
+          }
         } else if (event.type === "turn_completed") {
+          pendingThinking = "";
           finalText = event.message || "";
         }
       }
@@ -1201,6 +1309,47 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
         try {
           const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
+          const fallbackSeenActivities = new Map<string, number>();
+          let fallbackActivitySequence = 0;
+          const sanitizeFallbackToolDetail = (value: unknown): string | undefined => {
+            if (typeof value !== "string") return undefined;
+            const trimmed = value.replace(/[A-Za-z0-9_./\\-]*(?:api[_-]?key|token|secret|password)[A-Za-z0-9_./\\-]*/gi, "[redacted]").trim();
+            return trimmed ? trimmed.slice(0, 180) : undefined;
+          };
+          const fallbackToolLabelFor = (toolName: string, state: "running" | "done"): string => {
+            const lower = toolName.toLowerCase();
+            if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
+            if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";
+            if (lower.includes("read") || lower.includes("file") || lower.includes("knowledge")) return state === "running" ? "Reading file" : "Read file";
+            if (lower.includes("bash") || lower.includes("command") || lower.includes("shell")) return state === "running" ? "Running command" : "Ran command";
+            return state === "running" ? "Using tool" : "Used tool";
+          };
+          const emitFallbackActivity = (payload: Record<string, unknown>): void => {
+            fallbackActivitySequence += 1;
+            const enriched = { id: `act_${reqId}_fb_${fallbackActivitySequence}`, requestId: reqId, ...payload };
+            sseWrite("activity", enriched);
+            const captured = captureActivity(enriched);
+            if (!captured) return;
+            if (captured.id) {
+              const existingIndex = capturedActivities.findIndex((a) => a.id === captured.id);
+              if (existingIndex >= 0) {
+                capturedActivities[existingIndex] = captured;
+                return;
+              }
+            }
+            capturedActivities.push(captured);
+          };
+          let fallbackPendingThinking = "";
+          const promoteFallbackPendingToActivity = (): void => {
+            const trimmed = fallbackPendingThinking.trim();
+            fallbackPendingThinking = "";
+            if (!trimmed) return;
+            emitFallbackActivity({
+              label: trimmed.slice(0, 600),
+              kind: "context"
+            });
+            sseWrite("token_reset", { requestId: reqId });
+          };
           for await (const event of agentRuntime.runTurnStream({
             projectId,
             userId: session.userId,
@@ -1212,10 +1361,49 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             knowledgeBaseDocuments
           })) {
             if (event.type === "thinking") {
+              fallbackPendingThinking += event.message;
               sseWrite("token", { content: event.message });
             } else if (event.type === "progress") {
-              sseWrite("progress", { message: event.message, requestId: reqId });
+              const fkind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
+              const fdedupKey = `${fkind}:${event.message}`;
+              const fnow = Date.now();
+              if ((fallbackSeenActivities.get(fdedupKey) ?? 0) + 1200 < fnow) {
+                fallbackSeenActivities.set(fdedupKey, fnow);
+                emitFallbackActivity({
+                  label: event.message,
+                  kind: fkind,
+                  ...(event.metadata?.progressRaw ? { raw: event.metadata.progressRaw } : {})
+                });
+              }
+            } else if (event.type === "tool_started") {
+              const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+              if (ftoolName) {
+                promoteFallbackPendingToActivity();
+                const ftoolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
+                emitFallbackActivity({
+                  ...(ftoolCallId ? { id: `tool_${reqId}_fb_${ftoolCallId}` } : {}),
+                  label: fallbackToolLabelFor(ftoolName, "running"),
+                  kind: "tool",
+                  tool: ftoolName,
+                  status: "running",
+                  ...(sanitizeFallbackToolDetail(event.metadata?.args) ? { detail: sanitizeFallbackToolDetail(event.metadata?.args) } : {})
+                });
+              }
+            } else if (event.type === "tool_completed") {
+              const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
+              if (ftoolName) {
+                const ftoolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
+                emitFallbackActivity({
+                  ...(ftoolCallId ? { id: `tool_${reqId}_fb_${ftoolCallId}` } : {}),
+                  label: fallbackToolLabelFor(ftoolName, "done"),
+                  kind: "tool",
+                  tool: ftoolName,
+                  status: "done",
+                  ...(sanitizeFallbackToolDetail(event.metadata?.resultPreview) ? { output: sanitizeFallbackToolDetail(event.metadata?.resultPreview) } : {})
+                });
+              }
             } else if (event.type === "turn_completed") {
+              fallbackPendingThinking = "";
               finalText = event.message || "";
             }
           }
@@ -1252,7 +1440,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: finalText || "I wasn't able to complete the analysis."
+      content: finalText || "I wasn't able to complete the analysis.",
+      ...(capturedActivities.length > 0 ? { activities: capturedActivities } : {}),
+      workDuration: Date.now() - turnStartedAt
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);
@@ -1275,6 +1465,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     reply.raw.end();
 
     // Auto-title is best-effort and must never delay the final answer.
+    // When title is generated, broadcast to frontend via WebSocket for real-time sidebar update.
     if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
       void (async () => {
         try {
@@ -1290,6 +1481,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           if (title) {
             conversation.title = title;
             persistSoon();
+            broadcastToProject(projectId, {
+              type: "conversation_title_updated",
+              conversationId,
+              title,
+              projectId
+            });
           }
         } catch {
           // title generation is best-effort

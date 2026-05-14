@@ -26,6 +26,7 @@ import {
   sendChatMessage,
   sendChatMessageStream,
   createProject,
+  createConversation,
   getConversations,
   selectConversation,
   deleteConversation,
@@ -33,6 +34,7 @@ import {
   deleteProject,
   type ChatProviderDiagnostics,
   type ChatLifecycleEvent,
+  type ChatStreamActivityEvent,
   type BuildingCapabilitySummary,
   type ChatMessage,
   type ConversationSummary,
@@ -51,7 +53,6 @@ import {
 
 const STORAGE_KEY = "building-agent.session.v1";
 type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
-const STREAMING_INTRO = "好的，我开始处理你的问题。";
 
 type IconName =
   | "activity"
@@ -59,12 +60,13 @@ type IconName =
   | "bar-chart"
   | "book-open"
   | "building"
-  | "check"
   | "check-check"
   | "chevron-down"
   | "clock"
   | "copy"
   | "cpu"
+  | "edit-3"
+  | "file-search"
   | "file-chart"
   | "file-text"
   | "folder"
@@ -75,7 +77,6 @@ type IconName =
   | "link"
   | "lock"
   | "message"
-  | "mic"
   | "more"
   | "panel-left"
   | "panel-right"
@@ -90,6 +91,7 @@ type IconName =
   | "shield-check"
   | "snowflake"
   | "table"
+  | "terminal"
   | "thermometer"
   | "thumbs-down"
   | "thumbs-up"
@@ -172,13 +174,14 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     "bar-chart": <><path d="M3 3v18h18" /><path d="M7 16v-5" /><path d="M12 16V7" /><path d="M17 16v-8" /></>,
     "book-open": <><path d="M12 7v14" /><path d="M3 5a5 5 0 0 1 5-1l4 2v15l-4-2a5 5 0 0 0-5 1z" /><path d="M21 5a5 5 0 0 0-5-1l-4 2v15l4-2a5 5 0 0 1 5 1z" /></>,
     building: <><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18" /><path d="M6 12H4a2 2 0 0 0-2 2v8" /><path d="M18 9h2a2 2 0 0 1 2 2v11" /><path d="M10 6h4" /><path d="M10 10h4" /><path d="M10 14h4" /><path d="M10 18h4" /></>,
-    check: <polyline points="20 6 9 17 4 12" />,
     "check-check": <><path d="m3 12 4 4L17 6" /><path d="m14 14 1.5 1.5L21 10" /></>,
     "chevron-down": <path d="m6 9 6 6 6-6" />,
     clock: <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
     copy: <><rect width="14" height="14" x="8" y="8" rx="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></>,
     cpu: <><rect x="7" y="7" width="10" height="10" rx="2" /><path d="M9 1v3" /><path d="M15 1v3" /><path d="M9 20v3" /><path d="M15 20v3" /><path d="M20 9h3" /><path d="M20 14h3" /><path d="M1 9h3" /><path d="M1 14h3" /></>,
+    "edit-3": <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>,
     "file-chart": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 18v-3" /><path d="M12 18v-6" /><path d="M16 18v-4" /></>,
+    "file-search": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h7" /><path d="M14 2v6h6" /><path d="M9 15h2" /><circle cx="17" cy="17" r="3" /><path d="m21 21-1.8-1.8" /></>,
     "file-text": <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 13h8" /><path d="M8 17h6" /></>,
     folder: <><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z" /></>,
     "folder-open": <><path d="m6 14 1.5-3h12.8a1.7 1.7 0 0 1 1.6 2.2l-1.8 5.4A2 2 0 0 1 18.2 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3" /></>,
@@ -188,7 +191,6 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     link: <><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" /></>,
     lock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
     message: <><path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" /></>,
-    mic: <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><path d="M12 19v3" /></>,
     more: <><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="2.5" fill="currentColor" stroke="none" /><circle cx="5" cy="12" r="2.5" fill="currentColor" stroke="none" /></>,
     "panel-left": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>,
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
@@ -203,6 +205,7 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     "shield-check": <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></>,
     snowflake: <><path d="M12 2v20" /><path d="m17 5-10 14" /><path d="m7 5 10 14" /><path d="M2 12h20" /></>,
     table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18" /><path d="M9 4v16" /></>,
+    terminal: <><path d="m4 17 6-5-6-5" /><path d="M12 19h8" /></>,
     thermometer: <><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z" /></>,
     "thumbs-down": <><path d="M17 14V2" /><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.2-7A2 2 0 0 1 6.4 3H20v11h-4.3a2 2 0 0 0-1.7 1l-3 5a2 2 0 0 1-3.7-1.5z" /></>,
     "thumbs-up": <><path d="M7 10v12" /><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.2 7a2 2 0 0 1-1.9 1.4H4V10h4.3a2 2 0 0 0 1.7-1l3-5a2 2 0 0 1 3.7 1.5z" /></>,
@@ -653,35 +656,78 @@ function ItemList<T extends { id: string; name: string; status: string; descript
   );
 }
 
-interface ActiveTool {
-  name: string;
-  status: "running" | "done";
-  args?: Record<string, unknown>;
-  resultPreview?: string;
+interface StreamingTurnState {
+  conversationId: string | null;
+  assistantId: string | null;
+  userId: string | null;
+  activities: ChatStreamActivityEvent[];
+  startedAt: number;
 }
 
-function ToolCallIndicator({ tool }: { tool: ActiveTool }) {
+function formatElapsedTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): IconName {
+  const normalized = label.toLowerCase();
+  if (kind === "tool" && normalized.includes("search")) return "file-search";
+  if (kind === "tool" && normalized.includes("edit")) return "edit-3";
+  if (kind === "file" || normalized.includes("read")) return "file-text";
+  if (kind === "tool" && (normalized.includes("ran") || normalized.includes("running") || normalized.includes("command"))) return "terminal";
+  if (kind === "kb") return "book-open";
+  if (kind === "memory") return "clock";
+  if (kind === "response") return "message";
+  return "activity";
+}
+
+function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActivityEvent; streaming: boolean; isLast: boolean }) {
+  if (activity.kind !== "tool") {
+    const running = streaming && isLast;
+    return <p className={`activity-progress-text${running ? " is-running" : ""}`}>{activity.label}</p>;
+  }
+  const details = [activity.detail, activity.exitCode !== undefined ? `exit ${activity.exitCode}` : undefined, activity.durationMs !== undefined ? `${activity.durationMs}ms` : undefined, activity.output]
+    .filter((item): item is string => Boolean(item && item.trim()));
+  const icon = activityIcon(activity.kind, activity.label);
+  // A tool row is "running" only while we're still streaming AND the most recent
+  // event for it was tool_started. Once we're past streaming (history replay or
+  // post-done state), always render the completed-tense label that the server
+  // sent on tool_completed — never show the running tense.
+  const running = streaming && activity.status === "running";
   return (
-    <div className={`tool-call-indicator tool-${tool.status}`} aria-label={`Tool ${tool.name} ${tool.status}`}>
-      <span className={`tool-indicator-icon${tool.status === "running" ? " tool-spinner" : ""}`}>
-        {tool.status === "running" ? <Icon name="rotate" /> : <Icon name="check-check" />}
-      </span>
-      <span className="tool-indicator-name">{tool.name}</span>
-      {tool.status === "running" ? <span className="tool-indicator-status">Running...</span> : null}
-    </div>
+    <details className={`activity-row activity-${activity.kind}${running ? " is-running" : ""}`}>
+      <summary className="activity-row-summary">
+        <span className="activity-row-icon"><Icon name={icon} /></span>
+        <span className="activity-row-label">{activity.label}</span>
+        <Icon name="chevron-down" className="activity-row-chevron" />
+      </summary>
+      {details.length > 0 ? (
+        <div className="activity-row-details">
+          {details.map((detail, index) => <p key={index}>{detail}</p>)}
+        </div>
+      ) : null}
+    </details>
   );
 }
 
-function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, activeTools, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; activeTools?: ActiveTool[]; onStop: () => void }) {
+function ChatWorkspace({ project, user, messages, activeConversationId, onSend, busy, provider, requestId, streamingActivity, streamStartTime, streamElapsed, onStop }: { project: ProjectSummary; user: UserSummary | null; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamStartTime: number | null; streamElapsed: number; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
+  const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing" | "error">("idle");
   const [voiceError, setVoiceError] = useState("");
   const [audioLevels, setAudioLevels] = useState<number[]>(new Array(90).fill(0));
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const messageListRef = useRef<HTMLElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wasEmptyRef = useRef(messages.length === 0);
+  const userScrolledUpRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -693,8 +739,11 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   const latestMessageId = latestMessage?.id ?? "";
   const latestMessageKey = `${messages.length}:${latestMessageId}`;
   const emptyChatGreeting = `Hi ${user?.name ?? "there"}, how are you today?`;
+  const activities = streamingActivity ?? [];
   const isRecording = voiceState === "recording";
   const isTranscribing = voiceState === "transcribing";
+
+  // Timer for streaming elapsed time is now managed by parent component
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -718,18 +767,43 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     return undefined;
   }, [hasMessages]);
 
+  // Track user scroll position
+  useEffect(() => {
+    const list = messageListRef.current;
+    if (!list) return;
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = list;
+      userScrolledUpRef.current = scrollTop + clientHeight < scrollHeight - 32;
+    };
+    list.addEventListener("scroll", handleScroll, { passive: true });
+    return () => list.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Auto-scroll: only when at bottom or on new message/activity
   useEffect(() => {
     if (!hasMessages) {
       previousConversationRef.current = null;
+      userScrolledUpRef.current = false;
       return;
     }
 
     const behavior: ScrollBehavior = previousConversationRef.current !== activeConversationId ? "auto" : "smooth";
     previousConversationRef.current = activeConversationId;
-    requestAnimationFrame(() => {
-      messageEndRef.current?.scrollIntoView({ block: "end", behavior });
-    });
+    if (!userScrolledUpRef.current) {
+      requestAnimationFrame(() => {
+        messageEndRef.current?.scrollIntoView({ block: "end", behavior });
+      });
+    }
   }, [activeConversationId, hasMessages, latestMessageKey]);
+
+  // Scroll on new activity as well
+  useEffect(() => {
+    if (!userScrolledUpRef.current && activities.length > 0) {
+      requestAnimationFrame(() => {
+        messageEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+      });
+    }
+  }, [activities.length]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -738,7 +812,20 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
     }
     const message = draft.trim();
     setDraft("");
+    userScrolledUpRef.current = false;
     await onSend(message);
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter sends message, Ctrl+Enter or Cmd+Enter inserts newline
+    if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      if (!draft.trim() || busy) return;
+      const message = draft.trim();
+      setDraft("");
+      userScrolledUpRef.current = false;
+      void onSend(message);
+    }
   }
 
   async function handleStartRecording() {
@@ -878,22 +965,64 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
   return (
     <section className={`chat-shell${hasMessages ? " chat-shell-active" : " chat-shell-empty"}${leavingEmptyState ? " chat-shell-leaving-empty" : ""}`} aria-labelledby="chat-title">
       <h2 id="chat-title" className="visually-hidden">{project.name} chat</h2>
-      <section className="message-list" aria-label={`${project.name} messages`}>
+      <section className="message-list" aria-label={`${project.name} messages`} ref={messageListRef}>
         {messages.length === 0 && busy ? <div className="workspace-inline-status" role="status">Sending...</div> : null}
         {messages.map((message) => {
           const isStreaming = message.id.startsWith("streaming_");
           const isThinking = message.id.startsWith("pending_assistant_");
+          const messageActivities = isStreaming ? activities : (message.activities ?? []);
+          const messageDuration = isStreaming ? streamElapsed : (message.workDuration ?? 0);
+          const hasActivity = messageActivities.length > 0 || isStreaming;
+          const hasContent = message.content.trim().length > 0;
+          const isCollapsed = timelineCollapsed[message.id] ?? hasContent;
+
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
               <div className="message-content">
-                {message.role === "assistant" ? <Markdown source={message.content || (isStreaming ? "Thinking..." : "")} /> : <p>{message.content}</p>}
-                {isStreaming && activeTools && activeTools.length > 0 ? (
-                  <div className="tool-call-indicators" aria-label="Active tool calls">
-                    {activeTools.map((tool) => (
-                      <ToolCallIndicator key={tool.name} tool={tool} />
-                    ))}
-                  </div>
-                ) : null}
+                {message.role === "user" ? (
+                  <p>{message.content}</p>
+                ) : (
+                  <>
+                    {hasActivity ? (
+                      isStreaming && !hasContent ? (
+                        <section className="worked-timeline worked-timeline-running" aria-label="Assistant activity">
+                          <div className="worked-timeline-header" aria-live="polite">
+                            <span className="worked-timeline-title is-running">Working for {formatElapsedTime(messageDuration)}</span>
+                          </div>
+                          <div className="worked-timeline-content">
+                            {messageActivities.length > 0 ? messageActivities.map((act, i) => (
+                              <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} isLast={i === messageActivities.length - 1} />
+                            )) : (
+                              <p className="activity-progress-text activity-progress-pending is-running">Thinking</p>
+                            )}
+                          </div>
+                        </section>
+                      ) : (
+                        <details className="worked-timeline worked-timeline-done" open={!isCollapsed} onToggle={(e) => setTimelineCollapsed(prev => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}>
+                          <summary className="worked-timeline-header">
+                            <span className="worked-timeline-title">Worked for {formatElapsedTime(messageDuration)}</span>
+                            <Icon name="chevron-down" className="worked-timeline-chevron" />
+                          </summary>
+                          <div className="worked-timeline-content">
+                            {messageActivities.map((act, i) => (
+                              <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={false} isLast={false} />
+                            ))}
+                          </div>
+                        </details>
+                      )
+                    ) : null}
+                    {hasContent ? (
+                      <div className="final-answer">
+                        <Markdown source={message.content} />
+                      </div>
+                    ) : isStreaming && !hasActivity ? (
+                      <div className="final-answer-placeholder">
+                        <span className="spinner" aria-hidden="true" />
+                        <span>Thinking...</span>
+                      </div>
+                    ) : null}
+                  </>
+                )}
                 {message.images && message.images.length > 0 ? <ChatImageGallery images={message.images} messageId={message.id} /> : null}
               </div>
             </article>
@@ -924,7 +1053,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
               <span>Transcribing...</span>
             </div>
           ) : (
-            <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
+            <textarea ref={textareaRef} id="chat-message" rows={1} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleKeyDown} disabled={!canWrite} placeholder={canWrite ? (hasMessages ? "Ask about this project, its knowledge base, or repository files..." : "Ask anything about building") : "This project is read-only for your account."} />
           )}
           <div className="composer-actions">
             {isRecording ? (
@@ -933,12 +1062,12 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
                   <Icon name="x" />
                 </button>
                 <button type="button" className="composer-voice-confirm" onClick={handleConfirmRecording} title="Confirm and transcribe" aria-label="Confirm and transcribe">
-                  <Icon name="check" />
+                  <Icon name="check-check" />
                 </button>
               </>
             ) : isTranscribing ? (
-              <button type="button" className="composer-voice-button" disabled aria-label="Transcribing">
-                <span className="spinner" aria-hidden="true" />
+              <button type="button" disabled aria-label="Transcribing">
+                <Icon name="clock" />
               </button>
             ) : busy ? (
               <button type="button" className="composer-stop-button" onClick={onStop} title="Stop generating" aria-label="Stop generating">
@@ -947,7 +1076,11 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
             ) : (
               <>
                 <button type="button" className="composer-voice-button" onClick={handleStartRecording} disabled={!canWrite} title="Voice input" aria-label="Voice input">
-                  <Icon name="mic" />
+                  <svg className="workspace-icon" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <path d="M12 19v3" />
+                  </svg>
                 </button>
                 <button type="submit" disabled={!canWrite || !draft.trim()} aria-label="Send message">
                   <Icon name="arrow-up" />
@@ -957,7 +1090,7 @@ function ChatWorkspace({ project, user, messages, activeConversationId, onSend, 
           </div>
         </div>
         {!canWrite ? <p className="field-error composer-readonly" role="status">This project does not grant chat write permission.</p> : null}
-        {voiceError ? <p className="field-error composer-voice-error" role="alert">{voiceError}</p> : null}
+        {voiceError ? <p className="field-error" role="alert">{voiceError}</p> : null}
       </form>
     </section>
   );
@@ -1122,7 +1255,7 @@ function WorkspaceSidebarBlock({
                   type="button"
                   className="workspace-sidebar-history-item"
                   onClick={conversation.id === activeConversationId ? undefined : () => onSelectConversation(conversation.id)}
-                  disabled={busy}
+                  disabled={conversation.id === activeConversationId}
                   title={conversation.title}
                 >
                   <span className="workspace-sidebar-history-title">
@@ -1133,8 +1266,8 @@ function WorkspaceSidebarBlock({
                 <span className="conversation-menu">
                   <button type="button" className="conversation-menu-trigger" aria-label="Conversation menu" popovertarget={`conv-menu-${conversation.id}`} style={{ anchorName: `--cm-${conversation.id.replace(/[^a-zA-Z0-9]/g, "")}` }}><Icon name="more" /></button>
                   <ul className="conversation-menu-list" id={`conv-menu-${conversation.id}`} popover="auto" style={{ positionAnchor: `--cm-${conversation.id.replace(/[^a-zA-Z0-9]/g, "")}` }}>
-                    <li><button type="button" className="conversation-menu-action" onClick={() => { const title = window.prompt("Rename conversation", conversation.title); if (title && title.trim() && title.trim() !== conversation.title) onRenameConversation(conversation.id, title.trim()); }} disabled={busy}>Rename</button></li>
-                    <li><button type="button" className="conversation-menu-action conversation-menu-action-danger" onClick={() => { if (window.confirm(`Delete "${conversation.title}"?`)) onDeleteConversation(conversation.id); }} disabled={busy}>Delete</button></li>
+                    <li><button type="button" className="conversation-menu-action" onClick={() => { const title = window.prompt("Rename conversation", conversation.title); if (title && title.trim() && title.trim() !== conversation.title) onRenameConversation(conversation.id, title.trim()); }}>Rename</button></li>
+                    <li><button type="button" className="conversation-menu-action conversation-menu-action-danger" onClick={() => { if (window.confirm(`Delete "${conversation.title}"?`)) onDeleteConversation(conversation.id); }}>Delete</button></li>
                   </ul>
                 </span>
               </li>
@@ -1251,7 +1384,9 @@ function Workspace({
   onRenameConversation,
   onDeleteProject,
   onStop,
-  activeTools
+  streamingActivity,
+  streamStartTime,
+  streamElapsed
 }: {
   project: ProjectSummary | null;
   projects: ProjectSummary[];
@@ -1282,7 +1417,9 @@ function Workspace({
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
-  activeTools?: Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>;
+  streamingActivity?: ChatStreamActivityEvent[];
+  streamStartTime: number | null;
+  streamElapsed: number;
 }) {
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "chat", label: "Chat" },
@@ -1325,7 +1462,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} {...(activeTools ? { activeTools } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1403,10 +1540,18 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
-  const [activeTools, setActiveTools] = useState<Array<{ name: string; status: "running" | "done"; args?: Record<string, unknown>; resultPreview?: string }>>([]);
+  const [streamingActivity, setStreamingActivity] = useState<ChatStreamActivityEvent[]>([]);
+  const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
+  const [streamElapsed, setStreamElapsed] = useState(0);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamingTurnRef = useRef<StreamingTurnState | null>(null);
+  const activeConversationIdRef = useRef<string | null>(activeConversationId);
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
 
   function clearAuth(nextBanner?: BannerState) {
     setToken("");
@@ -1497,12 +1642,12 @@ export default function App() {
             setBanner(errorBanner(error, "Could not load session"));
           }
         }
-      } finally {
-        if (!cancelled) {
-          setBootstrapping(false);
-        }
+    } finally {
+      if (!cancelled) {
+        setBootstrapping(false);
       }
     }
+  }
 
     void bootstrap();
     return () => {
@@ -1547,6 +1692,32 @@ export default function App() {
     };
   }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
 
+  const activeStreamingTurn = streamingTurnRef.current;
+  const activeStreamingVisible = Boolean(
+    activeStreamingTurn?.assistantId &&
+    messages.some((message) => message.id === activeStreamingTurn.assistantId)
+  );
+
+  // Timer for streaming elapsed time
+  useEffect(() => {
+    if (!activeStreamingVisible || !streamStartTime) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setStreamElapsed(Date.now() - streamStartTime);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [activeStreamingVisible, streamStartTime]);
+
+  // Reset timer when streaming starts
+  useEffect(() => {
+    if (activeStreamingVisible && !streamStartTime) {
+      setStreamStartTime(Date.now());
+    } else if (!activeStreamingVisible && streamStartTime) {
+      setStreamStartTime(null);
+    }
+  }, [activeStreamingVisible, streamStartTime]);
+
   // WebSocket connection for real-time reminder/message delivery
   useEffect(() => {
     if (!token || !selectedProject) return;
@@ -1561,6 +1732,13 @@ export default function App() {
           if (currentIds.has(reminderMsg.id)) return current;
           return [...current, reminderMsg];
         });
+      }
+      if (data.type === "conversation_title_updated" && typeof data.conversationId === "string" && typeof data.title === "string") {
+        setConversations((current) =>
+          current.map((c) =>
+            c.id === data.conversationId ? { ...c, title: data.title as string } : c
+          )
+        );
       }
     });
 
@@ -1674,9 +1852,25 @@ export default function App() {
     const signal = controller.signal;
 
     setBusy(true);
-    setActiveTools([]);
+    setStreamingActivity([]);
     const projectId = selectedProject.id;
     const userId = user?.id ?? "local-user";
+    let targetConversationId = activeConversationId;
+
+    if (!targetConversationId) {
+      try {
+        const created = await createConversation(token, projectId);
+        targetConversationId = created.conversation.id;
+        setActiveConversationId(created.conversation.id);
+        setConversations((current) => current.some((c) => c.id === created.conversation.id) ? current : [created.conversation, ...current]);
+        setProjectConversationCounts((current) => ({ ...current, [projectId]: (current[projectId] ?? 0) + 1 }));
+      } catch (error) {
+        abortControllerRef.current = null;
+        setBusy(false);
+        setBanner(errorBanner(error, "Could not create conversation"));
+        return;
+      }
+    }
 
     const optimisticUser: ChatMessage = {
       id: `pending_user_${Date.now()}`,
@@ -1691,55 +1885,108 @@ export default function App() {
       projectId,
       userId,
       role: "assistant",
-      content: STREAMING_INTRO
+      content: ""
     };
 
+    streamingTurnRef.current = {
+      conversationId: targetConversationId,
+      assistantId: streamingId,
+      userId: optimisticUser.id,
+      activities: [],
+      startedAt: Date.now()
+    };
+    setStreamStartTime(streamingTurnRef.current.startedAt);
+    setStreamElapsed(0);
     setMessages((current) => [...current, optimisticUser, streamingAssistant]);
 
     try {
       await sendChatMessageStream(token, projectId, message.trim(), {
         onToken(content: string) {
-          setMessages((current) =>
-            current.map((m) => (
-              m.id === streamingId
-                ? { ...m, content: m.content + content }
-                : m
-            ))
-          );
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId || turn.conversationId !== activeConversationIdRef.current) return;
+          setMessages((current) => current.map((m) => (m.id === streamingId ? { ...m, content: m.content + content } : m)));
+        },
+        onTokenReset() {
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId || turn.conversationId !== activeConversationIdRef.current) return;
+          // Interim narration from a tool-calling iteration was streamed as tokens
+          // and has now been promoted to a timeline activity on the server.
+          // Clear the streamed answer body so only the real final answer remains.
+          setMessages((current) => current.map((m) => (m.id === streamingId ? { ...m, content: "" } : m)));
+        },
+        onActivity(event: ChatStreamActivityEvent) {
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId) return;
+          turn.activities = (() => {
+            const current = turn.activities;
+            // Same id → replace the row in place (e.g. tool running → done).
+            if (event.id) {
+              const idx = current.findIndex((a) => a.id === event.id);
+              if (idx >= 0) {
+                const next = current.slice();
+                next[idx] = event;
+                return next;
+              }
+            }
+            // No id → fall back to label+kind dedup so retried progress lines collapse.
+            const dupe = current.find((a) => !a.id && a.label === event.label && a.kind === event.kind);
+            if (dupe) {
+              return current.map((a) => (a === dupe ? event : a));
+            }
+            return [...current, event];
+          })();
+          if (turn.conversationId === activeConversationIdRef.current) {
+            setStreamingActivity(turn.activities);
+          }
         },
         onProgress(event) {
-          setMessages((current) =>
-            current.map((m) => {
-              if (m.id !== streamingId) return m;
-              const progressLine = event.message.trim();
-              if (!progressLine) return m;
-              if (m.content === STREAMING_INTRO) {
-                return { ...m, content: progressLine };
-              }
-              if (m.content.split("\n\n").includes(progressLine)) {
-                return m;
-              }
-              return { ...m, content: `${m.content}\n\n${progressLine}` };
-            })
-          );
+          const label = event.message.trim();
+          if (!label) return;
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId) return;
+          turn.activities = (() => {
+            const current = turn.activities;
+            const dupe = current.find((a) => a.label === label && a.kind === "context");
+            if (dupe) return current;
+            return [...current, { label, kind: "context" as const }];
+          })();
+          if (turn.conversationId === activeConversationIdRef.current) {
+            setStreamingActivity(turn.activities);
+          }
         },
         onLifecycle(event: ChatLifecycleEvent) {
           if (event.type === "turn_completed" && event.message) {
+            const turn = streamingTurnRef.current;
+            if (!turn || turn.assistantId !== streamingId || turn.conversationId !== activeConversationIdRef.current) return;
             setMessages((current) =>
               current.map((m) => (m.id === streamingId ? { ...m, content: event.message } : m))
             );
           }
         },
         onError(error) {
-          setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+          const turn = streamingTurnRef.current;
+          if (turn?.conversationId === activeConversationIdRef.current) {
+            setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+            setStreamingActivity([]);
+          }
+          streamingTurnRef.current = null;
           setBanner({ tone: "error", title: error.code, message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) });
         },
         onDone(response) {
-          setMessages((current) => [
-            ...current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId),
-            response.message,
-            response.assistantMessage
-          ]);
+          const turn = streamingTurnRef.current;
+          const capturedActivities = turn?.assistantId === streamingId ? [...turn.activities] : [];
+          const finalDuration = turn?.assistantId === streamingId ? Date.now() - turn.startedAt : 0;
+          if (turn?.conversationId === activeConversationIdRef.current) {
+            setMessages((current) => [
+              ...current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId),
+              response.message,
+              {
+                ...response.assistantMessage,
+                activities: capturedActivities.length > 0 ? capturedActivities : undefined,
+                workDuration: finalDuration > 0 ? finalDuration : undefined
+              }
+            ]);
+          }
           if (response.artifact) {
             setRepositoryItems((current) => [
               ...current.filter((item) => item.id !== response.artifact!.id),
@@ -1747,7 +1994,6 @@ export default function App() {
             ]);
           }
           if (response.conversationId) {
-            setActiveConversationId(response.conversationId);
             const updatedTitle = response.conversationTitle ?? "New conversation";
             setConversations((current) => {
               const existing = current.find((c) => c.id === response.conversationId);
@@ -1758,22 +2004,37 @@ export default function App() {
                     : c
                 );
               }
-              return [...current, { id: response.conversationId!, title: updatedTitle, messageCount: 2, createdAt: new Date().toISOString() }];
+              return [{ id: response.conversationId!, title: updatedTitle, messageCount: 2, createdAt: new Date().toISOString() }, ...current];
             });
           }
           setChatProviderDiagnostics(response.provider);
           setChatProviderRequestId(response.requestId);
-          setActiveTools([]);
+          if (turn?.conversationId === activeConversationIdRef.current) {
+            setStreamingActivity([]);
+          }
+          setStreamStartTime(null);
+          setStreamElapsed(0);
+          streamingTurnRef.current = null;
           setBanner(null);
         }
-      }, activeConversationId ?? undefined, signal);
+      }, targetConversationId ?? undefined, signal);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+        const turn = streamingTurnRef.current;
+        if (turn?.conversationId === activeConversationIdRef.current) {
+          setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+          setStreamingActivity([]);
+        }
+        streamingTurnRef.current = null;
         setBanner(null);
         return;
       }
-      setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+      const turn = streamingTurnRef.current;
+      if (turn?.conversationId === activeConversationIdRef.current) {
+        setMessages((current) => current.filter((m) => m.id !== optimisticUser.id && m.id !== streamingId));
+        setStreamingActivity([]);
+      }
+      streamingTurnRef.current = null;
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
       } else {
@@ -1788,6 +2049,7 @@ export default function App() {
   function handleStop() {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    streamingTurnRef.current = null;
   }
 
   async function handleNewChat() {
@@ -1798,22 +2060,41 @@ export default function App() {
       setChatProviderRequestId(undefined);
       return;
     }
-    setActiveConversationId(null);
-    setMessages([]);
-    setChatProviderDiagnostics(null);
-    setChatProviderRequestId(undefined);
-    setActiveTab("chat");
-    setBanner({
-      tone: "info",
-      title: "New chat ready",
-      message: "Send a message to start a new conversation."
-    });
+    setBusy(true);
+    try {
+      const created = await createConversation(token, selectedProject.id);
+      setConversations((current) => current.some((c) => c.id === created.conversation.id) ? current : [created.conversation, ...current]);
+      setProjectConversationCounts((current) => ({ ...current, [selectedProject.id]: (current[selectedProject.id] ?? 0) + 1 }));
+      setActiveConversationId(created.conversation.id);
+      setMessages([]);
+      setStreamingActivity([]);
+      setChatProviderDiagnostics(null);
+      setChatProviderRequestId(undefined);
+      setActiveTab("chat");
+      setBanner({
+        tone: "info",
+        title: "New chat ready",
+        message: "Send a message to start a new conversation."
+      });
+    } catch (error) {
+      setBanner(errorBanner(error, "Could not create conversation"));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleSelectConversation(convId: string) {
     if (!token || !selectedProject) return;
     if (convId === activeConversationId) return;
-    setBusy(true);
+    const visibleStreamingTurn = streamingTurnRef.current;
+    const switchingAwayFromStreamingTurn = visibleStreamingTurn?.conversationId === activeConversationId;
+    if (switchingAwayFromStreamingTurn) {
+      setStreamingActivity([]);
+      setStreamStartTime(null);
+      setStreamElapsed(0);
+    } else {
+      setBusy(true);
+    }
     try {
       const result = await selectConversation(token, selectedProject.id, convId);
       setMessages(result.messages);
@@ -1826,7 +2107,9 @@ export default function App() {
         setBanner(errorBanner(error, "Could not load conversation"));
       }
     } finally {
-      setBusy(false);
+      if (!switchingAwayFromStreamingTurn) {
+        setBusy(false);
+      }
     }
   }
 
@@ -1950,7 +2233,7 @@ export default function App() {
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
       {bootstrapping ? (hadSavedSession ? <BootstrapLoading /> : <ProjectScreenSkeleton />) : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} activeTools={activeTools} /> : null}
+      {!bootstrapping && authenticated ? <Workspace project={selectedProject} projects={projects} user={user} messages={messages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} streamingActivity={streamingActivity} streamStartTime={streamStartTime} streamElapsed={streamElapsed} /> : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );
