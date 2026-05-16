@@ -210,6 +210,10 @@ function dedupeMessageImages(images: ChatMessageImage[] | undefined, content: st
     return undefined;
   }
   const markdownPaths = new Set(extractMarkdownImagePaths(content).map((value) => value.toLowerCase()));
+  // Text-only answers should not show a leftover gallery from earlier tool runs.
+  if (markdownPaths.size === 0) {
+    return undefined;
+  }
   const seen = new Set<string>();
   const deduped = images.filter((image) => {
     const normalized = normalizeChatImagePath(image.src);
