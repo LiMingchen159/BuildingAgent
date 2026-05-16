@@ -5,6 +5,7 @@ import App from "./App";
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.history.replaceState({}, "", "/");
   if (!HTMLElement.prototype.scrollIntoView) {
     HTMLElement.prototype.scrollIntoView = vi.fn();
   }
@@ -1006,6 +1007,225 @@ describe("BuildingAgent Web flow", () => {
     expect(alert).toHaveTextContent("req_provider_fail");
     expect(alert).not.toHaveTextContent(/sk-|api[_-]?key|bearer/i);
     expect(screen.queryByText("provider fail")).not.toBeInTheDocument();
+  });
+
+  it("shows the BMS workspace entry and syncs the bms path", async () => {
+    installBaseFetch();
+    const user = userEvent.setup();
+
+    render(<App />);
+    await loginAndSelectProject(user);
+
+    const sidebar = screen.getByRole("complementary", { name: /^project sidebar$/i });
+    expect(within(sidebar).getByRole("button", { name: /bms data config/i })).toBeInTheDocument();
+
+    await user.click(within(sidebar).getByRole("button", { name: /bms data config/i }));
+    expect(window.location.pathname).toBe("/projects/project_alpha/bms-data-config");
+    expect(await screen.findByRole("heading", { name: /bms data config/i })).toBeInTheDocument();
+  });
+
+  it("renders the real BMS config page and keeps enteliWEB as the active adapter", async () => {
+    installFetch((url, init) => {
+      if (url === "/api/login") return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      if (url === "/api/session") return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      if (url === "/api/projects") return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      if (url === "/api/projects/project_alpha/select") return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
+      if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
+      if (url === "/api/projects/project_alpha/knowledge-base") return jsonResponse({ documents: [], requestId: "req_kb" });
+      if (url === "/api/projects/project_alpha/repository") return jsonResponse({ artifacts: [], requestId: "req_repo" });
+      if (url === "/api/bms/health") return jsonResponse({ ok: true, service: "buildingagent-bms-service", request_id: "req_bms" });
+      if (url === "/api/bms/temp-upload" && init?.method === "POST") {
+        return jsonResponse({
+          upload_id: "upload_001",
+          project_id: "project_alpha",
+          file_name: "points.csv",
+          mime_type: "text/csv",
+          temp_file_token: ".temp/bms-config/project_alpha/upload_001/points.csv",
+          temp_relative_path: ".temp/bms-config/project_alpha/upload_001/points.csv",
+          uploaded_at: "2026-05-15T10:00:00Z",
+          row_count: 2,
+          preview_headers: ["point_name", "vendor_point_id", "equipment_name", "api_url"],
+          preview_rows: [
+            {
+              point_name: "WCC_1_Control_Mode",
+              vendor_point_id: "//Elements/10101.AV1",
+              equipment_name: "WCC 1",
+              api_url: "http://host/api/1"
+            },
+            {
+              point_name: "WCC_1_Status",
+              vendor_point_id: "//Elements/10101.BV2",
+              equipment_name: "WCC 1",
+              api_url: "http://host/api/2"
+            }
+          ],
+          points: [{
+            id: "pt_001",
+            point_name: "WCC_1_Control_Mode",
+            vendor_point_id: "//Elements/10101.AV1",
+            api_path: "/enteliweb/api/.bacnet/Elements/10101/AV,1",
+            unit: "",
+            equipment_name: "WCC 1",
+            system_name: "CHW System",
+            location: "Plant Room",
+            point_type: "sensor",
+            writable: false,
+            semantic_class: "brick:Command",
+            status: "ready",
+            description: "Control Mode",
+            warnings: [],
+            raw_row: { point_name: "WCC_1_Control_Mode" }
+          }]
+        });
+      }
+      if (url === "/api/bms/sources?project_id=project_alpha") return jsonResponse([]);
+      if (url === "/api/bms/sources" && init?.method === "POST") {
+        return jsonResponse({
+          source_id: "src_001",
+          project_id: "project_alpha",
+          building_id: "project_alpha",
+          name: "enteliWEB source",
+          vendor_type: "enteliweb",
+          protocol_type: "bacnet_http",
+          base_url: null,
+          auth_type: "basic",
+          read_only: true,
+          config: {
+            verify_ssl: false,
+            latest_value_endpoint_template: "/api/.bacnet/Elements/{element_id}/{object_type},{object_instance}"
+          },
+          status: "configured",
+          created_at: "2026-05-15T10:00:00Z",
+          updated_at: "2026-05-15T10:00:00Z"
+        }, 201);
+      }
+      if (url === "/api/bms/sources/src_001/credentials" && init?.method === "POST") {
+        return jsonResponse({
+          source_id: "src_001",
+          project_id: "project_alpha",
+          building_id: "project_alpha",
+          name: "enteliWEB source",
+          vendor_type: "enteliweb",
+          protocol_type: "bacnet_http",
+          base_url: null,
+          auth_type: "basic",
+          read_only: true,
+          config: { verify_ssl: false, latest_value_endpoint_template: "/api/.bacnet/Elements/{element_id}/{object_type},{object_instance}" },
+          status: "configured",
+          created_at: "2026-05-15T10:00:00Z",
+          updated_at: "2026-05-15T10:00:00Z"
+        });
+      }
+      if (url === "/api/bms/sources/src_001/test-connection" && init?.method === "POST") {
+        return jsonResponse({
+          source_id: "src_001",
+          success: true,
+          message: "Connection successful.",
+          capabilities: {
+            test_connection: true,
+            import_points: true,
+            read_latest: true,
+            discover_points: false,
+            read_history: false,
+            write_point: false
+          },
+          tested_at: "2026-05-15T10:00:00Z"
+        });
+      }
+      if (url === "/api/bms/sources/src_001/points") {
+        return jsonResponse({
+          source_id: "src_001",
+          count: 1,
+          points: [{
+            id: "pt_001",
+            point_name: "WCC_1_Control_Mode",
+            vendor_point_id: "//Elements/10101.AV1",
+            api_path: "/enteliweb/api/.bacnet/Elements/10101/AV,1",
+            unit: "",
+            equipment_name: "WCC 1",
+            system_name: "CHW System",
+            location: "Plant Room",
+            point_type: "sensor",
+            writable: false,
+            semantic_class: "brick:Command",
+            status: "ready",
+            description: "Control Mode",
+            warnings: []
+          }]
+        });
+      }
+      if (url === "/api/bms/ingestion/test" && init?.method === "POST") {
+        return jsonResponse({ job_id: "job_001", status: "running", message: "Minimal ingestion test started." });
+      }
+      if (url === "/api/bms/points/pt_001" && init?.method === "PATCH") {
+        return jsonResponse({
+          id: "pt_001",
+          point_name: "WCC_1_Control_Mode",
+          vendor_point_id: "//Elements/10101.AV1",
+          api_path: "/enteliweb/api/.bacnet/Elements/10101/AV,1",
+          unit: "",
+          equipment_name: "WCC 1",
+          system_name: "CHW System",
+          location: "Plant Room",
+          point_type: "sensor",
+          writable: false,
+          semantic_class: "brick:Command",
+          status: "ready",
+          description: "Control Mode",
+          warnings: []
+        });
+      }
+      if (url === "/api/bms/points/test-live-values" && init?.method === "POST") {
+        return jsonResponse({
+          source_id: "src_001",
+          success: true,
+          message: "Live read successful.",
+          tested_at: "2026-05-15T10:00:00Z",
+          rows: [{
+            point_id: "pt_001",
+            point_name: "WCC_1_Control_Mode",
+            vendor_point_id: "//Elements/10101.AV1",
+            api_path: "/enteliweb/api/.bacnet/Elements/10101/AV,1",
+            value: 1,
+            unit: "",
+            quality: "good",
+            timestamp: "2026-05-15T10:00:00Z",
+            success: true,
+            raw_payload_keys: ["source_id", "rows"]
+          }]
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.click(screen.getByRole("button", { name: /bms data config/i }));
+    expect(screen.getByRole("heading", { name: /upload file/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
+    expect(screen.queryByText(/no upload yet/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/no file selected yet/i)).toBeInTheDocument();
+    const fileInput = screen.getByLabelText(/drop or choose a file/i);
+    await user.upload(fileInput, new File(["point_name,vendor_point_id\nWCC_1_Control_Mode,//Elements/10101.AV1"], "points.csv", { type: "text/csv" }));
+    expect(await screen.findByText(/rows ready for preview/i)).toBeInTheDocument();
+    expect(screen.getByText(/4 columns, showing 2 of 2 rows/i)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "point_name" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "equipment_name" })).toBeInTheDocument();
+    expect(screen.getByText("WCC_1_Status")).toBeInTheDocument();
+    expect(screen.getByText("http://host/api/2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    expect(screen.getByRole("heading", { name: /select vendor/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /delta controls enteliweb/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    expect(screen.getByRole("heading", { name: /review config/i })).toBeInTheDocument();
+    expect(screen.getByText(/vendor_type: enteliweb/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next$/i }));
+    expect(screen.getByRole("heading", { name: /credentials & test/i })).toBeInTheDocument();
+    expect(screen.getByText(/save credentials/i)).toBeInTheDocument();
   });
 });
 

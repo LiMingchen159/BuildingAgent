@@ -29,9 +29,10 @@ import { countFiles, dataRoot, indexKnowledgeBase, indexRepository, kbRootForPro
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
 import { randomUUID } from "node:crypto";
@@ -44,6 +45,17 @@ interface BuildServerOptions {
   fetch?: FetchLike;
   allowProviderFallback?: boolean;
   persist?: boolean;
+}
+
+interface BmsSourceState {
+  source: BmsSourceSummary;
+  points: BmsPointSummary[];
+}
+
+interface BmsJobState {
+  job: BmsIngestionJobStatusResponse;
+  results: BmsIngestionResultsResponse;
+  pollsRemaining: number;
 }
 
 function tryLoadEnv(): void {
@@ -83,6 +95,176 @@ interface LoginBody {
 
 interface ChatBody {
   message?: unknown;
+}
+
+interface BmsSourcePayload {
+  project_id: string;
+  building_id: string;
+  name: string;
+  vendor_type: string;
+  protocol_type: string;
+  base_url: string | null;
+  host: string | null;
+  port: number | null;
+  auth_type: string;
+  read_only: boolean;
+  config: Record<string, unknown>;
+}
+
+interface BmsSourceSummary extends BmsSourcePayload {
+  source_id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  last_connection_test?: BmsConnectionTestResponse | undefined;
+  last_ingestion_job_id?: string | undefined;
+}
+
+interface BmsCapabilitySet {
+  discover_points: boolean;
+  read_latest: boolean;
+  read_history: boolean;
+  write_point: boolean;
+}
+
+interface BmsConnectionTestResponse {
+  source_id: string;
+  success: boolean;
+  message: string;
+  capabilities: BmsCapabilitySet;
+  tested_at: string;
+}
+
+interface BmsPointSummary {
+  id: string;
+  point_name: string;
+  vendor_point_id: string;
+  api_path?: string | null;
+  unit: string;
+  equipment_name: string;
+  system_name: string;
+  location: string;
+  point_type: string;
+  writable: boolean;
+  semantic_class: string;
+  status: string;
+  description?: string;
+  warnings?: string[];
+  raw_row?: Record<string, string>;
+}
+
+interface BmsDiscoverPointsResponse {
+  source_id: string;
+  points: BmsPointSummary[];
+  count: number;
+}
+
+interface BmsMinimalIngestionRequest {
+  source_id: string;
+  point_ids: string[];
+  sample_count: number;
+  interval_seconds: number;
+}
+
+interface BmsIngestionJobStatusResponse {
+  job_id: string;
+  source_id: string;
+  status: "running" | "completed" | "failed";
+  sample_count: number;
+  interval_seconds: number;
+  total_expected_records: number;
+  inserted_records: number;
+  success_rate: number;
+  started_at: string;
+  finished_at: string | null;
+  errors: string[];
+}
+
+interface BmsIngestionSeriesValue {
+  timestamp: string;
+  value: number;
+  quality: "good" | "bad" | "uncertain";
+}
+
+interface BmsIngestionSeries {
+  point_id: string;
+  point_name: string;
+  unit: string;
+  values: BmsIngestionSeriesValue[];
+}
+
+interface BmsIngestionResultsResponse {
+  job_id: string;
+  series: BmsIngestionSeries[];
+}
+
+interface BmsSourceCredentialsPayload {
+  auth_type: string;
+  username?: string;
+  password?: string;
+  token?: string;
+}
+
+interface BmsPointImportPayload {
+  source_id: string;
+  points: BmsPointSummary[];
+}
+
+interface BmsLiveValueRow {
+  point_id: string;
+  point_name: string;
+  vendor_point_id: string;
+  api_path?: string | null;
+  value: string | number | boolean | null;
+  unit: string;
+  quality: string;
+  timestamp: string;
+  success: boolean;
+  error_message?: string;
+  raw_payload_keys?: string[];
+}
+
+interface BmsLiveValueTestResponse {
+  source_id: string;
+  success: boolean;
+  message: string;
+  tested_at: string;
+  rows: BmsLiveValueRow[];
+}
+
+interface BmsTempUploadPayload {
+  project_id: string;
+  file_name: string;
+  mime_type?: string;
+  content_base64: string;
+  row_count?: number;
+  preview_headers?: string[];
+  preview_rows?: Array<Record<string, string>>;
+  points?: BmsPointSummary[];
+  warnings?: string[];
+}
+
+interface BmsTempUploadResponse {
+  upload_id: string;
+  project_id: string;
+  file_name: string;
+  mime_type: string;
+  temp_file_token: string;
+  temp_relative_path: string;
+  uploaded_at: string;
+  row_count: number;
+  preview_headers: string[];
+  preview_rows: Array<Record<string, string>>;
+  points: BmsPointSummary[];
+  warnings?: string[];
+}
+
+interface ParsedPreviewData {
+  headers: string[];
+  rows: Array<Record<string, string>>;
+  points: BmsPointSummary[];
+  rowCount: number;
+  warnings?: string[];
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -342,6 +524,381 @@ function providerErrorCode(error: unknown): string {
   return "provider_unknown_error";
 }
 
+function parseBooleanEnv(value: string | undefined): boolean {
+  return value === "true" || value === "1" || value === "yes";
+}
+
+function sanitizeFilename(fileName: string): string {
+  const trimmed = fileName.trim();
+  if (!trimmed) return "upload.dat";
+  return trimmed.replace(/[^a-zA-Z0-9._-]+/g, "_");
+}
+
+function tempUploadRoot(): string {
+  return path.resolve(process.cwd(), "..", "..", ".temp", "bms-config");
+}
+
+function ensurePointId(point: BmsPointSummary, sourceId: string, index: number): BmsPointSummary {
+  return {
+    ...point,
+    id: point.id?.trim() || `${sourceId}_pt_${String(index + 1).padStart(3, "0")}`,
+    status: point.status || "ready",
+    warnings: Array.isArray(point.warnings) ? point.warnings : []
+  };
+}
+
+function createBmsMockPoint(sourceId: string): BmsPointSummary[] {
+  const points: Array<[string, string, string, string, string, string, string, boolean, string]> = [
+    ["CHW Supply Temperature", "mock.chw.supply_temp", "degC", "Chiller Plant", "CHW System", "Plant Room", "sensor", false, "brick:Chilled_Water_Supply_Temperature_Sensor"],
+    ["CHW Return Temperature", "mock.chw.return_temp", "degC", "Chiller Plant", "CHW System", "Plant Room", "sensor", false, "brick:Chilled_Water_Return_Temperature_Sensor"],
+    ["CHW Flow Rate", "mock.chw.flow_rate", "l/s", "Chiller Plant", "CHW System", "Plant Room", "sensor", false, "brick:Flow_Sensor"],
+    ["Supply Air Temperature", "mock.sat", "degC", "AHU-1", "Air Handling", "Level 1", "sensor", false, "brick:Supply_Air_Temperature_Sensor"],
+    ["Space Temperature", "mock.space_temp", "degC", "VAV-101", "Zone", "Level 1", "sensor", false, "brick:Zone_Air_Temperature_Sensor"],
+    ["Zone CO2", "mock.zone_co2", "ppm", "VAV-101", "Zone", "Level 1", "sensor", false, "brick:CO2_Sensor"],
+    ["Valve Command", "mock.valve_cmd", "%", "Chiller Plant", "Control", "Plant Room", "command", true, "brick:Valve_Position_Command"],
+    ["Pump Speed", "mock.pump_speed", "%", "Chiller Plant", "Control", "Plant Room", "sensor", false, "brick:Speed_Sensor"],
+    ["Fan Status", "mock.fan_status", "bool", "AHU-1", "Air Handling", "Level 1", "binary", false, "brick:Status"],
+    ["Plant Pressure", "mock.plant_pressure", "kPa", "Chiller Plant", "CHW System", "Plant Room", "sensor", false, "brick:Pressure_Sensor"]
+  ];
+  return points.map(([point_name, vendor_point_id, unit, equipment_name, system_name, location, point_type, writable, semantic_class], index) => ({
+    id: `${sourceId}_pt_${String(index + 1).padStart(3, "0")}`,
+    point_name,
+    vendor_point_id,
+    unit,
+    equipment_name,
+    system_name,
+    location,
+    point_type,
+    writable,
+    semantic_class,
+    status: "discovered"
+  }));
+}
+
+function createBmsMockJob(points: BmsPointSummary[], payload: BmsMinimalIngestionRequest): BmsIngestionResultsResponse {
+  const start = Date.parse("2026-05-15T10:00:00Z");
+  return {
+    job_id: `job_${payload.source_id}_${Date.now().toString(36)}`,
+    series: points.map((point, index) => ({
+      point_id: point.id,
+      point_name: point.point_name,
+      unit: point.unit,
+      values: Array.from({ length: payload.sample_count }, (_, sampleIndex) => ({
+        timestamp: new Date(start + sampleIndex * payload.interval_seconds * 1000).toISOString(),
+        value: Number((7.1 + index * 2 + sampleIndex * 0.3).toFixed(1)),
+        quality: "good" as const
+      }))
+    }))
+  };
+}
+
+function parseDelimitedLine(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index] ?? "";
+    const next = line[index + 1] ?? "";
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        current += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseCsvRows(text: string): Array<Record<string, string>> {
+  const lines = text
+    .replace(/^\uFEFF/u, "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return [];
+  const headers = parseDelimitedLine(lines[0]!).map((header, index) => header || `column_${index + 1}`);
+  return lines.slice(1).map((line) => {
+    const cells = parseDelimitedLine(line);
+    const row: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      row[header] = cells[index] ?? "";
+    });
+    return row;
+  });
+}
+
+function inferSemanticClass(pointName: string, description: string): string {
+  const text = `${pointName} ${description}`.toLowerCase();
+  if (text.includes("control mode")) return "brick:Command";
+  if (text.includes("temperature")) return "brick:Temperature_Sensor";
+  if (text.includes("pressure")) return "brick:Pressure_Sensor";
+  if (text.includes("flow")) return "brick:Flow_Sensor";
+  return "brick:Point";
+}
+
+function normalizeUploadedRow(row: Record<string, string>, index: number): BmsPointSummary {
+  const pointName = row.point_name?.trim() || `Point ${index + 1}`;
+  const vendorPointId = row.vendor_point_id?.trim() || row.point_id?.trim() || pointName.replace(/[^a-z0-9]+/gi, ".").toLowerCase();
+  const apiPath = row.api_path?.trim() || row.api_url?.trim() || null;
+  const description = row.description?.trim() || "";
+  return {
+    id: row.id?.trim() || `row_${index + 1}`,
+    point_name: pointName,
+    vendor_point_id: vendorPointId,
+    api_path: apiPath,
+    unit: row.unit?.trim() || "",
+    equipment_name: row.equipment_name?.trim() || "",
+    system_name: row.system_name?.trim() || "",
+    location: row.location?.trim() || "",
+    point_type: row.point_type?.trim() || "sensor",
+    writable: row.writable?.trim().toLowerCase() === "true",
+    semantic_class: row.semantic_class?.trim() || inferSemanticClass(pointName, description),
+    status: "ready",
+    description,
+    warnings: [],
+    raw_row: row
+  };
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeZipPath(baseDir: string, target: string): string {
+  const segments = `${baseDir}/${target}`.split("/").filter(Boolean);
+  const resolved: string[] = [];
+  for (const segment of segments) {
+    if (segment === ".") continue;
+    if (segment === "..") {
+      resolved.pop();
+      continue;
+    }
+    resolved.push(segment);
+  }
+  return resolved.join("/");
+}
+
+function findZipEndOfCentralDirectory(buffer: Buffer): number {
+  for (let offset = buffer.length - 22; offset >= Math.max(0, buffer.length - 65557); offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) {
+      return offset;
+    }
+  }
+  throw new Error("zip_eocd_not_found");
+}
+
+function unzipEntries(buffer: Buffer): Map<string, Buffer> {
+  const eocdOffset = findZipEndOfCentralDirectory(buffer);
+  const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+  const entries = new Map<string, Buffer>();
+  let offset = centralDirectoryOffset;
+  const end = centralDirectoryOffset + centralDirectorySize;
+  while (offset < end) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error("zip_central_directory_corrupt");
+    }
+    const compressionMethod = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.subarray(offset + 46, offset + 46 + fileNameLength).toString("utf8");
+    const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
+    let content: Buffer;
+    if (compressionMethod === 0) {
+      content = compressed;
+    } else if (compressionMethod === 8) {
+      content = inflateRawSync(compressed);
+    } else {
+      throw new Error(`zip_unsupported_compression_${compressionMethod}`);
+    }
+    entries.set(fileName, content);
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function firstTagValue(xml: string, tagName: string): string | null {
+  const match = xml.match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)</${tagName}>`, "i"));
+  return match ? decodeXmlEntities(match[1] ?? "") : null;
+}
+
+function parseWorkbookSheetPath(entries: Map<string, Buffer>): string {
+  const relsXml = entries.get("xl/_rels/workbook.xml.rels")?.toString("utf8");
+  if (!relsXml) {
+    throw new Error("xlsx_missing_workbook_relationships");
+  }
+  const relationshipMatches = [...relsXml.matchAll(/<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"[^>]*\/>/g)];
+  const workbookXml = entries.get("xl/workbook.xml")?.toString("utf8");
+  if (!workbookXml) {
+    throw new Error("xlsx_missing_workbook");
+  }
+  const sheetMatch = workbookXml.match(/<sheet[^>]*r:id="([^"]+)"[^>]*\/>/i);
+  if (!sheetMatch) {
+    throw new Error("xlsx_missing_sheet");
+  }
+  const relId = sheetMatch[1] ?? "";
+  const target = relationshipMatches.find((match) => match[1] === relId)?.[2];
+  if (!target) {
+    throw new Error("xlsx_missing_sheet_relationship");
+  }
+  return normalizeZipPath("xl", target);
+}
+
+function parseSharedStrings(entries: Map<string, Buffer>): string[] {
+  const sharedXml = entries.get("xl/sharedStrings.xml")?.toString("utf8");
+  if (!sharedXml) return [];
+  return [...sharedXml.matchAll(/<si\b[\s\S]*?<\/si>/g)].map((match) => {
+    const xml = match[0] ?? "";
+    const textParts = [...xml.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((textMatch) => decodeXmlEntities(textMatch[1] ?? ""));
+    return textParts.join("");
+  });
+}
+
+function columnIndexFromReference(reference: string): number {
+  const letters = (reference.match(/[A-Z]+/i)?.[0] ?? "").toUpperCase();
+  let index = 0;
+  for (const letter of letters) {
+    index = index * 26 + (letter.charCodeAt(0) - 64);
+  }
+  return Math.max(0, index - 1);
+}
+
+function parseSheetRows(sheetXml: string, sharedStrings: string[]): string[][] {
+  const rowMatches = [...sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)];
+  return rowMatches.map((rowMatch) => {
+    const rowXml = rowMatch[1] ?? "";
+    const cells: string[] = [];
+    for (const cellMatch of rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>|<c\b([^>]*)\/>/g)) {
+      const attrs = cellMatch[1] ?? cellMatch[3] ?? "";
+      const body = cellMatch[2] ?? "";
+      const refMatch = attrs.match(/\br="([^"]+)"/);
+      const typeMatch = attrs.match(/\bt="([^"]+)"/);
+      const columnIndex = refMatch ? columnIndexFromReference(refMatch[1] ?? "") : cells.length;
+      while (cells.length <= columnIndex) {
+        cells.push("");
+      }
+      let value = "";
+      const type = typeMatch?.[1] ?? "";
+      if (type === "inlineStr") {
+        value = firstTagValue(body, "t") ?? "";
+      } else {
+        const rawValue = firstTagValue(body, "v") ?? "";
+        if (type === "s") {
+          const sharedIndex = Number.parseInt(rawValue, 10);
+          value = Number.isFinite(sharedIndex) ? sharedStrings[sharedIndex] ?? "" : "";
+        } else if (type === "b") {
+          value = rawValue === "1" ? "true" : "false";
+        } else {
+          value = rawValue;
+        }
+      }
+      cells[columnIndex] = value.trim();
+    }
+    return cells;
+  }).filter((row) => row.some((cell) => cell !== ""));
+}
+
+function parseXlsxRows(buffer: Buffer): Array<Record<string, string>> {
+  const entries = unzipEntries(buffer);
+  const sheetPath = parseWorkbookSheetPath(entries);
+  const sheetXml = entries.get(sheetPath)?.toString("utf8");
+  if (!sheetXml) {
+    throw new Error("xlsx_missing_sheet_xml");
+  }
+  const rows = parseSheetRows(sheetXml, parseSharedStrings(entries));
+  if (rows.length === 0) return [];
+  const rawHeaders = rows[0] ?? [];
+  const headers = rawHeaders.map((header, index) => header || `column_${index + 1}`);
+  return rows.slice(1).map((cells) => {
+    const row: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      row[header] = cells[index] ?? "";
+    });
+    return row;
+  }).filter((row) => Object.values(row).some((value) => value.trim() !== ""));
+}
+
+function warningsForFileExtension(fileName: string): string[] {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".xls")) {
+    return ["Legacy .xls preview is not supported yet. Please upload the file as .xlsx or .csv for a real preview."];
+  }
+  return [];
+}
+
+function previewRowsFromBuffer(fileName: string, buffer: Buffer): ParsedPreviewData {
+  const lower = fileName.toLowerCase();
+  const warnings = warningsForFileExtension(fileName);
+  let rows: Array<Record<string, string>> = [];
+  if (lower.endsWith(".csv")) {
+    rows = parseCsvRows(buffer.toString("utf8"));
+  } else if (lower.endsWith(".xlsx")) {
+    rows = parseXlsxRows(buffer);
+  } else if (lower.endsWith(".xls")) {
+    rows = [];
+  } else {
+    rows = parseCsvRows(buffer.toString("utf8"));
+  }
+  const headers = rows.length > 0 ? Object.keys(rows[0]!) : [];
+  const points = rows.slice(0, 25).map((row, index) => normalizeUploadedRow(row, index));
+  return {
+    headers,
+    rows: rows.slice(0, 10),
+    points,
+    rowCount: rows.length,
+    ...(warnings.length > 0 ? { warnings } : {})
+  };
+}
+
+async function proxyBms(
+  env: ProviderEnv,
+  fetchImpl: FetchLike,
+  path: string,
+  init: RequestInit = {}
+): Promise<{ statusCode: number; payload: unknown }> {
+  const base = env.BMS_API_BASE_URL?.replace(/\/+$/, "");
+  if (!base) {
+    return { statusCode: 503, payload: { error: { code: "bms_unavailable", message: "BMS service unavailable." } } };
+  }
+  const response = await fetchImpl(new URL(path, `${base}/`).toString(), init);
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    try {
+      payload = await response.text();
+    } catch {
+      payload = null;
+    }
+  }
+  return { statusCode: response.status, payload };
+}
+
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? (options.persist ? (loadStoreSync() ?? createSeedStore()) : createSeedStore());
   const persistStore = options.persist === true;
@@ -367,6 +924,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   restoreSequences(store);
 
   const provider = options.chatProvider ?? providerResolver(env);
+  const fetchProxy = options.fetch ?? fetch;
   const memory = new AgentMemoryStore(dataRoot(env));
   memory.start();
   const skills = createGenericSkillRegistry();
@@ -374,6 +932,36 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   // Structured JSON logging with file rotation (before scheduler so callbacks can use it)
   const logDir = dataRoot(env);
   const structuredLogger = new StructuredLogger({ dir: logDir, maxFileBytes: 5 * 1024 * 1024 });
+  const useMockBmsClient = parseBooleanEnv(env.USE_MOCK_BMS_CLIENT);
+  const bmsBaseUrl = env.BMS_API_BASE_URL ?? "";
+  const bmsSources = new Map<string, BmsSourceState>();
+  const bmsJobs = new Map<string, BmsJobState>();
+  let bmsSourceSequence = 0;
+  let bmsJobSequence = 0;
+
+  const nextBmsSourceId = (): string => {
+    bmsSourceSequence += 1;
+    return `src_${String(bmsSourceSequence).padStart(3, "0")}`;
+  };
+
+  const nextBmsJobId = (): string => {
+    bmsJobSequence += 1;
+    return `job_${String(bmsJobSequence).padStart(3, "0")}`;
+  };
+
+  const mockHealth = (): { ok: boolean; service: string; request_id: string } => ({
+    ok: true,
+    service: "mock-bms-service",
+    request_id: "req_bms_mock"
+  });
+
+  const mockSourceById = (sourceId: string): BmsSourceState => {
+    const source = bmsSources.get(sourceId);
+    if (!source) {
+      throw new Error("bms_source_not_found");
+    }
+    return source;
+  };
 
   // Scheduler for reminders/cronjobs
   const schedulerDataDir = dataRoot(env);
@@ -484,6 +1072,295 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     service: "building-agent-api",
     requestId: requestIdFor(request)
   }));
+
+  app.get("/api/bms/health", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+    if (useMockBmsClient) return mockHealth();
+    const proxied = await proxyBms(env, fetchProxy, "/health", { method: "GET" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.post<{ Body: BmsTempUploadPayload }>("/api/bms/temp-upload", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const body = request.body ?? {} as BmsTempUploadPayload;
+    if (typeof body.project_id !== "string" || !body.project_id.trim()) {
+      return sendError(request, reply, 422, "bms_invalid_project", "project_id is required.");
+    }
+    const membership = requireProjectMembership(request, reply, store, session, body.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, body.project_id);
+    if (isReply(selected)) return selected;
+    if (typeof body.file_name !== "string" || !body.file_name.trim() || typeof body.content_base64 !== "string" || !body.content_base64.trim()) {
+      return sendError(request, reply, 422, "bms_invalid_upload", "file_name and content_base64 are required.");
+    }
+    const root = tempUploadRoot();
+    const uploadId = `upload_${randomUUID().slice(0, 8)}`;
+    const safeName = sanitizeFilename(body.file_name);
+    const relativeDir = path.join(body.project_id, uploadId);
+    const relativeFile = path.join(relativeDir, safeName);
+    const absoluteDir = path.join(root, relativeDir);
+    const absoluteFile = path.join(root, relativeFile);
+    await mkdir(absoluteDir, { recursive: true });
+    const buffer = Buffer.from(body.content_base64, "base64");
+    await writeFile(absoluteFile, buffer);
+    const parsed = previewRowsFromBuffer(body.file_name, buffer);
+    const previewRows = body.preview_rows && body.preview_rows.length > 0 ? body.preview_rows.slice(0, 10) : parsed.rows;
+    const points = Array.isArray(body.points) && body.points.length > 0 ? body.points.slice(0, 25).map((point, index) => ensurePointId(point, body.project_id, index)) : parsed.points;
+    const warnings = [
+      ...(parsed.warnings ?? []),
+      ...(Array.isArray(body.warnings) ? body.warnings.filter((warning) => typeof warning === "string") : [])
+    ];
+    const response: BmsTempUploadResponse = {
+      upload_id: uploadId,
+      project_id: body.project_id,
+      file_name: body.file_name,
+      mime_type: body.mime_type?.trim() || "application/octet-stream",
+      temp_file_token: path.posix.join(".temp", "bms-config", relativeFile.replace(/\\/g, "/")),
+      temp_relative_path: path.posix.join(".temp", "bms-config", relativeFile.replace(/\\/g, "/")),
+      uploaded_at: new Date().toISOString(),
+      row_count: typeof body.row_count === "number" ? body.row_count : parsed.rowCount,
+      preview_headers: body.preview_headers?.filter((header) => typeof header === "string") ?? parsed.headers,
+      preview_rows: previewRows,
+      points,
+      ...(warnings.length > 0 ? { warnings } : {})
+    };
+    return response;
+  });
+
+  app.get<{ Querystring: { project_id?: string } }>("/api/bms/sources", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const projectId = typeof request.query?.project_id === "string" ? request.query.project_id : "";
+    if (!projectId) {
+      return sendError(request, reply, 422, "bms_invalid_project", "project_id is required.");
+    }
+    const membership = requireProjectMembership(request, reply, store, session, projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, projectId);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      return [...bmsSources.values()].map((entry) => entry.source).filter((source) => source.project_id === projectId);
+    }
+    const proxied = await proxyBms(env, fetchProxy, `/api/bms/sources?project_id=${encodeURIComponent(projectId)}`, { method: "GET" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.post<{ Body: BmsSourcePayload }>("/api/bms/sources", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.body?.project_id ?? "");
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.body?.project_id ?? "");
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      const sourceId = nextBmsSourceId();
+      const source: BmsSourceSummary = {
+        source_id: sourceId,
+        project_id: request.body.project_id,
+        building_id: request.body.building_id,
+        name: request.body.name,
+        vendor_type: request.body.vendor_type,
+        protocol_type: request.body.protocol_type,
+        base_url: request.body.base_url,
+        host: request.body.host,
+        port: request.body.port,
+        auth_type: request.body.auth_type,
+        read_only: request.body.read_only,
+        config: request.body.config ?? {},
+        status: "configured",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      bmsSources.set(sourceId, { source, points: [] });
+      return source;
+    }
+    const proxied = await proxyBms(env, fetchProxy, "/api/bms/sources", { method: "POST", body: JSON.stringify(request.body) });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.get<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const source = [...bmsSources.values()].map((entry) => entry.source).find((candidate) => candidate.source_id === request.params.sourceId);
+    if (!source) {
+      return sendError(request, reply, 404, "bms_source_not_found", "BMS source not found.");
+    }
+    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) return source;
+    const proxied = await proxyBms(env, fetchProxy, `/api/bms/sources/${encodeURIComponent(request.params.sourceId)}`, { method: "GET" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.post<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId/test-connection", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const source = mockSourceById(request.params.sourceId).source;
+    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      const response: BmsConnectionTestResponse = {
+        source_id: source.source_id,
+        success: true,
+        message: "Mock BMS connection successful.",
+        capabilities: {
+          discover_points: true,
+          read_latest: true,
+          read_history: false,
+          write_point: false
+        },
+        tested_at: new Date().toISOString()
+      };
+      const current = mockSourceById(request.params.sourceId);
+      current.source = { ...current.source, status: "connected", last_connection_test: response, updated_at: response.tested_at };
+      bmsSources.set(request.params.sourceId, current);
+      return response;
+    }
+    const proxied = await proxyBms(env, fetchProxy, `/api/bms/sources/${encodeURIComponent(request.params.sourceId)}/test-connection`, { method: "POST" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.post<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId/discover-points", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const source = mockSourceById(request.params.sourceId).source;
+    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      const points = createBmsMockPoint(source.source_id);
+      const current = mockSourceById(request.params.sourceId);
+      current.points = points;
+      current.source = { ...current.source, status: "ready", updated_at: new Date().toISOString() };
+      bmsSources.set(request.params.sourceId, current);
+      return { source_id: source.source_id, points, count: points.length };
+    }
+    const proxied = await proxyBms(env, fetchProxy, `/api/bms/sources/${encodeURIComponent(request.params.sourceId)}/discover-points`, { method: "POST" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.get<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId/points", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const source = mockSourceById(request.params.sourceId).source;
+    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      const current = mockSourceById(request.params.sourceId);
+      return { source_id: source.source_id, points: current.points, count: current.points.length };
+    }
+    const proxied = await proxyBms(env, fetchProxy, `/api/bms/sources/${encodeURIComponent(request.params.sourceId)}/points`, { method: "GET" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.post<{ Body: BmsMinimalIngestionRequest }>("/api/bms/ingestion/test", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const source = mockSourceById(request.body.source_id).source;
+    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      const current = mockSourceById(request.body.source_id);
+      const selectedPoints = current.points.filter((point) => request.body.point_ids.includes(point.id));
+      const jobId = nextBmsJobId();
+      const job: BmsIngestionJobStatusResponse = {
+        job_id: jobId,
+        source_id: request.body.source_id,
+        status: "running",
+        sample_count: request.body.sample_count,
+        interval_seconds: request.body.interval_seconds,
+        total_expected_records: selectedPoints.length * request.body.sample_count,
+        inserted_records: 0,
+        success_rate: 0,
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        errors: []
+      };
+      const results: BmsIngestionResultsResponse = {
+        job_id: jobId,
+        series: selectedPoints.map((point, index) => ({
+          point_id: point.id,
+          point_name: point.point_name,
+          unit: point.unit,
+          values: Array.from({ length: request.body.sample_count }, (_, sampleIndex) => ({
+            timestamp: new Date(Date.parse(job.started_at) + sampleIndex * request.body.interval_seconds * 1000).toISOString(),
+            value: Number((7.1 + index * 2 + sampleIndex * 0.3).toFixed(1)),
+            quality: "good"
+          }))
+        }))
+      };
+      bmsJobs.set(jobId, { job, results, pollsRemaining: 1 });
+      current.source = { ...current.source, status: "ingesting", last_ingestion_job_id: jobId, updated_at: job.started_at };
+      bmsSources.set(request.body.source_id, current);
+      return { job_id: jobId, status: "running", message: "Minimal ingestion test started." };
+    }
+    const proxied = await proxyBms(env, fetchProxy, "/api/bms/ingestion/test", { method: "POST", body: JSON.stringify(request.body) });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.get<{ Params: { jobId: string } }>("/api/bms/ingestion/jobs/:jobId", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const jobState = bmsJobs.get(request.params.jobId);
+    if (!jobState) {
+      return sendError(request, reply, 404, "bms_job_not_found", "BMS ingestion job not found.");
+    }
+    const source = mockSourceById(jobState.job.source_id).source;
+    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      if (jobState.job.status === "running") {
+        jobState.pollsRemaining -= 1;
+        if (jobState.pollsRemaining <= 0) {
+          jobState.job = {
+            ...jobState.job,
+            status: "completed",
+            inserted_records: jobState.job.total_expected_records,
+            success_rate: 1,
+            finished_at: new Date(Date.parse(jobState.job.started_at) + 12000).toISOString()
+          };
+          bmsJobs.set(request.params.jobId, jobState);
+        }
+      }
+      return jobState.job;
+    }
+    const proxied = await proxyBms(env, fetchProxy, `/api/bms/ingestion/jobs/${encodeURIComponent(request.params.jobId)}`, { method: "GET" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
+
+  app.get<{ Params: { jobId: string } }>("/api/bms/ingestion/jobs/:jobId/results", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const jobState = bmsJobs.get(request.params.jobId);
+    if (!jobState) {
+      return sendError(request, reply, 404, "bms_job_not_found", "BMS ingestion job not found.");
+    }
+    const source = mockSourceById(jobState.job.source_id).source;
+    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    if (isReply(selected)) return selected;
+    if (useMockBmsClient) {
+      return jobState.results;
+    }
+    const proxied = await proxyBms(env, fetchProxy, `/api/bms/ingestion/jobs/${encodeURIComponent(request.params.jobId)}/results`, { method: "GET" });
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  });
 
   app.post<{ Body: LoginBody }>("/api/login", async (request, reply) => {
     const { email, password } = request.body ?? {};

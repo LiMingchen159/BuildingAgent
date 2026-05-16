@@ -5,6 +5,7 @@ import { Markdown } from "./ui/Markdown";
 import { ChatImageGallery } from "./ui/ChatImageGallery";
 import { KnowledgeBase, type KnowledgeBaseDocument } from "./ui/KnowledgeBase";
 import { Repository, type RepositoryItem } from "./ui/Repository";
+import { BmsDataConfigPage } from "./ui/BmsDataConfig";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
@@ -53,7 +54,7 @@ import {
 } from "./api";
 
 const STORAGE_KEY = "building-agent.session.v1";
-type WorkspaceTab = "chat" | "kb" | "repo" | "registry" | "gateways" | "building";
+type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "registry" | "gateways" | "building";
 
 type IconName =
   | "activity"
@@ -167,6 +168,26 @@ function visibleRepositoryItemsFromArtifacts(artifacts: RepositoryArtifact[]): R
 
 function visibleRepositoryArtifactCount(artifacts: RepositoryArtifact[]): number {
   return artifacts.filter(isVisibleRepositoryArtifact).length;
+}
+
+function workspacePathFromTab(projectId: string, tab: WorkspaceTab): string {
+  const section = tab === "bms" ? "bms-data-config" : tab;
+  return `/projects/${encodeURIComponent(projectId)}/${section}`;
+}
+
+function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab } | null {
+  const match = pathname.match(/^\/projects\/([^/]+)\/([^/]+)$/);
+  if (!match) {
+    return null;
+  }
+  const projectId = decodeURIComponent(match[1] ?? "");
+  const section = match[2];
+  if (!projectId) return null;
+  const tab = section === "bms-data-config" ? "bms" : section;
+  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "registry" || tab === "gateways" || tab === "building") {
+    return { projectId, tab };
+  }
+  return null;
 }
 
 function normalizeChatImagePath(rawUrl: string): string {
@@ -1464,6 +1485,7 @@ function WorkspaceSidebarBlock({
   onSignOut,
   onNewChat,
   onOpenKnowledgeBase,
+  onOpenBmsDataConfig,
   onOpenRepository,
   onDeleteConversation,
   onRenameConversation,
@@ -1483,6 +1505,7 @@ function WorkspaceSidebarBlock({
   onSignOut: () => void;
   onNewChat: () => void;
   onOpenKnowledgeBase: () => void;
+  onOpenBmsDataConfig: () => void;
   onOpenRepository: () => void;
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
@@ -1502,7 +1525,7 @@ function WorkspaceSidebarBlock({
           <summary className={`workspace-sidebar-project-switcher${hasProject ? "" : " is-disabled"}`}>
             <span>
               <Icon name="building" />
-              <span>{activeProjectName} workspace</span>
+              <span>{activeProjectName}</span>
             </span>
             <Icon name="chevron-down" />
           </summary>
@@ -1565,6 +1588,16 @@ function WorkspaceSidebarBlock({
       </div>
       <div className="workspace-sidebar-assets">
         <ul className="workspace-sidebar-shortcuts">
+          <li>
+            <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenBmsDataConfig} disabled={!hasProject}>
+              <span className="workspace-sidebar-shortcut-icon is-blue"><Icon name="activity" /></span>
+              <span>
+                <strong>BMS Data Config</strong>
+                <small>Configure sources, points, and minimal ingestion tests</small>
+              </span>
+              <small>{hasProject ? "open" : "locked"}</small>
+            </button>
+          </li>
           <li>
             <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenKnowledgeBase} disabled={!hasProject}>
               <span className="workspace-sidebar-shortcut-icon is-blue"><Icon name="book-open" /></span>
@@ -1719,6 +1752,7 @@ function Workspace({
 }) {
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "chat", label: "Chat" },
+    { id: "bms", label: "BMS Data Config" },
     { id: "kb", label: "Knowledge Base" },
     { id: "repo", label: "Repository" },
     { id: "registry", label: "Platform Registry" },
@@ -1759,6 +1793,7 @@ function Workspace({
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
       {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
+      {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
@@ -1816,6 +1851,7 @@ function Workspace({
             onSignOut={onSignOut}
             onNewChat={() => { void onNewChat(); }}
             onOpenKnowledgeBase={() => onTabChange("kb")}
+            onOpenBmsDataConfig={() => onTabChange("bms")}
             onOpenRepository={() => onTabChange("repo")}
             onDeleteConversation={onDeleteConversation}
             onRenameConversation={(convId, title) => { void onRenameConversation(convId, title); }}
@@ -1852,6 +1888,7 @@ export default function App() {
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
   const [management, setManagement] = useState<ProjectManagementResponse | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
+  const [pathnameProjectId, setPathnameProjectId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.projectId ?? null);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
   const [conversationStreams, setConversationStreams] = useState<Record<string, ConversationStreamState>>({});
@@ -1861,10 +1898,36 @@ export default function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingTurnRef = useRef<StreamingTurnState | null>(null);
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
-
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!selectedProject) {
+      return;
+    }
+    const targetPath = workspacePathFromTab(selectedProject.id, activeTab);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, "", targetPath);
+    }
+  }, [activeTab, selectedProject?.id ?? null]);
+
+  useEffect(() => {
+    const parsed = parseWorkspacePath(window.location.pathname);
+    if (parsed) {
+      setPathnameProjectId(parsed.projectId);
+      setActiveTab(parsed.tab);
+    }
+    const handlePopState = () => {
+      const next = parseWorkspacePath(window.location.pathname);
+      setPathnameProjectId(next?.projectId ?? null);
+      if (next) {
+        setActiveTab(next.tab);
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   const visibleStreamState = activeConversationId ? conversationStreams[activeConversationId] : undefined;
   const visibleMessages = useMemo(
@@ -1925,6 +1988,15 @@ export default function App() {
     return { registryResponse, managementResponse, kbResponse, repoResponse };
   }
 
+  function applyWorkspacePath(projectId: string, tab: WorkspaceTab): void {
+    const nextPath = workspacePathFromTab(projectId, tab);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
+    setPathnameProjectId(projectId);
+    setActiveTab(tab);
+  }
+
   useEffect(() => {
     if (!token) {
       setBootstrapping(false);
@@ -1942,26 +2014,31 @@ export default function App() {
         setSession(sessionResponse.session);
         setProjects(projectResponse.projects);
         const restoredProject = projectResponse.projects.find((project) => project.id === sessionResponse.session.projectId) ?? null;
-        setSelectedProject(restoredProject);
+        const pathState = parseWorkspacePath(window.location.pathname);
+        const restoredByPath = pathState ? projectResponse.projects.find((project) => project.id === pathState.projectId) ?? null : null;
+        const nextProject = restoredByPath ?? restoredProject;
+        setSelectedProject(nextProject);
         setBanner(null);
-        if (restoredProject) {
+        if (nextProject) {
+          setActiveTab(pathState?.tab ?? "chat");
+          setPathnameProjectId(nextProject.id);
           const [chatResponse, registryResponse, managementResponse, convResponse] = await Promise.all([
-            getChat(token, restoredProject.id),
+            getChat(token, nextProject.id),
             getRegistry(token),
-            getProjectManagement(token, restoredProject.id),
-            getConversations(token, restoredProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" }))
+            getProjectManagement(token, nextProject.id),
+            getConversations(token, nextProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" }))
           ]);
           const [kbResponse, repoResponse] = await Promise.all([
-            getKnowledgeBase(token, restoredProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
-            getRepository(token, restoredProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
+            getKnowledgeBase(token, nextProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
+            getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
           ]);
           if (!cancelled) {
             const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
             const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
             setMessages(chatResponse.messages);
             setConversations(sortConversationsByNewest(convResponse.conversations));
-            setProjectConversationCounts((current) => ({ ...current, [restoredProject.id]: convResponse.conversations.length }));
-            setProjectAssetCounts((current) => ({ ...current, [restoredProject.id]: kbResponse.totalCount + visibleRepoCount }));
+            setProjectConversationCounts((current) => ({ ...current, [nextProject.id]: convResponse.conversations.length }));
+            setProjectAssetCounts((current) => ({ ...current, [nextProject.id]: kbResponse.totalCount + visibleRepoCount }));
             setActiveConversationId(chatResponse.activeConversationId ?? null);
             setPendingNewChat(false);
             setRegistry(registryResponse);
@@ -2164,7 +2241,7 @@ export default function App() {
       setRepositoryItems(visibleRepositoryItemsFromArtifacts(surfaces.repoResponse.artifacts));
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
-      setActiveTab("chat");
+      applyWorkspacePath(project.id, "chat");
       setConversationStreams({});
       setStreamElapsedTick(0);
       storeSession({ token, user, projectId: project.id });
@@ -2210,7 +2287,7 @@ export default function App() {
       setChatProviderRequestId(undefined);
       setRegistry(null);
       setManagement(null);
-      setActiveTab("chat");
+      applyWorkspacePath(created.project.id, "chat");
       setConversationStreams({});
       setStreamElapsedTick(0);
       storeSession({ token, user, projectId: created.project.id });
@@ -2576,7 +2653,7 @@ export default function App() {
       const result = await selectConversation(token, selectedProject.id, convId);
       setMessages(mergeMessagesWithStreamingState(result.messages, conversationStreams[convId]));
       setActiveConversationId(convId);
-      setActiveTab("chat");
+      applyWorkspacePath(selectedProject.id, "chat");
     } catch (error) {
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
