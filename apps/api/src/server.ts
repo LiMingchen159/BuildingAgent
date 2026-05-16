@@ -348,6 +348,64 @@ function stripProviderThinkingMarkup(content: string): string {
     .trim();
 }
 
+function conversationMessages(conversation: Conversation, messages: ChatMessage[]): ChatMessage[] {
+  return conversation.messageIds
+    .map((id) => messages.find((message) => message.id === id))
+    .filter((message): message is ChatMessage => Boolean(message));
+}
+
+function shouldAutoTitleConversation(conversation: Conversation, messages: ChatMessage[]): boolean {
+  if (conversation.title !== "New conversation") {
+    return false;
+  }
+  const convoMessages = conversationMessages(conversation, messages);
+  return convoMessages.some((message) => message.role === "user")
+    && convoMessages.some((message) => message.role === "assistant");
+}
+
+function fallbackConversationTitle(userText: string): string {
+  const compact = userText.replace(/\s+/g, " ").trim();
+  return compact ? compact.slice(0, 60) : "New conversation";
+}
+
+async function autoTitleConversation(params: {
+  conversation: Conversation;
+  userText: string;
+  assistantText: string;
+  provider: ChatProvider;
+  projectId: string;
+  userId: string;
+  requestId: string;
+  onUpdated?: (title: string) => void;
+}): Promise<void> {
+  const assistantSnippet = stripProviderThinkingMarkup(params.assistantText).slice(0, 500);
+  try {
+    const titleResult = await params.provider.complete({
+      messages: [
+        {
+          role: "user",
+          content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${params.userText}\nAssistant: ${assistantSnippet}`
+        }
+      ],
+      projectId: params.projectId,
+      userId: params.userId,
+      requestId: params.requestId
+    });
+    const generated = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
+    const title = generated || fallbackConversationTitle(params.userText);
+    if (title !== "New conversation") {
+      params.conversation.title = title;
+      params.onUpdated?.(title);
+    }
+  } catch {
+    const title = fallbackConversationTitle(params.userText);
+    if (title !== "New conversation") {
+      params.conversation.title = title;
+      params.onUpdated?.(title);
+    }
+  }
+}
+
 let messageSequence = 0;
 let conversationSequence = 0;
 
@@ -2032,24 +2090,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     trimChatMessages(messages, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
 
-    // Auto-title: generate on first user message using the provider
-    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
-      try {
-        const titleResult = await provider.complete({
-          messages: [
-            { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${agentTurn.completion.text}` }
-          ],
-          projectId,
-          userId: session.userId,
-          requestId: requestIdFor(request)
-        });
-        const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
-        if (title) {
-          conversation.title = title;
-        }
-      } catch {
-        // title generation is best-effort; failure is not an error
-      }
+    if (shouldAutoTitleConversation(conversation, messages)) {
+      await autoTitleConversation({
+        conversation,
+        userText: content,
+        assistantText: assistantText,
+        provider,
+        projectId,
+        userId: session.userId,
+        requestId: requestIdFor(request)
+      });
     }
 
     persistSoon();
@@ -2117,18 +2167,24 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     const messages = store.messagesByProject[projectId] ?? [];
 
-    // Store user message immediately
-    const userMessage: ChatMessage = {
-      id: nextMessageId(),
-      projectId,
-      userId: session.userId,
-      role: "user",
-      content
-    };
-    messages.push(userMessage);
-    conversation.messageIds.push(userMessage.id);
-    store.messagesByProject[projectId] = messages;
-    persistNow();
+    const lastMessageId = conversation.messageIds[conversation.messageIds.length - 1];
+    const lastMessage = lastMessageId ? messages.find((message) => message.id === lastMessageId) : undefined;
+    let userMessage: ChatMessage;
+    if (lastMessage?.role === "user" && lastMessage.content === content) {
+      userMessage = lastMessage;
+    } else {
+      userMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "user",
+        content
+      };
+      messages.push(userMessage);
+      conversation.messageIds.push(userMessage.id);
+      store.messagesByProject[projectId] = messages;
+      persistNow();
+    }
 
     // Set up SSE response
     const reqId = requestIdFor(request);
@@ -2560,34 +2616,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     reply.raw.end();
 
-    // Auto-title is best-effort and must never delay the final answer.
-    // When title is generated, broadcast to frontend via WebSocket for real-time sidebar update.
-    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
-      void (async () => {
-        try {
-          const titleResult = await provider.complete({
-            messages: [
-              { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${finalText}` }
-            ],
-            projectId,
-            userId: session.userId,
-            requestId: reqId
+    if (shouldAutoTitleConversation(conversation, messages)) {
+      void autoTitleConversation({
+        conversation,
+        userText: content,
+        assistantText: assistantContent,
+        provider,
+        projectId,
+        userId: session.userId,
+        requestId: reqId,
+        onUpdated(title) {
+          persistSoon();
+          broadcastToProject(projectId, {
+            type: "conversation_title_updated",
+            conversationId,
+            title,
+            projectId
           });
-          const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
-          if (title) {
-            conversation.title = title;
-            persistSoon();
-            broadcastToProject(projectId, {
-              type: "conversation_title_updated",
-              conversationId,
-              title,
-              projectId
-            });
-          }
-        } catch {
-          // title generation is best-effort
         }
-      })();
+      });
     }
   });
 
