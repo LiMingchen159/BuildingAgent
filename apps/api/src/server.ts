@@ -340,6 +340,14 @@ function finalizeAssistantImages(
   return filterImagesReferencedInContent(dedupeChatImages(images), content);
 }
 
+function stripProviderThinkingMarkup(content: string): string {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*?<\/redacted_thinking>/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 let messageSequence = 0;
 let conversationSequence = 0;
 
@@ -2009,13 +2017,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       });
     }
 
-    const syncedAssistantImages = finalizeAssistantImages(agentTurn.generatedImages, agentTurn.completion.text);
+    const assistantText = stripProviderThinkingMarkup(agentTurn.completion.text);
+    const syncedAssistantImages = finalizeAssistantImages(agentTurn.generatedImages, assistantText);
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: agentTurn.completion.text,
+      content: assistantText,
       ...(syncedAssistantImages ? { images: syncedAssistantImages } : {})
     };
     messages.push(assistantMessage);
@@ -2519,7 +2528,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     // Store assistant message
-    const assistantContent = finalText || "I wasn't able to complete the analysis.";
+    const assistantContent = stripProviderThinkingMarkup(finalText || "I wasn't able to complete the analysis.");
     const finalGeneratedImages = finalizeAssistantImages(streamGeneratedImages, assistantContent);
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),

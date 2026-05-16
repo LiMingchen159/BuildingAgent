@@ -11,7 +11,7 @@ import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
 import { CubeLogo } from "./ui/CubeLogo";
 import { ParticleField } from "./ui/ParticleField";
-import { parseActivityLabel } from "./ui/activityThinking";
+import { parseActivityLabel, stripThinkingFromAnswer } from "./ui/activityThinking";
 import {
   ApiClientError,
   createProjectSocket,
@@ -840,17 +840,20 @@ function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActi
       if (!visibleText) {
         return null;
       }
-      return <p className={`activity-progress-text${running ? " is-running" : ""}`}>{visibleText}</p>;
+      return (
+        <p className={`activity-progress-text activity-context-narration${running ? " is-running" : ""}`}>
+          {visibleText}
+        </p>
+      );
     }
     return (
       <div className="activity-context-block">
         {thinkingBlocks.map((block, index) => {
           const isFinalBlock = index === thinkingBlocks.length - 1;
-          const narration = isFinalBlock ? visibleText : "";
           return (
             <details
               key={`${activity.id ?? "ctx"}-think-${index}`}
-              className={`activity-row activity-think${running && isFinalBlock ? " is-running" : ""}`}
+              className={`activity-row activity-think${running && isFinalBlock && !visibleText ? " is-running" : ""}`}
             >
               <summary className="activity-row-summary">
                 <span className="activity-row-icon"><Icon name="cpu" /></span>
@@ -859,11 +862,15 @@ function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActi
               </summary>
               <div className="activity-row-details activity-think-details">
                 <p>{block}</p>
-                {narration ? <p className="activity-think-narration">{narration}</p> : null}
               </div>
             </details>
           );
         })}
+        {visibleText ? (
+          <p className={`activity-progress-text activity-context-narration${running ? " is-running" : ""}`}>
+            {visibleText}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -1341,7 +1348,7 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
                     ) : null}
                     {hasContent ? (
                       <div className="final-answer">
-                        <Markdown source={message.content} resolveImageUrl={resolveImageUrl} />
+                        <Markdown source={message.role === "assistant" ? stripThinkingFromAnswer(message.content) : message.content} resolveImageUrl={resolveImageUrl} />
                       </div>
                     ) : isStreaming && !hasActivity ? (
                       <div className="final-answer-placeholder">

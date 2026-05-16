@@ -5700,20 +5700,30 @@ p {
   animation: text-shimmer 2.35s linear infinite;
 }
 
-.activity-think-details p,
-.activity-think-narration {
+.activity-think-details {
+  border-left: 2px solid #d4d4d4;
+  margin-left: 1.48rem;
+  padding: 0.15rem 0 0.2rem 0.75rem;
+  background: transparent;
+}
+
+.activity-think-details p {
+  background: transparent;
+  border-radius: 0;
   color: #9a9a9a;
+  font-family: var(--font-family-sans, ui-sans-serif, system-ui, sans-serif);
   font-size: 0.9rem;
   line-height: 1.6;
   margin: 0;
+  padding: 0;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.activity-think-narration {
-  margin-top: 0.45rem;
-  padding-top: 0.45rem;
-  border-top: 1px solid #ececec;
+.activity-context-narration {
+  color: #9a9a9a;
+  font-size: 0.95rem;
+  line-height: 1.65;
 }
 
 @keyframes activity-breathe {
