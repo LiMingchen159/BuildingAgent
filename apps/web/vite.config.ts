@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   plugins: [react()],
@@ -27,7 +27,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: [resolve("src/test/setup.ts")],
+    setupFiles: [fileURLToPath(new URL("./src/test/setup.ts", import.meta.url))],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"]
   }
 });

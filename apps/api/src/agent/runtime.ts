@@ -22,25 +22,56 @@ interface WorkingToolCall {
 }
 
 function parseGeneratedImages(result: Record<string, unknown>): ChatMessageImage[] {
-  if (!Array.isArray(result.generatedImages)) {
-    return [];
-  }
-  return result.generatedImages.flatMap((entry) => {
+  const images: ChatMessageImage[] = [];
+  const seen = new Set<string>();
+  const pushImage = (entry: unknown) => {
     if (typeof entry !== "object" || entry === null) {
-      return [];
+      return;
     }
     const record = entry as Record<string, unknown>;
     if (typeof record.src !== "string" || typeof record.alt !== "string") {
-      return [];
+      return;
     }
-    return [{
+    const normalized = record.src.trim();
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    images.push({
       src: record.src,
       alt: record.alt,
       ...(typeof record.filename === "string" ? { filename: record.filename } : {}),
       ...(typeof record.capturedAt === "string" ? { capturedAt: record.capturedAt } : {}),
       ...(typeof record.source === "string" ? { source: record.source } : {})
-    }];
-  });
+    });
+  };
+
+  if (Array.isArray(result.generatedImages)) {
+    for (const entry of result.generatedImages) {
+      pushImage(entry);
+    }
+  }
+
+  if (Array.isArray(result.outputFiles)) {
+    for (const entry of result.outputFiles) {
+      if (typeof entry !== "object" || entry === null) {
+        continue;
+      }
+      const file = entry as Record<string, unknown>;
+      const src = typeof file.path === "string" ? file.path : "";
+      const name = typeof file.name === "string" ? file.name : "";
+      if (!src || !/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name || src)) {
+        continue;
+      }
+      pushImage({
+        src,
+        alt: name ? name.replace(/\.[^.]+$/, "") : src,
+        ...(name ? { filename: name } : {})
+      });
+    }
+  }
+
+  return images;
 }
 
 function sleep(ms: number): Promise<void> {

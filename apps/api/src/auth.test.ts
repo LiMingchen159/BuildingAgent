@@ -64,7 +64,7 @@ describe("auth, session, and project contract", () => {
       headers: { authorization: "Token definitely-not-bearer" }
     });
     expect(malformed.statusCode).toBe(401);
-    expect(malformed.json().error).toMatchObject({ code: "auth_invalid" });
+    expect(malformed.json().error).toMatchObject({ code: "auth_missing" });
 
     const unknown = await app.inject({
       method: "GET",

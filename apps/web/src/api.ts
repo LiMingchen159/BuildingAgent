@@ -460,6 +460,133 @@ function authHeaders(token: string): HeadersInit {
   return headers;
 }
 
+export interface BmsCapabilitySet {
+  discover_points: boolean;
+  read_latest: boolean;
+  read_history: boolean;
+  write_point: boolean;
+}
+
+export interface BmsHealthResponse {
+  ok: boolean;
+  service: string;
+  request_id?: string;
+}
+
+export type BmsVendorType =
+  | "mock"
+  | "custom_rest_api"
+  | "bacnet_ip"
+  | "haystack"
+  | "niagara_honeywell_webs"
+  | "schneider_ebo"
+  | "jci_metasys"
+  | "siemens_building_x"
+  | "csv_manual";
+
+export type BmsProtocolType =
+  | "mock"
+  | "rest"
+  | "bacnet_ip"
+  | "haystack"
+  | "webs"
+  | "ebo"
+  | "metasys"
+  | "building_x"
+  | "csv";
+
+export type BmsAuthType = "none" | "basic" | "bearer" | "token";
+
+export interface BmsSourcePayload {
+  project_id: string;
+  building_id: string;
+  name: string;
+  vendor_type: BmsVendorType;
+  protocol_type: BmsProtocolType;
+  base_url: string | null;
+  host: string | null;
+  port: number | null;
+  auth_type: BmsAuthType;
+  read_only: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface BmsConnectionTestResponse {
+  source_id: string;
+  success: boolean;
+  message: string;
+  capabilities: BmsCapabilitySet;
+  tested_at: string;
+}
+
+export interface BmsSourceSummary extends BmsSourcePayload {
+  source_id: string;
+  status: "draft" | "configured" | "testing" | "connected" | "failed" | "discovering" | "ready" | "ingesting";
+  created_at: string;
+  updated_at: string;
+  last_connection_test?: BmsConnectionTestResponse | undefined;
+  last_ingestion_job_id?: string | undefined;
+}
+
+export interface BmsPointSummary {
+  id: string;
+  point_name: string;
+  vendor_point_id: string;
+  unit: string;
+  equipment_name: string;
+  system_name: string;
+  location: string;
+  point_type: string;
+  writable: boolean;
+  semantic_class: string;
+  status: string;
+}
+
+export interface BmsDiscoverPointsResponse {
+  source_id: string;
+  points: BmsPointSummary[];
+  count: number;
+}
+
+export interface BmsMinimalIngestionRequest {
+  source_id: string;
+  point_ids: string[];
+  sample_count: number;
+  interval_seconds: number;
+}
+
+export interface BmsIngestionJobStatusResponse {
+  job_id: string;
+  source_id: string;
+  status: "running" | "completed" | "failed";
+  sample_count: number;
+  interval_seconds: number;
+  total_expected_records: number;
+  inserted_records: number;
+  success_rate: number;
+  started_at: string;
+  finished_at: string | null;
+  errors: string[];
+}
+
+export interface BmsIngestionSeriesValue {
+  timestamp: string;
+  value: number;
+  quality: "good" | "bad" | "uncertain";
+}
+
+export interface BmsIngestionSeries {
+  point_id: string;
+  point_name: string;
+  unit: string;
+  values: BmsIngestionSeriesValue[];
+}
+
+export interface BmsIngestionResultsResponse {
+  job_id: string;
+  series: BmsIngestionSeries[];
+}
+
 function hasPlaceholderBase(value: Record<string, unknown>): value is Record<string, unknown> & PlaceholderBase {
   return typeof value.id === "string" && typeof value.name === "string" && typeof value.description === "string" && isStringIn<PlaceholderStatus>(value.status, PLACEHOLDER_STATUSES);
 }
@@ -1030,6 +1157,122 @@ export async function deleteProject(token: string, projectId: string): Promise<D
     projectId: payload.projectId,
     requestId: payload.requestId
   };
+}
+
+export async function getBmsHealth(token: string): Promise<BmsHealthResponse> {
+  const payload = await requestJson("/api/bms/health", { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.ok !== "boolean" || typeof payload.service !== "string") {
+    throw malformed("BMS health returned an unexpected response.");
+  }
+  return {
+    ok: payload.ok,
+    service: payload.service,
+    ...(typeof payload.request_id === "string" ? { request_id: payload.request_id } : {})
+  };
+}
+
+export async function createBmsSource(token: string, payload: BmsSourcePayload): Promise<BmsSourceSummary> {
+  const response = await requestJson("/api/bms/sources", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  });
+  if (!isRecord(response) || typeof response.source_id !== "string" || typeof response.project_id !== "string") {
+    throw malformed("BMS create source returned an unexpected response.");
+  }
+  return response as unknown as BmsSourceSummary;
+}
+
+export async function listBmsSources(token: string, projectId: string): Promise<BmsSourceSummary[]> {
+  const payload = await requestJson(`/api/bms/sources?project_id=${encodeURIComponent(projectId)}`, { headers: authHeaders(token) });
+  if (!Array.isArray(payload)) {
+    throw malformed("BMS source list returned an unexpected response.");
+  }
+  return payload as unknown as BmsSourceSummary[];
+}
+
+export async function getBmsSource(token: string, sourceId: string): Promise<BmsSourceSummary> {
+  const payload = await requestJson(`/api/bms/sources/${encodeURIComponent(sourceId)}`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.source_id !== "string") {
+    throw malformed("BMS source returned an unexpected response.");
+  }
+  return payload as unknown as BmsSourceSummary;
+}
+
+export async function saveBmsCredentials(token: string, sourceId: string, payload: { auth_type: BmsAuthType; username?: string; password?: string; token?: string }): Promise<BmsSourceSummary> {
+  const response = await requestJson(`/api/bms/sources/${encodeURIComponent(sourceId)}/credentials`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  });
+  if (!isRecord(response) || typeof response.source_id !== "string") {
+    throw malformed("BMS credentials save returned an unexpected response.");
+  }
+  return response as unknown as BmsSourceSummary;
+}
+
+export async function testBmsConnection(token: string, sourceId: string): Promise<BmsConnectionTestResponse> {
+  const payload = await requestJson(`/api/bms/sources/${encodeURIComponent(sourceId)}/test-connection`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.source_id !== "string" || typeof payload.success !== "boolean" || typeof payload.message !== "string" || !isRecord(payload.capabilities) || typeof payload.tested_at !== "string") {
+    throw malformed("BMS connection test returned an unexpected response.");
+  }
+  return payload as unknown as BmsConnectionTestResponse;
+}
+
+export async function discoverBmsPoints(token: string, sourceId: string): Promise<BmsDiscoverPointsResponse> {
+  const payload = await requestJson(`/api/bms/sources/${encodeURIComponent(sourceId)}/discover-points`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.source_id !== "string" || !Array.isArray(payload.points) || typeof payload.count !== "number") {
+    throw malformed("BMS discover points returned an unexpected response.");
+  }
+  return payload as unknown as BmsDiscoverPointsResponse;
+}
+
+export async function listBmsPoints(token: string, sourceId: string): Promise<BmsDiscoverPointsResponse> {
+  const payload = await requestJson(`/api/bms/sources/${encodeURIComponent(sourceId)}/points`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.source_id !== "string" || !Array.isArray(payload.points)) {
+    throw malformed("BMS point list returned an unexpected response.");
+  }
+  return payload as unknown as BmsDiscoverPointsResponse;
+}
+
+export async function suggestBmsSemanticMapping(token: string, pointIds: string[]): Promise<never> {
+  void token;
+  void pointIds;
+  throw new ApiClientError({ code: "not_implemented", message: "Semantic mapping is not available in MVP yet." }, 501);
+}
+
+export async function runMinimalBmsIngestionTest(token: string, payload: BmsMinimalIngestionRequest): Promise<{ job_id: string; status: "running"; message: string }> {
+  const response = await requestJson("/api/bms/ingestion/test", {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  });
+  if (!isRecord(response) || typeof response.job_id !== "string" || typeof response.status !== "string" || typeof response.message !== "string") {
+    throw malformed("BMS ingestion test returned an unexpected response.");
+  }
+  return { job_id: response.job_id, status: "running", message: response.message };
+}
+
+export async function getBmsIngestionJob(token: string, jobId: string): Promise<BmsIngestionJobStatusResponse> {
+  const payload = await requestJson(`/api/bms/ingestion/jobs/${encodeURIComponent(jobId)}`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.job_id !== "string" || typeof payload.source_id !== "string" || typeof payload.status !== "string") {
+    throw malformed("BMS job returned an unexpected response.");
+  }
+  return payload as unknown as BmsIngestionJobStatusResponse;
+}
+
+export async function getBmsIngestionResults(token: string, jobId: string): Promise<BmsIngestionResultsResponse> {
+  const payload = await requestJson(`/api/bms/ingestion/jobs/${encodeURIComponent(jobId)}/results`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.job_id !== "string" || !Array.isArray(payload.series)) {
+    throw malformed("BMS results returned an unexpected response.");
+  }
+  return payload as unknown as BmsIngestionResultsResponse;
 }
 
 // ---- WebSocket ----

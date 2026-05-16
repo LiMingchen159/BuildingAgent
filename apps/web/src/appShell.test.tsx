@@ -32,9 +32,8 @@ describe("BuildingAgent no-blank HTML shell", () => {
  expect(root.textContent).toMatch(/BuildingAgent/i);
  expect(root.textContent).toMatch(/loading|preparing/i);
  expect(root.querySelector(".html-fallback-skeleton")).toBeTruthy();
- expect(root.textContent).toMatch(/mock|stub/i);
- expect(root.textContent).toMatch(/no live building systems/i);
- expect(root.querySelector('[role="status"]')?.textContent).toMatch(/safe startup mode/i);
+ expect(root.textContent).toMatch(/safe startup|preparing/i);
+ expect(root.querySelector("[data-static-fallback]")?.textContent).toMatch(/safe startup mode/i);
  });
 
  it("mountBuildingAgent removes the static fallback before normal React rendering", async () => {

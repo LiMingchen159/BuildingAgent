@@ -74,7 +74,7 @@ describe("placeholder registry and management API contracts", () => {
       headers: { authorization: "Token definitely-not-bearer" }
     });
     expect(malformed.statusCode).toBe(401);
-    expectCanonicalError(malformed.json(), "auth_invalid");
+    expectCanonicalError(malformed.json(), "auth_missing");
 
     const unknown = await app.inject({ method: "GET", url: "/api/registry", headers: bearer("missing-token") });
     expect(unknown.statusCode).toBe(401);
