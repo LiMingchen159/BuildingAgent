@@ -5668,68 +5668,52 @@ p {
 }
 
 .activity-context-block {
-  display: grid;
-  gap: 0.55rem;
-}
-
-.activity-thinking {
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-  overflow: hidden;
-}
-
-.activity-thinking-summary {
-  align-items: center;
-  cursor: pointer;
   display: flex;
+  flex-direction: column;
   gap: 0.55rem;
-  list-style: none;
-  padding: 0.55rem 0.7rem;
 }
 
-.activity-thinking-summary::-webkit-details-marker {
-  display: none;
+.activity-row.activity-think {
+  color: #8b8b8b;
 }
 
-.activity-thinking-badge {
-  background: #e0e7ff;
-  border-radius: 999px;
-  color: #3730a3;
-  flex: none;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  padding: 0.15rem 0.55rem;
-  text-transform: uppercase;
+.activity-row.activity-think .activity-row-label {
+  color: #8b8b8b;
+  font-weight: var(--font-weight-normal);
 }
 
-.activity-thinking-preview {
-  color: #475569;
-  font-size: 0.86rem;
-  line-height: 1.45;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.activity-row.activity-think.is-running .activity-row-label {
+  background-image: linear-gradient(
+    90deg,
+    #9a9a9a 0%,
+    #9a9a9a 38%,
+    #6a6a6a 50%,
+    #9a9a9a 62%,
+    #9a9a9a 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-shimmer 2.35s linear infinite;
 }
 
-.activity-thinking-body {
-  border-top: 1px solid #e2e8f0;
-  color: #334155;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 0.84rem;
-  line-height: 1.55;
+.activity-think-details p,
+.activity-think-narration {
+  color: #9a9a9a;
+  font-size: 0.9rem;
+  line-height: 1.6;
   margin: 0;
-  max-height: 14rem;
-  overflow: auto;
-  padding: 0.65rem 0.75rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.activity-thinking[open] .activity-thinking-preview {
-  display: none;
+.activity-think-narration {
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid #ececec;
 }
 
 @keyframes activity-breathe {
@@ -5740,6 +5724,7 @@ p {
 @media (prefers-reduced-motion: reduce) {
   .worked-timeline .worked-timeline-title.is-running,
   .activity-row.is-running .activity-row-label,
+  .activity-row.activity-think.is-running .activity-row-label,
   .activity-progress-text.is-running {
     animation: none;
     background-image: none;

@@ -836,18 +836,34 @@ function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActi
   if (activity.kind !== "tool") {
     const running = streaming && isLast;
     const { thinkingBlocks, visibleText } = parseActivityLabel(activity.label);
+    if (thinkingBlocks.length === 0) {
+      if (!visibleText) {
+        return null;
+      }
+      return <p className={`activity-progress-text${running ? " is-running" : ""}`}>{visibleText}</p>;
+    }
     return (
       <div className="activity-context-block">
-        {thinkingBlocks.map((block, index) => (
-          <details key={`${activity.id ?? "think"}-${index}`} className="activity-thinking" open={running && index === thinkingBlocks.length - 1}>
-            <summary className="activity-thinking-summary">
-              <span className="activity-thinking-badge">Think</span>
-              <span className="activity-thinking-preview">{block.split("\n")[0]?.slice(0, 120) ?? "Reasoning"}</span>
-            </summary>
-            <pre className="activity-thinking-body">{block}</pre>
-          </details>
-        ))}
-        {visibleText ? <p className={`activity-progress-text${running ? " is-running" : ""}`}>{visibleText}</p> : null}
+        {thinkingBlocks.map((block, index) => {
+          const isFinalBlock = index === thinkingBlocks.length - 1;
+          const narration = isFinalBlock ? visibleText : "";
+          return (
+            <details
+              key={`${activity.id ?? "ctx"}-think-${index}`}
+              className={`activity-row activity-think${running && isFinalBlock ? " is-running" : ""}`}
+            >
+              <summary className="activity-row-summary">
+                <span className="activity-row-icon"><Icon name="cpu" /></span>
+                <span className="activity-row-label">Think</span>
+                <Icon name="chevron-down" className="activity-row-chevron" />
+              </summary>
+              <div className="activity-row-details activity-think-details">
+                <p>{block}</p>
+                {narration ? <p className="activity-think-narration">{narration}</p> : null}
+              </div>
+            </details>
+          );
+        })}
       </div>
     );
   }
