@@ -46,28 +46,12 @@ function parseGeneratedImages(result: Record<string, unknown>): ChatMessageImage
     });
   };
 
+  // Only trust tool-supplied generatedImages (already freshness-filtered).
+  // Do not scan outputFiles here — that list includes the whole outputs/ folder
+  // and would re-attach charts from earlier conversations.
   if (Array.isArray(result.generatedImages)) {
     for (const entry of result.generatedImages) {
       pushImage(entry);
-    }
-  }
-
-  if (Array.isArray(result.outputFiles)) {
-    for (const entry of result.outputFiles) {
-      if (typeof entry !== "object" || entry === null) {
-        continue;
-      }
-      const file = entry as Record<string, unknown>;
-      const src = typeof file.path === "string" ? file.path : "";
-      const name = typeof file.name === "string" ? file.name : "";
-      if (!src || !/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name || src)) {
-        continue;
-      }
-      pushImage({
-        src,
-        alt: name ? name.replace(/\.[^.]+$/, "") : src,
-        ...(name ? { filename: name } : {})
-      });
     }
   }
 

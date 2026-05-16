@@ -297,6 +297,26 @@ function normalizeRepositoryImagePath(rawPath: string): string {
   return normalized;
 }
 
+function extractMarkdownImagePaths(content: string): string[] {
+  const matches = content.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g);
+  return [...matches].map((match) => normalizeRepositoryImagePath(match[1] ?? ""));
+}
+
+function filterImagesReferencedInContent(
+  images: ChatMessageImage[] | undefined,
+  content: string
+): ChatMessageImage[] | undefined {
+  if (!images || images.length === 0) {
+    return undefined;
+  }
+  const referenced = new Set(extractMarkdownImagePaths(content).map((value) => value.toLowerCase()));
+  if (referenced.size === 0) {
+    return undefined;
+  }
+  const filtered = images.filter((image) => referenced.has(normalizeRepositoryImagePath(image.src).toLowerCase()));
+  return filtered.length > 0 ? filtered : undefined;
+}
+
 function dedupeChatImages(images: ChatMessageImage[] | undefined): ChatMessageImage[] | undefined {
   if (!images || images.length === 0) {
     return undefined;
@@ -311,6 +331,13 @@ function dedupeChatImages(images: ChatMessageImage[] | undefined): ChatMessageIm
     deduped.push({ ...image, src: normalized });
   }
   return deduped.length > 0 ? deduped : undefined;
+}
+
+function finalizeAssistantImages(
+  images: ChatMessageImage[] | undefined,
+  content: string
+): ChatMessageImage[] | undefined {
+  return filterImagesReferencedInContent(dedupeChatImages(images), content);
 }
 
 let messageSequence = 0;
@@ -1982,13 +2009,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       });
     }
 
+    const syncedAssistantImages = finalizeAssistantImages(agentTurn.generatedImages, agentTurn.completion.text);
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
       content: agentTurn.completion.text,
-      ...(dedupeChatImages(agentTurn.generatedImages) ? { images: dedupeChatImages(agentTurn.generatedImages) } : {})
+      ...(syncedAssistantImages ? { images: syncedAssistantImages } : {})
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);
@@ -2491,13 +2519,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     // Store assistant message
-    const finalGeneratedImages = dedupeChatImages(streamGeneratedImages);
+    const assistantContent = finalText || "I wasn't able to complete the analysis.";
+    const finalGeneratedImages = finalizeAssistantImages(streamGeneratedImages, assistantContent);
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: finalText || "I wasn't able to complete the analysis.",
+      content: assistantContent,
       ...(finalGeneratedImages ? { images: finalGeneratedImages } : {}),
       ...(capturedActivities.length > 0 ? { activities: capturedActivities } : {}),
       workDuration: Date.now() - turnStartedAt

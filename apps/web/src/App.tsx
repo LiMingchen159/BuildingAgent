@@ -11,6 +11,7 @@ import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
 import { CubeLogo } from "./ui/CubeLogo";
 import { ParticleField } from "./ui/ParticleField";
+import { parseActivityLabel } from "./ui/activityThinking";
 import {
   ApiClientError,
   createProjectSocket,
@@ -830,7 +831,21 @@ function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): Ico
 function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActivityEvent; streaming: boolean; isLast: boolean }) {
   if (activity.kind !== "tool") {
     const running = streaming && isLast;
-    return <p className={`activity-progress-text${running ? " is-running" : ""}`}>{activity.label}</p>;
+    const { thinkingBlocks, visibleText } = parseActivityLabel(activity.label);
+    return (
+      <div className="activity-context-block">
+        {thinkingBlocks.map((block, index) => (
+          <details key={`${activity.id ?? "think"}-${index}`} className="activity-thinking" open={running && index === thinkingBlocks.length - 1}>
+            <summary className="activity-thinking-summary">
+              <span className="activity-thinking-badge">Think</span>
+              <span className="activity-thinking-preview">{block.split("\n")[0]?.slice(0, 120) ?? "Reasoning"}</span>
+            </summary>
+            <pre className="activity-thinking-body">{block}</pre>
+          </details>
+        ))}
+        {visibleText ? <p className={`activity-progress-text${running ? " is-running" : ""}`}>{visibleText}</p> : null}
+      </div>
+    );
   }
   const details = [activity.detail, activity.exitCode !== undefined ? `exit ${activity.exitCode}` : undefined, activity.durationMs !== undefined ? `${activity.durationMs}ms` : undefined, activity.output]
     .filter((item): item is string => Boolean(item && item.trim()));

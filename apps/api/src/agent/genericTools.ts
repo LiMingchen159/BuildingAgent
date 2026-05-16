@@ -42,6 +42,14 @@ function resolveSafePath(baseRoot: string, requested: string): string | null {
   return normalized;
 }
 
+function pythonExecutable(): string {
+  const configured = process.env.PYTHON?.trim();
+  if (configured) {
+    return configured;
+  }
+  return process.platform === "win32" ? "python" : "python3";
+}
+
 function projectFileRoots(projectId: string): { kbRoot: string; repoRoot: string } {
   return {
     kbRoot: kbRootForProject(projectId),
@@ -548,7 +556,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           await writeFile(tempPath, patchedCode, "utf8");
           const result = await new Promise<string>((resolve, reject) => {
             const child = exec(
-              `python "${tempPath}"`,
+              `${pythonExecutable()} "${tempPath}"`,
               {
                 cwd: repoRoot,
                 timeout,

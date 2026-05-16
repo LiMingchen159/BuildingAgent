@@ -367,12 +367,12 @@ describe("project-scoped chat contract", () => {
             toolCalls: [{
               id: "call_1",
               type: "function",
-              function: { name: "execute_code", arguments: JSON.stringify({ code: "from pathlib import Path\nPath('outputs/test-chart.png').write_bytes(b'PNG')" }) }
+              function: { name: "execute_code", arguments: JSON.stringify({ code: "from pathlib import Path\nimport os\nout = Path(os.environ['OUTPUT_DIR'])\nout.mkdir(parents=True, exist_ok=True)\n(out / 'test-chart.png').write_bytes(b'PNG')" }) }
             }]
           };
         }
         return {
-          text: "Here is the generated chart.",
+          text: "Here is the generated chart.\n\n![test-chart](outputs/test-chart.png)",
           provider: provider.metadata,
           fallbackUsed: false
         };
@@ -397,6 +397,45 @@ describe("project-scoped chat contract", () => {
         })
       ])
     );
+  });
+
+  it("does not attach stale output images when the answer omits markdown image links", async () => {
+    const store = createSeedStore();
+    const provider: ChatProvider = {
+      metadata: { id: "tool-real", mode: "real", model: "tool-model", status: "configured" },
+      async complete(request) {
+        const toolResult = request.messages.find((message) => message.role === "tool")?.content;
+        if (!toolResult) {
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_1",
+              type: "function",
+              function: { name: "execute_code", arguments: JSON.stringify({ code: "print('noop')" }) }
+            }]
+          };
+        }
+        return {
+          text: "BLDG40 has two AHUs and many VAVs.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "List BLDG40 devices" }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().assistantMessage.images).toBeUndefined();
   });
 
   it("serves repository image files when auth is supplied via query token", async () => {
