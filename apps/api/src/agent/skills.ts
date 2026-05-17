@@ -134,7 +134,14 @@ export class AgentSkillRegistry {
         run: async (args) => {
           const id = String(args.id ?? "");
           if (!id) return { error: "id is required" };
-          if (["skill_building_triage", "skill_project_readiness", "skill_runtime_health"].includes(id)) {
+          if (
+            [
+              "skill_building_triage",
+              "skill_project_readiness",
+              "skill_runtime_health",
+              "skill_element_bms_data"
+            ].includes(id)
+          ) {
             return { error: `Cannot delete built-in skill: ${id}` };
           }
           const deleted = registry.remove(id);
@@ -190,6 +197,38 @@ export function createGenericSkillRegistry(): AgentSkillRegistry {
     domain: "runtime",
     description: "Explain provider, fallback, tool, and session state in redaction-safe terms.",
     promptHint: "Never expose secrets; mention only provider id, mode, model, request id, and fallback reason."
+  });
+  registry.register({
+    id: "environment-setup",
+    name: "Environment setup",
+    domain: "runtime",
+    description: "Install missing runtimes and packages before analysis.",
+    promptHint: "When pip, npm, or a CLI is missing, use terminal to install and verify first. Never substitute workarounds for missing Python/Node/system tooling."
+  });
+  registry.register({
+    id: "skill_chart_quality",
+    name: "Chart Quality",
+    domain: "runtime",
+    description: "Produce clear English-labeled charts with matplotlib/seaborn and non-overlapping layout.",
+    promptHint:
+      "For charts: matplotlib + seaborn, English-only on-figure text, legend outside plot, tight_layout/bbox_inches=tight, no crowded data labels; save to OUTPUT_DIR as outputs/*.png."
+  });
+  registry.register({
+    id: "skill_element_bms_data",
+    name: "Element BMS Data Access",
+    domain: "building",
+    description:
+      "Fetch Element chiller BMS data: live via enteliWEB :20800; local history via BMS-database GET /api/v1/timeseries (poll+history merged, no source param).",
+    promptHint: [
+      "Element project (project_element) BMS data routing — follow strictly:",
+      "1) DECIDE: 'current/live/now/alarm' → enteliWEB :20800 (tool bms_live_read or api_path XML). 'yesterday/trend/report/history' → BMS REST timeseries ONLY — NOT live BACnet.",
+      "2) CATALOG: GET {BMS_DATABASE_API_URL}/api/v1/points?q=<keyword>&limit=50 — name, point_id, object_ref, api_path, last_value (~5min lag).",
+      "3) LIVE: tool bms_live_read(point_name|object_ref|api_path); demo enteliWEB auth pre-configured.",
+      "4) HISTORICAL (canonical): GET /api/v1/timeseries?name=<name>&from=<UTC ISO>&to=&limit=5000&order=asc — NO source=poll/history/merged. Response items: ts, value, value_num (no source field). Aliases: /api/v1/readings, /api/v1/points/{id}/timeseries. Public collector example: http://117.72.185.234:8765; server local: http://127.0.0.1:8765.",
+      "5) GRANULARITY: API returns server-merged series (device trend ~6d @15min + 5min poll after collector start); do not assume uniform 5min for all past days. Display ts in Asia/Shanghai for users; stored as UTC.",
+      "6) TOOLS: bms_live_read, terminal curl timeseries, run_python requests, read_file data/project_element/kb/bms_data_access.md. SQLite direct only if API down.",
+      "7) REPORT: live vs timeseries path, time range, staleness."
+    ].join(" ")
   });
   return registry;
 }

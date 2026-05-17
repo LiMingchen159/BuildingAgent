@@ -11,6 +11,7 @@ import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
 import { CubeLogo } from "./ui/CubeLogo";
 import { ParticleField } from "./ui/ParticleField";
+import { instantConversationTitle, parseActivityLabel, parseAssistantContent, stripThinkingFromAnswer } from "./ui/activityThinking";
 import {
   ApiClientError,
   createProjectSocket,
@@ -54,6 +55,20 @@ import {
 } from "./api";
 
 const STORAGE_KEY = "building-agent.session.v1";
+/** Set after explicit login so bootstrap shows project picker instead of restoring URL/storage project. */
+const SKIP_PROJECT_RESTORE_KEY = "building-agent.skip-project-restore";
+
+function consumeSkipProjectRestore(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  if (window.sessionStorage.getItem(SKIP_PROJECT_RESTORE_KEY) !== "1") {
+    return false;
+  }
+  window.sessionStorage.removeItem(SKIP_PROJECT_RESTORE_KEY);
+  return true;
+}
+
 type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "registry" | "gateways" | "building";
 
 type IconName =
@@ -209,6 +224,10 @@ function dedupeMessageImages(images: ChatMessageImage[] | undefined, content: st
     return undefined;
   }
   const markdownPaths = new Set(extractMarkdownImagePaths(content).map((value) => value.toLowerCase()));
+  // Text-only answers should not show a leftover gallery from earlier tool runs.
+  if (markdownPaths.size === 0) {
+    return undefined;
+  }
   const seen = new Set<string>();
   const deduped = images.filter((image) => {
     const normalized = normalizeChatImagePath(image.src);
@@ -286,6 +305,56 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
   return <svg {...common}>{paths[name]}</svg>;
 }
 
+function ThinkDetails({
+  blocks,
+  streamingBlock,
+  runningLastBlock = false
+}: {
+  blocks: string[];
+  streamingBlock?: string | null;
+  runningLastBlock?: boolean;
+}) {
+  if (blocks.length === 0 && !streamingBlock) {
+    return null;
+  }
+
+  return (
+    <div className="activity-context-block">
+      {blocks.map((block, index) => {
+        const isFinalBlock = index === blocks.length - 1;
+        const running = runningLastBlock && isFinalBlock && !streamingBlock;
+        return (
+          <details
+            key={`think-done-${index}`}
+            className={`activity-row activity-think${running ? " is-running" : ""}`}
+          >
+            <summary className="activity-row-summary">
+              <span className="activity-row-icon"><Icon name="cpu" /></span>
+              <span className="activity-row-label">Think</span>
+              <Icon name="chevron-down" className="activity-row-chevron" />
+            </summary>
+            <div className="activity-row-details activity-think-details">
+              <Markdown source={block} className="markdown-think" />
+            </div>
+          </details>
+        );
+      })}
+      {streamingBlock ? (
+        <details className="activity-row activity-think is-running" open>
+          <summary className="activity-row-summary">
+            <span className="activity-row-icon"><Icon name="cpu" /></span>
+            <span className="activity-row-label">Think</span>
+            <Icon name="chevron-down" className="activity-row-chevron" />
+          </summary>
+          <div className="activity-row-details activity-think-details">
+            <Markdown source={streamingBlock} className="markdown-think" />
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function readStoredSession(): StoredSession {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -324,18 +393,22 @@ function isAuthFailure(error: unknown): boolean {
 }
 
 function LoginScreen({ onLogin, busy }: { onLogin: (email: string, password: string) => Promise<void>; busy: boolean }) {
-  const [email, setEmail] = useState("ada@example.test");
-  const [password, setPassword] = useState("local-dev-password");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [validation, setValidation] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!email.trim() || !password) {
-      setValidation("Enter the seeded email and password to continue.");
+      setValidation("Enter your email and password to continue.");
       return;
     }
     setValidation("");
-    await onLogin(email.trim(), password);
+    try {
+      await onLogin(email.trim(), password);
+    } catch (error) {
+      setValidation(error instanceof ApiClientError ? error.message : "Sign in failed. Check email and password.");
+    }
   }
 
   return (
@@ -830,7 +903,30 @@ function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): Ico
 function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActivityEvent; streaming: boolean; isLast: boolean }) {
   if (activity.kind !== "tool") {
     const running = streaming && isLast;
-    return <p className={`activity-progress-text${running ? " is-running" : ""}`}>{activity.label}</p>;
+    const { thinkingBlocks, visibleText } = parseActivityLabel(activity.label);
+    if (thinkingBlocks.length === 0) {
+      if (!visibleText) {
+        return null;
+      }
+      return (
+        <p className={`activity-progress-text activity-context-narration${running ? " is-running" : ""}`}>
+          {visibleText}
+        </p>
+      );
+    }
+    return (
+      <>
+        <ThinkDetails
+          blocks={thinkingBlocks}
+          runningLastBlock={running && !visibleText}
+        />
+        {visibleText ? (
+          <p className={`activity-progress-text activity-context-narration${running ? " is-running" : ""}`}>
+            {visibleText}
+          </p>
+        ) : null}
+      </>
+    );
   }
   const details = [activity.detail, activity.exitCode !== undefined ? `exit ${activity.exitCode}` : undefined, activity.durationMs !== undefined ? `${activity.durationMs}ms` : undefined, activity.output]
     .filter((item): item is string => Boolean(item && item.trim()));
@@ -1283,6 +1379,15 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
                             <span className="worked-timeline-title is-running">Working for {formatElapsedTime(messageDuration)}</span>
                           </div>
                           <div className="worked-timeline-content">
+                            {isStreaming ? (() => {
+                              const streamThink = parseAssistantContent(message.content);
+                              return streamThink.thinkingBlocks.length > 0 || streamThink.streamingThinking ? (
+                                <ThinkDetails
+                                  blocks={streamThink.thinkingBlocks}
+                                  streamingBlock={streamThink.streamingThinking}
+                                />
+                              ) : null;
+                            })() : null}
                             {messageActivities.length > 0 ? messageActivities.map((act, i) => (
                               <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} isLast={i === messageActivities.length - 1} />
                             )) : (
@@ -1304,11 +1409,19 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
                         </details>
                       )
                     ) : null}
-                    {hasContent ? (
-                      <div className="final-answer">
-                        <Markdown source={message.content} resolveImageUrl={resolveImageUrl} />
-                      </div>
-                    ) : isStreaming && !hasActivity ? (
+                    {hasContent ? (() => {
+                      const answerText = message.role === "assistant"
+                        ? (isStreaming ? parseAssistantContent(message.content).visibleText : stripThinkingFromAnswer(message.content))
+                        : message.content;
+                      if (!answerText.trim()) {
+                        return null;
+                      }
+                      return (
+                        <div className="final-answer">
+                          <Markdown source={answerText} resolveImageUrl={resolveImageUrl} />
+                        </div>
+                      );
+                    })() : isStreaming && !hasActivity ? (
                       <div className="final-answer-placeholder">
                         <span className="spinner" aria-hidden="true" />
                         <span>Thinking...</span>
@@ -1565,9 +1678,10 @@ function WorkspaceSidebarBlock({
                 <button
                   type="button"
                   className="workspace-sidebar-history-item"
-                  onClick={conversation.id === activeConversationId ? undefined : () => onSelectConversation(conversation.id)}
-                  disabled={conversation.id === activeConversationId}
+                  onClick={() => onSelectConversation(conversation.id)}
+                  disabled={busy}
                   title={conversation.title}
+                  aria-current={conversation.id === activeConversationId ? "page" : undefined}
                 >
                   <span className="workspace-sidebar-history-title">
                     <Icon name="message" />
@@ -1964,6 +2078,10 @@ export default function App() {
     streamingTurnRef.current = null;
     abortControllerRef.current = null;
     storeSession({ token: "", user: null, projectId: null });
+    window.sessionStorage.removeItem(SKIP_PROJECT_RESTORE_KEY);
+    if (window.location.pathname !== "/") {
+      window.history.replaceState({}, "", "/");
+    }
     setBanner(nextBanner ?? { tone: "info", title: "Signed out", message: "Sign in again to continue." });
   }
 
@@ -2013,15 +2131,27 @@ export default function App() {
         }
         setSession(sessionResponse.session);
         setProjects(projectResponse.projects);
+        const skipProjectRestore = consumeSkipProjectRestore();
+        const storedProjectId = readStoredSession().projectId;
         const restoredProject = projectResponse.projects.find((project) => project.id === sessionResponse.session.projectId) ?? null;
         const pathState = parseWorkspacePath(window.location.pathname);
         const restoredByPath = pathState ? projectResponse.projects.find((project) => project.id === pathState.projectId) ?? null : null;
-        const nextProject = restoredByPath ?? restoredProject;
+        const restoredFromStorage = storedProjectId
+          ? projectResponse.projects.find((project) => project.id === storedProjectId) ?? null
+          : null;
+        const nextProject = skipProjectRestore ? null : restoredByPath ?? restoredProject ?? restoredFromStorage;
         setSelectedProject(nextProject);
         setBanner(null);
         if (nextProject) {
           setActiveTab(pathState?.tab ?? "chat");
           setPathnameProjectId(nextProject.id);
+          if (sessionResponse.session.projectId !== nextProject.id) {
+            const selected = await selectProject(token, nextProject.id);
+            if (cancelled) {
+              return;
+            }
+            setSession(selected.session);
+          }
           const [chatResponse, registryResponse, managementResponse, convResponse] = await Promise.all([
             getChat(token, nextProject.id),
             getRegistry(token),
@@ -2048,6 +2178,7 @@ export default function App() {
             setKbTotalCount(kbResponse.totalCount);
             setRepoTotalCount(visibleRepoCount);
             setConversationStreams({});
+            storeSession({ token, user: user ?? readStoredSession().user, projectId: nextProject.id });
           }
         }
       } catch (error) {
@@ -2206,12 +2337,24 @@ export default function App() {
       const response = await login(email, password);
       setToken(response.token);
       setUser(response.user);
-      storeSession({ token: response.token, user: response.user, projectId: null });
+      setSession(null);
+      setSelectedProject(null);
+      setMessages([]);
+      setConversations([]);
+      setActiveConversationId(null);
       setRegistry(null);
       setManagement(null);
-      setBanner({ tone: "success", title: "Signed in", message: `Welcome, ${response.user.name}.`, requestId: response.requestId });
+      storeSession({ token: response.token, user: response.user, projectId: null });
+      window.sessionStorage.setItem(SKIP_PROJECT_RESTORE_KEY, "1");
+      if (window.location.pathname !== "/") {
+        window.history.replaceState({}, "", "/");
+      }
+      setPathnameProjectId(null);
+      setActiveTab("chat");
+      setBanner({ tone: "success", title: "Signed in", message: `Welcome, ${response.user.name}. Choose a project to continue.`, requestId: response.requestId });
     } catch (error) {
       setBanner(errorBanner(error, "Sign in failed"));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -2370,7 +2513,10 @@ export default function App() {
     setConversations((current) => {
       const existing = current.find((conversation) => conversation.id === targetConversationId);
       if (!existing) return current;
-      return upsertConversationSummary(current, { ...existing, createdAt: new Date().toISOString() });
+      const title = existing.title === "New conversation"
+        ? instantConversationTitle(message.trim())
+        : existing.title;
+      return upsertConversationSummary(current, { ...existing, title, createdAt: new Date().toISOString() });
     });
 
     try {
@@ -2470,6 +2616,13 @@ export default function App() {
               };
             });
           }
+        },
+        onConversationTitle({ conversationId, title }) {
+          setConversations((current) => {
+            const existing = current.find((conversation) => conversation.id === conversationId);
+            if (!existing) return current;
+            return upsertConversationSummary(current, { ...existing, title });
+          });
         },
         onLifecycle(event: ChatLifecycleEvent) {
           if (event.type === "turn_completed" && event.message) {
@@ -2646,7 +2799,12 @@ export default function App() {
 
   async function handleSelectConversation(convId: string) {
     if (!token || !selectedProject) return;
-    if (convId === activeConversationId) return;
+    if (convId === activeConversationId) {
+      setPendingNewChat(false);
+      setActiveTab("chat");
+      applyWorkspacePath(selectedProject.id, "chat");
+      return;
+    }
     setPendingNewChat(false);
     setBusy(true);
     try {
@@ -2796,14 +2954,72 @@ export default function App() {
 
   const authenticated = Boolean(token && user);
   const shellVariant = "workspace";
-  const showWorkspaceShell = authenticated && (bootstrapping || !bootstrapping);
+  const showProjectPicker = authenticated && !bootstrapping && !selectedProject;
+  const showWorkspace = authenticated && Boolean(selectedProject);
+  const showBootstrapProjectShell = authenticated && bootstrapping && !selectedProject;
 
   return (
     <AppShell authenticated={authenticated} onSignOut={() => clearAuth()} variant={shellVariant}>
       {banner ? <Banner {...banner} onDismiss={() => setBanner(null)} /> : null}
-      {bootstrapping && !hadSavedSession ? <ProjectScreenSkeleton /> : null}
+      {showBootstrapProjectShell ? <ProjectScreenSkeleton /> : null}
       {!bootstrapping && !authenticated ? <LoginScreen onLogin={handleLogin} busy={busy} /> : null}
-      {showWorkspaceShell ? <Workspace project={selectedProject} projects={projects} user={user} token={token} messages={visibleMessages} conversations={conversations} activeConversationId={activeConversationId} kbDocuments={knowledgeBaseDocuments} repoItems={repositoryItems} kbTotalCount={kbTotalCount} repoTotalCount={repoTotalCount} providerDiagnostics={chatProviderDiagnostics} providerRequestId={chatProviderRequestId} registry={registry} management={management} activeTab={activeTab} onTabChange={setActiveTab} onSend={handleSend} onNewChat={handleNewChat} onResetChat={handleResetChat} onSwitchProject={() => setSelectedProject(null)} onSelectProject={(project) => { void handleProjectSelect(project); }} onSelectConversation={(convId) => { void handleSelectConversation(convId); }} onCreateProject={(name) => { void handleCreateProject(name); }} onSignOut={() => clearAuth()} projectConversationCounts={projectConversationCounts} projectAssetCounts={projectAssetCounts} busy={busy} onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }} onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }} onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }} onStop={handleStop} streamingActivity={visibleStreamingActivity} streamStartTime={visibleStreamStartTime} streamElapsed={visibleStreamElapsed} restoringSession={bootstrapping} /> : null}
+      {showProjectPicker ? (
+        <ProjectScreen
+          projects={projects}
+          user={user}
+          busy={busy}
+          onSelect={handleProjectSelect}
+          onCreate={(name) => { void handleCreateProject(name); }}
+          onSignOut={() => clearAuth()}
+        />
+      ) : null}
+      {showWorkspace ? (
+        <Workspace
+          project={selectedProject}
+          projects={projects}
+          user={user}
+          token={token}
+          messages={visibleMessages}
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          kbDocuments={knowledgeBaseDocuments}
+          repoItems={repositoryItems}
+          kbTotalCount={kbTotalCount}
+          repoTotalCount={repoTotalCount}
+          providerDiagnostics={chatProviderDiagnostics}
+          providerRequestId={chatProviderRequestId}
+          registry={registry}
+          management={management}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          onSend={handleSend}
+          onNewChat={handleNewChat}
+          onResetChat={handleResetChat}
+          onSwitchProject={() => {
+            setSelectedProject(null);
+            setMessages([]);
+            setConversations([]);
+            setActiveConversationId(null);
+            storeSession({ token, user, projectId: null });
+            window.history.pushState({}, "", "/");
+          }}
+          onSelectProject={(project) => { void handleProjectSelect(project); }}
+          onSelectConversation={(convId) => { void handleSelectConversation(convId); }}
+          onCreateProject={(name) => { void handleCreateProject(name); }}
+          onSignOut={() => clearAuth()}
+          projectConversationCounts={projectConversationCounts}
+          projectAssetCounts={projectAssetCounts}
+          busy={busy}
+          onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }}
+          onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }}
+          onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }}
+          onStop={handleStop}
+          streamingActivity={visibleStreamingActivity}
+          streamStartTime={visibleStreamStartTime}
+          streamElapsed={visibleStreamElapsed}
+          restoringSession={bootstrapping}
+        />
+      ) : null}
       {session ? <footer className="diagnostic-footer">Session project: {session.projectId ?? "none selected"}</footer> : null}
     </AppShell>
   );

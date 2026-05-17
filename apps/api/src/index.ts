@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyElementEnteliEnv } from "./elementEnteliConfig.js";
 import { buildServer } from "./server.js";
 
 // Load root .env (not committed; safe to skip if absent)
@@ -33,6 +34,7 @@ function loadEnv(): void {
   console.error("[env] no .env file found, using host environment only");
 }
 loadEnv();
+applyElementEnteliEnv();
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";

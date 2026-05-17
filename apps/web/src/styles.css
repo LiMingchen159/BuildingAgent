@@ -5667,6 +5667,79 @@ p {
   color: #8b8b8b;
 }
 
+.activity-context-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.activity-row.activity-think {
+  color: #8b8b8b;
+}
+
+.activity-row.activity-think .activity-row-label {
+  color: #8b8b8b;
+  font-weight: var(--font-weight-normal);
+}
+
+.activity-row.activity-think.is-running .activity-row-label {
+  background-image: linear-gradient(
+    90deg,
+    #9a9a9a 0%,
+    #9a9a9a 38%,
+    #6a6a6a 50%,
+    #9a9a9a 62%,
+    #9a9a9a 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: text-shimmer 2.35s linear infinite;
+}
+
+.activity-think-details {
+  border-left: 2px solid #d4d4d4;
+  margin-left: 1.48rem;
+  padding: 0.15rem 0 0.2rem 0.75rem;
+  background: transparent;
+}
+
+.activity-think-details p,
+.activity-think-details .markdown.markdown-think {
+  background: transparent;
+  border-radius: 0;
+  color: #9a9a9a;
+  font-family: var(--font-family-sans, ui-sans-serif, system-ui, sans-serif);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.activity-think-details .markdown.markdown-think strong {
+  color: #8b8b8b;
+  font-weight: 600;
+}
+
+.activity-think-details .markdown.markdown-think p {
+  margin: 0 0 0.5rem;
+}
+
+.activity-think-details .markdown.markdown-think p:last-child {
+  margin-bottom: 0;
+}
+
+.activity-context-narration {
+  color: #9a9a9a;
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
 @keyframes activity-breathe {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 0.95; }
@@ -5675,6 +5748,7 @@ p {
 @media (prefers-reduced-motion: reduce) {
   .worked-timeline .worked-timeline-title.is-running,
   .activity-row.is-running .activity-row-label,
+  .activity-row.activity-think.is-running .activity-row-label,
   .activity-progress-text.is-running {
     animation: none;
     background-image: none;

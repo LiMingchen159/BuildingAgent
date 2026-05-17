@@ -2,6 +2,7 @@ import type { AgentMemoryStore } from "./memory.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import type { AgentToolRegistry } from "./tools.js";
 import type { AgentLifecycleEvent, AgentLifecycleEventType, AgentLoopResult, AgentTurnRequest, AgentTurnResult } from "./types.js";
+import { chartPlottingGuidelines } from "./chartGuidelines.js";
 import { knowledgeBasePrompt, repositoryPrompt } from "./knowledgeBase.js";
 import type { ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
 import { ContextCompressor } from "./compressor.js";
@@ -46,28 +47,12 @@ function parseGeneratedImages(result: Record<string, unknown>): ChatMessageImage
     });
   };
 
+  // Only trust tool-supplied generatedImages (already freshness-filtered).
+  // Do not scan outputFiles here — that list includes the whole outputs/ folder
+  // and would re-attach charts from earlier conversations.
   if (Array.isArray(result.generatedImages)) {
     for (const entry of result.generatedImages) {
       pushImage(entry);
-    }
-  }
-
-  if (Array.isArray(result.outputFiles)) {
-    for (const entry of result.outputFiles) {
-      if (typeof entry !== "object" || entry === null) {
-        continue;
-      }
-      const file = entry as Record<string, unknown>;
-      const src = typeof file.path === "string" ? file.path : "";
-      const name = typeof file.name === "string" ? file.name : "";
-      if (!src || !/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name || src)) {
-        continue;
-      }
-      pushImage({
-        src,
-        alt: name ? name.replace(/\.[^.]+$/, "") : src,
-        ...(name ? { filename: name } : {})
-      });
     }
   }
 
@@ -249,12 +234,14 @@ export class AgentRuntime {
       "You are BuildingAgent, a Hermes-like autonomous project assistant.",
       "You have access to tools. Use them proactively to gather information before answering.",
       "When you need data: call the right tool, review the result, then decide your next step.",
+      "ENVIRONMENT-FIRST: If any tool fails because a library, CLI, runtime, or package is missing, configure the environment before continuing. Do NOT workaround with manual math, fake charts, or skipping analysis. Install dependencies (pip/npm/apt/system packages), verify with a quick test, then retry the failed step. Only answer the user after the environment works or installation truly fails.",
       "Plan your work: tell the user what you're going to do, then do it step by step.",
       "You can schedule reminders for users. When a user asks to be reminded, use schedule_reminder with an appropriate delay.",
       "Be concise, actionable, and explicit about mocked BIM/Brick/IFC/timeseries data.",
       "CRITICAL — Output files (charts, plots, images, reports) MUST be saved to os.environ['OUTPUT_DIR']. This is the ONLY valid output location.",
       "In Python: output_dir = os.environ['OUTPUT_DIR']; out = os.path.join(output_dir, 'filename.png'). The cwd is the Repository root — do NOT use relative paths for output.",
       "After generating an image, you MUST include a Markdown image link like ![alt](outputs/filename). Use exactly outputs/filename — the frontend resolves this relative to the Repository.",
+      chartPlottingGuidelines(),
       "Never expose secrets or hidden credentials.",
       skillHints ? `Available skills:\n${skillHints}` : "",
       `Available tools: ${this.options.tools.schemas().map((tool) => tool.name).join(", ")}`,

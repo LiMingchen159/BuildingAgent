@@ -85,28 +85,28 @@ export async function indexKnowledgeBase(projectId: string, options: KnowledgeBa
   return entries;
 }
 
-export function knowledgeBasePrompt(documents: KnowledgeBaseDocument[]): string {
-  if (documents.length === 0) {
+export function knowledgeBasePrompt(documents: KnowledgeBaseDocument[], limit = 5): string {
+  if (documents.length === 0 || limit <= 0) {
     return "Knowledge Base files: none discovered.";
   }
 
   return [
     "Knowledge Base files discovered for this project:",
-    ...documents.slice(0, 5).map((document) => {
+    ...documents.slice(0, limit).map((document) => {
       const excerpt = document.excerpt ? ` Excerpt: ${document.excerpt}` : "";
       return `- ${document.path} (${document.kind}, ${document.sizeBytes} bytes).${excerpt}`;
     })
   ].join("\n");
 }
 
-export function repositoryPrompt(artifacts: RepositoryArtifact[]): string {
-  if (artifacts.length === 0) {
+export function repositoryPrompt(artifacts: RepositoryArtifact[], limit = 8): string {
+  if (artifacts.length === 0 || limit <= 0) {
     return "Repository files discovered for this project: none yet.";
   }
 
   return [
     "Repository files discovered for this project:",
-    ...artifacts.slice(0, 8).map((artifact) => {
+    ...artifacts.slice(0, limit).map((artifact) => {
       const location = artifact.path ?? artifact.name;
       const description = artifact.description ? ` Summary: ${artifact.description}` : "";
       const size = typeof artifact.sizeBytes === "number" ? `${artifact.sizeBytes} bytes` : "size unknown";

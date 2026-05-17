@@ -8,7 +8,7 @@ import {
   requireSelectedProject,
   sendError
 } from "./auth.js";
-import { createSeedStore, type ChatMessage, type ChatMessageImage, type Conversation, type RepositoryArtifact, type SeedStore } from "./seed.js";
+import { createSeedStore, type ChatMessage, type ChatMessageImage, type Conversation, type KnowledgeBaseDocument, type RepositoryArtifact, type SeedStore } from "./seed.js";
 import {
   ProviderError,
   createDeterministicMockProvider,
@@ -28,6 +28,7 @@ import { createGenericSkillRegistry } from "./agent/skills.js";
 import { countFiles, dataRoot, indexKnowledgeBase, indexRepository, kbRootForProject, repoRootForProject } from "./agent/knowledgeBase.js";
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
+import { orderedConversationMessages } from "./conversationMessages.js";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -36,6 +37,7 @@ import { inflateRawSync } from "node:zlib";
 import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
 import { randomUUID } from "node:crypto";
+import { BmsDatabaseBridge } from "./bmsDatabaseBridge.js";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -297,6 +299,26 @@ function normalizeRepositoryImagePath(rawPath: string): string {
   return normalized;
 }
 
+function extractMarkdownImagePaths(content: string): string[] {
+  const matches = content.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g);
+  return [...matches].map((match) => normalizeRepositoryImagePath(match[1] ?? ""));
+}
+
+function filterImagesReferencedInContent(
+  images: ChatMessageImage[] | undefined,
+  content: string
+): ChatMessageImage[] | undefined {
+  if (!images || images.length === 0) {
+    return undefined;
+  }
+  const referenced = new Set(extractMarkdownImagePaths(content).map((value) => value.toLowerCase()));
+  if (referenced.size === 0) {
+    return undefined;
+  }
+  const filtered = images.filter((image) => referenced.has(normalizeRepositoryImagePath(image.src).toLowerCase()));
+  return filtered.length > 0 ? filtered : undefined;
+}
+
 function dedupeChatImages(images: ChatMessageImage[] | undefined): ChatMessageImage[] | undefined {
   if (!images || images.length === 0) {
     return undefined;
@@ -311,6 +333,100 @@ function dedupeChatImages(images: ChatMessageImage[] | undefined): ChatMessageIm
     deduped.push({ ...image, src: normalized });
   }
   return deduped.length > 0 ? deduped : undefined;
+}
+
+function finalizeAssistantImages(
+  images: ChatMessageImage[] | undefined,
+  content: string
+): ChatMessageImage[] | undefined {
+  return filterImagesReferencedInContent(dedupeChatImages(images), content);
+}
+
+function stripProviderThinkingMarkup(content: string): string {
+  return content
+    .replace(/<(think|redacted_thinking)>[\s\S]*?<\/(think|redacted_thinking)>/gi, "")
+    .replace(/<(think|redacted_thinking)>[\s\S]*$/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function fallbackConversationTitle(userText: string): string {
+  const compact = userText.replace(/\s+/g, " ").trim();
+  return compact ? compact.slice(0, 60) : "New conversation";
+}
+
+function sanitizeConversationTitle(text: string): string {
+  const stripped = stripProviderThinkingMarkup(text);
+  return stripped
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/[*_#>`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+}
+
+function isFirstConversationExchange(conversation: Conversation, messages: ChatMessage[]): boolean {
+  const convoMessages = conversation.messageIds
+    .map((id) => messages.find((message) => message.id === id))
+    .filter((message): message is ChatMessage => Boolean(message));
+  return convoMessages.filter((message) => message.role === "user").length === 1
+    && convoMessages.filter((message) => message.role === "assistant").length === 1;
+}
+
+/** Placeholder title from the user's question (shown immediately). */
+function tryInstantConversationTitle(params: {
+  conversation: Conversation;
+  userText: string;
+  onUpdated?: (title: string) => void;
+}): string | null {
+  if (params.conversation.title !== "New conversation") {
+    return null;
+  }
+  const title = fallbackConversationTitle(params.userText);
+  if (title === "New conversation") {
+    return null;
+  }
+  params.conversation.title = title;
+  params.onUpdated?.(title);
+  return title;
+}
+
+/** Best-effort LLM summary after the first assistant reply (does not block the chat response). */
+async function refineConversationTitleWithLlm(params: {
+  conversation: Conversation;
+  userText: string;
+  assistantText: string;
+  provider: ChatProvider;
+  projectId: string;
+  userId: string;
+  requestId: string;
+  onUpdated?: (title: string) => void;
+}): Promise<void> {
+  const assistantSnippet = stripProviderThinkingMarkup(params.assistantText).slice(0, 500);
+  const assistantForPrompt = assistantSnippet.length > 0 ? assistantSnippet : "(no answer yet)";
+  try {
+    const titleResult = await params.provider.complete({
+      messages: [
+        {
+          role: "user",
+          content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text. Do not include thinking tags or markdown.\n\nUser: ${params.userText}\nAssistant: ${assistantForPrompt}`
+        }
+      ],
+      projectId: params.projectId,
+      userId: params.userId,
+      requestId: params.requestId
+    });
+    const generated = sanitizeConversationTitle(titleResult.text.replace(/^["']|["']$/g, "").trim());
+    const title = generated && !/<(think|redacted_thinking)/i.test(generated)
+      ? generated
+      : null;
+    if (title && title !== params.conversation.title) {
+      params.conversation.title = title;
+      params.onUpdated?.(title);
+    }
+  } catch {
+    // Keep the instant placeholder title.
+  }
 }
 
 let messageSequence = 0;
@@ -493,10 +609,25 @@ function validateChatMessage(body: unknown): string | null {
   return trimmed;
 }
 
-function trimChatMessages(messages: ChatMessage[], limit: number): void {
-  if (messages.length > limit) {
-    messages.splice(0, messages.length - limit);
+/**
+ * Cap project message pool size without deleting messages still linked from any conversation.
+ * Previously we trimmed the shared array from the front, which orphaned early conversation messageIds.
+ */
+function trimProjectMessages(store: SeedStore, projectId: string, limit: number): void {
+  const messages = store.messagesByProject[projectId];
+  if (!messages || messages.length <= limit) {
+    return;
   }
+
+  const referenced = new Set(
+    (store.conversationsByProject[projectId] ?? []).flatMap((conversation) => conversation.messageIds)
+  );
+  const protectedMessages = messages.filter((message) => referenced.has(message.id));
+  const unprotected = messages.filter((message) => !referenced.has(message.id));
+  const unprotectedBudget = Math.max(0, limit - protectedMessages.length);
+  const keptUnprotected = unprotected.slice(-unprotectedBudget);
+  const keptIds = new Set([...protectedMessages, ...keptUnprotected].map((message) => message.id));
+  store.messagesByProject[projectId] = messages.filter((message) => keptIds.has(message.id));
 }
 
 function providerDiagnostics(provider: ProviderMetadata, fallbackUsed: boolean): ProviderMetadata & { fallbackUsed: boolean } {
@@ -511,7 +642,38 @@ function providerDiagnostics(provider: ProviderMetadata, fallbackUsed: boolean):
 }
 
 function chatHistoryForProvider(messages: ChatMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
-  return messages.map((message) => ({ role: message.role, content: message.content }));
+  return messages
+    .filter((message): message is ChatMessage & { role: "user" | "assistant" } => message.role === "user" || message.role === "assistant")
+    .map((message) => ({ role: message.role, content: message.content }));
+}
+
+async function buildAgentTurnInputs(params: {
+  projectId: string;
+  conversation: Conversation;
+  projectMessages: ChatMessage[];
+  store: SeedStore;
+}): Promise<{
+  conversationMessages: ChatMessage[];
+  knowledgeBaseDocuments: KnowledgeBaseDocument[];
+  repositoryArtifacts: RepositoryArtifact[];
+  providerMessages: ReturnType<typeof chatHistoryForProvider>;
+}> {
+  const conversationMessages = orderedConversationMessages(params.projectMessages, params.conversation);
+  const projectKbRoot = kbRootForProject(params.projectId);
+  const projectRepoRoot = repoRootForProject(params.projectId);
+  const [knowledgeBaseDocuments, repositoryArtifacts] = await Promise.all([
+    indexKnowledgeBase(params.projectId, { rootDir: projectKbRoot }),
+    indexRepository(params.projectId, projectRepoRoot)
+  ]);
+  params.store.knowledgeBaseByProject[params.projectId] = knowledgeBaseDocuments;
+  params.store.repositoryByProject[params.projectId] = repositoryArtifacts;
+
+  return {
+    conversationMessages,
+    knowledgeBaseDocuments,
+    repositoryArtifacts,
+    providerMessages: chatHistoryForProvider(conversationMessages)
+  };
 }
 
 function providerErrorCode(error: unknown): string {
@@ -934,6 +1096,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const structuredLogger = new StructuredLogger({ dir: logDir, maxFileBytes: 5 * 1024 * 1024 });
   const useMockBmsClient = parseBooleanEnv(env.USE_MOCK_BMS_CLIENT);
   const bmsBaseUrl = env.BMS_API_BASE_URL ?? "";
+  const elementBmsBridge = env.BMS_DATABASE_API_URL?.trim()
+    ? new BmsDatabaseBridge({
+      baseUrl: env.BMS_DATABASE_API_URL.trim(),
+      ...(env.ELEMENT_ENTELI_BASE_URL?.trim() ? { enteliBaseUrl: env.ELEMENT_ENTELI_BASE_URL.trim() } : {})
+    })
+    : null;
+  if (elementBmsBridge) {
+    elementBmsBridge.seedElementSource("project_element");
+  }
   const bmsSources = new Map<string, BmsSourceState>();
   const bmsJobs = new Map<string, BmsJobState>();
   let bmsSourceSequence = 0;
@@ -961,6 +1132,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       throw new Error("bms_source_not_found");
     }
     return source;
+  };
+
+  const isElementBmsProject = (projectId: string): boolean =>
+    projectId === "project_element" && elementBmsBridge !== null;
+
+  const resolveBmsSourceProjectId = (sourceId: string): string => {
+    if (elementBmsBridge) {
+      try {
+        return elementBmsBridge.getSource(sourceId).project_id;
+      } catch {
+        // fall through to mock map
+      }
+    }
+    return mockSourceById(sourceId).source.project_id;
   };
 
   // Scheduler for reminders/cronjobs
@@ -1078,6 +1263,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (isReply(session)) {
       return session;
     }
+    if (elementBmsBridge) {
+      return elementBmsBridge.health();
+    }
     if (useMockBmsClient) return mockHealth();
     const proxied = await proxyBms(env, fetchProxy, "/health", { method: "GET" });
     return reply.status(proxied.statusCode).send(proxied.payload);
@@ -1142,6 +1330,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (isReply(membership)) return membership;
     const selected = requireSelectedProject(request, reply, session, projectId);
     if (isReply(selected)) return selected;
+    if (isElementBmsProject(projectId)) {
+      return elementBmsBridge!.listSources(projectId);
+    }
     if (useMockBmsClient) {
       return [...bmsSources.values()].map((entry) => entry.source).filter((source) => source.project_id === projectId);
     }
@@ -1156,6 +1347,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (isReply(membership)) return membership;
     const selected = requireSelectedProject(request, reply, session, request.body?.project_id ?? "");
     if (isReply(selected)) return selected;
+    if (isElementBmsProject(request.body?.project_id ?? "")) {
+      return elementBmsBridge!.createSource(request.body);
+    }
     if (useMockBmsClient) {
       const sourceId = nextBmsSourceId();
       const source: BmsSourceSummary = {
@@ -1185,7 +1379,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.get<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
-    const source = [...bmsSources.values()].map((entry) => entry.source).find((candidate) => candidate.source_id === request.params.sourceId);
+    let source: BmsSourceSummary | undefined;
+    if (elementBmsBridge) {
+      try {
+        source = elementBmsBridge.getSource(request.params.sourceId);
+      } catch {
+        source = undefined;
+      }
+    }
+    if (!source) {
+      source = [...bmsSources.values()].map((entry) => entry.source).find((candidate) => candidate.source_id === request.params.sourceId);
+    }
     if (!source) {
       return sendError(request, reply, 404, "bms_source_not_found", "BMS source not found.");
     }
@@ -1193,6 +1397,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (isReply(membership)) return membership;
     const selected = requireSelectedProject(request, reply, session, source.project_id);
     if (isReply(selected)) return selected;
+    if (elementBmsBridge && source.project_id === "project_element") return source;
     if (useMockBmsClient) return source;
     const proxied = await proxyBms(env, fetchProxy, `/api/bms/sources/${encodeURIComponent(request.params.sourceId)}`, { method: "GET" });
     return reply.status(proxied.statusCode).send(proxied.payload);
@@ -1201,12 +1406,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.post<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId/test-connection", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
-    const source = mockSourceById(request.params.sourceId).source;
-    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    const sourceProjectId = resolveBmsSourceProjectId(request.params.sourceId);
+    const membership = requireProjectMembership(request, reply, store, session, sourceProjectId);
     if (isReply(membership)) return membership;
-    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    const selected = requireSelectedProject(request, reply, session, sourceProjectId);
     if (isReply(selected)) return selected;
+    if (elementBmsBridge && isElementBmsProject(sourceProjectId)) {
+      return elementBmsBridge.testConnection(request.params.sourceId);
+    }
     if (useMockBmsClient) {
+      const source = mockSourceById(request.params.sourceId).source;
       const response: BmsConnectionTestResponse = {
         source_id: source.source_id,
         success: true,
@@ -1231,12 +1440,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.post<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId/discover-points", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
-    const source = mockSourceById(request.params.sourceId).source;
-    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    const sourceProjectId = resolveBmsSourceProjectId(request.params.sourceId);
+    const membership = requireProjectMembership(request, reply, store, session, sourceProjectId);
     if (isReply(membership)) return membership;
-    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    const selected = requireSelectedProject(request, reply, session, sourceProjectId);
     if (isReply(selected)) return selected;
+    if (elementBmsBridge && isElementBmsProject(sourceProjectId)) {
+      return elementBmsBridge.discoverPoints(request.params.sourceId);
+    }
     if (useMockBmsClient) {
+      const source = mockSourceById(request.params.sourceId).source;
       const points = createBmsMockPoint(source.source_id);
       const current = mockSourceById(request.params.sourceId);
       current.points = points;
@@ -1251,14 +1464,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.get<{ Params: { sourceId: string } }>("/api/bms/sources/:sourceId/points", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
-    const source = mockSourceById(request.params.sourceId).source;
-    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    const sourceProjectId = resolveBmsSourceProjectId(request.params.sourceId);
+    const membership = requireProjectMembership(request, reply, store, session, sourceProjectId);
     if (isReply(membership)) return membership;
-    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    const selected = requireSelectedProject(request, reply, session, sourceProjectId);
     if (isReply(selected)) return selected;
+    if (elementBmsBridge && isElementBmsProject(sourceProjectId)) {
+      return elementBmsBridge.getPoints(request.params.sourceId);
+    }
     if (useMockBmsClient) {
       const current = mockSourceById(request.params.sourceId);
-      return { source_id: source.source_id, points: current.points, count: current.points.length };
+      return { source_id: current.source.source_id, points: current.points, count: current.points.length };
     }
     const proxied = await proxyBms(env, fetchProxy, `/api/bms/sources/${encodeURIComponent(request.params.sourceId)}/points`, { method: "GET" });
     return reply.status(proxied.statusCode).send(proxied.payload);
@@ -1267,12 +1483,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.post<{ Body: BmsMinimalIngestionRequest }>("/api/bms/ingestion/test", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
-    const source = mockSourceById(request.body.source_id).source;
-    const membership = requireProjectMembership(request, reply, store, session, source.project_id);
+    const sourceProjectId = resolveBmsSourceProjectId(request.body.source_id);
+    const membership = requireProjectMembership(request, reply, store, session, sourceProjectId);
     if (isReply(membership)) return membership;
-    const selected = requireSelectedProject(request, reply, session, source.project_id);
+    const selected = requireSelectedProject(request, reply, session, sourceProjectId);
     if (isReply(selected)) return selected;
+    if (elementBmsBridge && isElementBmsProject(sourceProjectId)) {
+      return elementBmsBridge.startIngestionTest(request.body);
+    }
     if (useMockBmsClient) {
+      const source = mockSourceById(request.body.source_id).source;
       const current = mockSourceById(request.body.source_id);
       const selectedPoints = current.points.filter((point) => request.body.point_ids.includes(point.id));
       const jobId = nextBmsJobId();
@@ -1314,6 +1534,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.get<{ Params: { jobId: string } }>("/api/bms/ingestion/jobs/:jobId", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
+    if (elementBmsBridge) {
+      try {
+        const job = elementBmsBridge.getJob(request.params.jobId);
+        const sourceProjectId = resolveBmsSourceProjectId(job.source_id);
+        const membership = requireProjectMembership(request, reply, store, session, sourceProjectId);
+        if (isReply(membership)) return membership;
+        const selected = requireSelectedProject(request, reply, session, sourceProjectId);
+        if (isReply(selected)) return selected;
+        return job;
+      } catch {
+        // fall through to mock jobs
+      }
+    }
     const jobState = bmsJobs.get(request.params.jobId);
     if (!jobState) {
       return sendError(request, reply, 404, "bms_job_not_found", "BMS ingestion job not found.");
@@ -1346,6 +1579,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.get<{ Params: { jobId: string } }>("/api/bms/ingestion/jobs/:jobId/results", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
+    if (elementBmsBridge) {
+      try {
+        const job = elementBmsBridge.getJob(request.params.jobId);
+        const sourceProjectId = resolveBmsSourceProjectId(job.source_id);
+        const membership = requireProjectMembership(request, reply, store, session, sourceProjectId);
+        if (isReply(membership)) return membership;
+        const selected = requireSelectedProject(request, reply, session, sourceProjectId);
+        if (isReply(selected)) return selected;
+        return elementBmsBridge.getJobResults(request.params.jobId);
+      } catch {
+        // fall through
+      }
+    }
     const jobState = bmsJobs.get(request.params.jobId);
     if (!jobState) {
       return sendError(request, reply, 404, "bms_job_not_found", "BMS ingestion job not found.");
@@ -1362,15 +1608,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return reply.status(proxied.statusCode).send(proxied.payload);
   });
 
+  const findUserForLogin = (identifier: string, password: string) => {
+    const loginId = identifier.trim().toLowerCase();
+    const loginPassword = password;
+    return store.users.find((candidate) => {
+      const emails = [candidate.email, ...(candidate.loginAliases ?? [])].map((value) => value.trim().toLowerCase());
+      const passwords = [candidate.password, ...(candidate.passwordAliases ?? [])];
+      return emails.includes(loginId) && passwords.includes(loginPassword);
+    });
+  };
+
   app.post<{ Body: LoginBody }>("/api/login", async (request, reply) => {
     const { email, password } = request.body ?? {};
     if (typeof email !== "string" || typeof password !== "string" || !email.trim() || !password) {
       return sendError(request, reply, 401, "auth_invalid", "Invalid credentials.");
     }
 
-    const user = store.users.find((candidate) => candidate.email === email && candidate.password === password);
+    const user = findUserForLogin(email, password);
     if (!user) {
-      return sendError(request, reply, 401, "auth_invalid", "Invalid credentials.");
+      return sendError(request, reply, 401, "auth_invalid", "Invalid email or password.");
     }
 
     const token = Object.entries(store.tokens).find(([, userId]) => userId === user.id)?.[0];
@@ -1836,8 +2092,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
     messages.push(message);
     conversation.messageIds.push(message.id);
-    trimChatMessages(messages, store.maxChatMessages);
+    trimProjectMessages(store, projectId, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
+    tryInstantConversationTitle({ conversation, userText: content });
     persistNow();
 
     // Pre-process time expressions (reminders) before agent turn
@@ -1866,7 +2123,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
       messages.push(assistantMessage);
       conversation.messageIds.push(assistantMessage.id);
-      trimChatMessages(messages, store.maxChatMessages);
+      trimProjectMessages(store, projectId, store.maxChatMessages);
       store.messagesByProject[projectId] = messages;
 
       // Auto-title on first message
@@ -1912,7 +2169,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
       messages.push(assistantMessage);
       conversation.messageIds.push(assistantMessage.id);
-      trimChatMessages(messages, store.maxChatMessages);
+      trimProjectMessages(store, projectId, store.maxChatMessages);
       store.messagesByProject[projectId] = messages;
 
       if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
@@ -1933,25 +2190,23 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     let agentTurn;
-    const projectKbRoot = kbRootForProject(projectId);
-    const projectRepoRoot = repoRootForProject(projectId);
+    const agentInputs = await buildAgentTurnInputs({
+      projectId,
+      conversation,
+      projectMessages: messages,
+      store
+    });
     try {
-      const [knowledgeBaseDocuments, repositoryArtifacts] = await Promise.all([
-        indexKnowledgeBase(projectId, { rootDir: projectKbRoot }),
-        indexRepository(projectId, projectRepoRoot)
-      ]);
-      store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
-      store.repositoryByProject[projectId] = repositoryArtifacts;
       agentTurn = await agentRuntime.runTurn({
         projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
         conversationId,
-        messages,
-        providerMessages: chatHistoryForProvider(messages),
+        messages: agentInputs.conversationMessages,
+        providerMessages: agentInputs.providerMessages,
         provider,
-        knowledgeBaseDocuments,
-        repositoryArtifacts
+        knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
+        repositoryArtifacts: agentInputs.repositoryArtifacts
       });
     } catch (error) {
       if (!allowProviderFallback) {
@@ -1967,55 +2222,57 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const fallbackProvider = createDeterministicMockProvider(
         providerErrorCode(error)
       );
-      const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
-      const repositoryArtifacts = store.repositoryByProject[projectId] ?? [];
       agentTurn = await agentRuntime.runTurn({
         projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
         conversationId,
-        messages,
-        providerMessages: chatHistoryForProvider(messages),
+        messages: agentInputs.conversationMessages,
+        providerMessages: agentInputs.providerMessages,
         provider: fallbackProvider,
-        knowledgeBaseDocuments,
-        repositoryArtifacts
+        knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
+        repositoryArtifacts: agentInputs.repositoryArtifacts
       });
     }
 
+    const assistantText = stripProviderThinkingMarkup(agentTurn.completion.text);
+    const syncedAssistantImages = finalizeAssistantImages(agentTurn.generatedImages, assistantText);
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: agentTurn.completion.text,
-      ...(dedupeChatImages(agentTurn.generatedImages) ? { images: dedupeChatImages(agentTurn.generatedImages) } : {})
+      content: assistantText,
+      ...(syncedAssistantImages ? { images: syncedAssistantImages } : {})
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);
-    trimChatMessages(messages, store.maxChatMessages);
+    trimProjectMessages(store, projectId, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
 
-    // Auto-title: generate on first user message using the provider
-    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
-      try {
-        const titleResult = await provider.complete({
-          messages: [
-            { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${agentTurn.completion.text}` }
-          ],
-          projectId,
-          userId: session.userId,
-          requestId: requestIdFor(request)
-        });
-        const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
-        if (title) {
-          conversation.title = title;
+    persistSoon();
+
+    if (isFirstConversationExchange(conversation, agentInputs.conversationMessages)) {
+      void refineConversationTitleWithLlm({
+        conversation,
+        userText: content,
+        assistantText,
+        provider,
+        projectId,
+        userId: session.userId,
+        requestId: requestIdFor(request),
+        onUpdated(title) {
+          persistSoon();
+          broadcastToProject(projectId, {
+            type: "conversation_title_updated",
+            conversationId,
+            title,
+            projectId
+          });
         }
-      } catch {
-        // title generation is best-effort; failure is not an error
-      }
+      });
     }
 
-    persistSoon();
     return reply.status(201).send({
       message,
       assistantMessage,
@@ -2080,18 +2337,24 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     const messages = store.messagesByProject[projectId] ?? [];
 
-    // Store user message immediately
-    const userMessage: ChatMessage = {
-      id: nextMessageId(),
-      projectId,
-      userId: session.userId,
-      role: "user",
-      content
-    };
-    messages.push(userMessage);
-    conversation.messageIds.push(userMessage.id);
-    store.messagesByProject[projectId] = messages;
-    persistNow();
+    const lastMessageId = conversation.messageIds[conversation.messageIds.length - 1];
+    const lastMessage = lastMessageId ? messages.find((message) => message.id === lastMessageId) : undefined;
+    let userMessage: ChatMessage;
+    if (lastMessage?.role === "user" && lastMessage.content === content) {
+      userMessage = lastMessage;
+    } else {
+      userMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "user",
+        content
+      };
+      messages.push(userMessage);
+      conversation.messageIds.push(userMessage.id);
+      store.messagesByProject[projectId] = messages;
+      persistNow();
+    }
 
     // Set up SSE response
     const reqId = requestIdFor(request);
@@ -2105,6 +2368,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const sseWrite = (event: string, data: unknown): void => {
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
+
+    tryInstantConversationTitle({
+      conversation,
+      userText: content,
+      onUpdated(title) {
+        broadcastToProject(projectId, {
+          type: "conversation_title_updated",
+          conversationId,
+          title,
+          projectId
+        });
+        sseWrite("conversation_title", { conversationId, title, requestId: reqId });
+      }
+    });
 
     // Pre-process time expressions (reminders) before agent turn
     const streamTimeExpr = parseTimeExpression(content);
@@ -2132,7 +2409,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
       messages.push(streamAssistantMessage);
       conversation.messageIds.push(streamAssistantMessage.id);
-      trimChatMessages(messages, store.maxChatMessages);
+      trimProjectMessages(store, projectId, store.maxChatMessages);
       store.messagesByProject[projectId] = messages;
 
       if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
@@ -2178,7 +2455,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
       messages.push(streamAssistMsg);
       conversation.messageIds.push(streamAssistMsg.id);
-      trimChatMessages(messages, store.maxChatMessages);
+      trimProjectMessages(store, projectId, store.maxChatMessages);
       store.messagesByProject[projectId] = messages;
 
       if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
@@ -2223,16 +2500,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return act;
     };
 
-    try {
-      const projectKbRoot = kbRootForProject(projectId);
-      const projectRepoRoot = repoRootForProject(projectId);
-      const [knowledgeBaseDocuments, repositoryArtifacts] = await Promise.all([
-        indexKnowledgeBase(projectId, { rootDir: projectKbRoot }),
-        indexRepository(projectId, projectRepoRoot)
-      ]);
-      store.knowledgeBaseByProject[projectId] = knowledgeBaseDocuments;
-      store.repositoryByProject[projectId] = repositoryArtifacts;
+    const agentInputs = await buildAgentTurnInputs({
+      projectId,
+      conversation,
+      projectMessages: messages,
+      store
+    });
 
+    try {
       const seenActivities = new Map<string, number>();
       let activitySequence = 0;
       const sanitizeToolDetail = (value: unknown): string | undefined => {
@@ -2286,11 +2561,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         userId: session.userId,
         requestId: reqId,
         conversationId,
-        messages,
-        providerMessages: chatHistoryForProvider(messages),
+        messages: agentInputs.conversationMessages,
+        providerMessages: agentInputs.providerMessages,
         provider,
-        knowledgeBaseDocuments,
-        repositoryArtifacts
+        knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
+        repositoryArtifacts: agentInputs.repositoryArtifacts
       });
       let primaryStep = await primaryStream.next();
       while (!primaryStep.done) {
@@ -2405,11 +2680,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             userId: session.userId,
             requestId: reqId,
             conversationId,
-            messages,
-            providerMessages: chatHistoryForProvider(messages),
+            messages: agentInputs.conversationMessages,
+            providerMessages: agentInputs.providerMessages,
             provider: fallbackProvider,
-            knowledgeBaseDocuments,
-            repositoryArtifacts
+            knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
+            repositoryArtifacts: agentInputs.repositoryArtifacts
           });
           let fallbackStep = await fallbackStream.next();
           while (!fallbackStep.done) {
@@ -2491,20 +2766,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     // Store assistant message
-    const finalGeneratedImages = dedupeChatImages(streamGeneratedImages);
+    const assistantContent = stripProviderThinkingMarkup(finalText || "I wasn't able to complete the analysis.");
+    const finalGeneratedImages = finalizeAssistantImages(streamGeneratedImages, assistantContent);
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: finalText || "I wasn't able to complete the analysis.",
+      content: assistantContent,
       ...(finalGeneratedImages ? { images: finalGeneratedImages } : {}),
       ...(capturedActivities.length > 0 ? { activities: capturedActivities } : {}),
       workDuration: Date.now() - turnStartedAt
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);
-    trimChatMessages(messages, store.maxChatMessages);
+    trimProjectMessages(store, projectId, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
 
     persistSoon();
@@ -2522,34 +2798,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     reply.raw.end();
 
-    // Auto-title is best-effort and must never delay the final answer.
-    // When title is generated, broadcast to frontend via WebSocket for real-time sidebar update.
-    if (conversation.messageIds.length === 2 && conversation.title === "New conversation") {
-      void (async () => {
-        try {
-          const titleResult = await provider.complete({
-            messages: [
-              { role: "user", content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text.\n\nUser: ${content}\nAssistant: ${finalText}` }
-            ],
-            projectId,
-            userId: session.userId,
-            requestId: reqId
+    if (isFirstConversationExchange(conversation, messages)) {
+      void refineConversationTitleWithLlm({
+        conversation,
+        userText: content,
+        assistantText: assistantContent,
+        provider,
+        projectId,
+        userId: session.userId,
+        requestId: reqId,
+        onUpdated(title) {
+          persistSoon();
+          broadcastToProject(projectId, {
+            type: "conversation_title_updated",
+            conversationId,
+            title,
+            projectId
           });
-          const title = titleResult.text.replace(/^["']|["']$/g, "").trim().slice(0, 60);
-          if (title) {
-            conversation.title = title;
-            persistSoon();
-            broadcastToProject(projectId, {
-              type: "conversation_title_updated",
-              conversationId,
-              title,
-              projectId
-            });
-          }
-        } catch {
-          // title generation is best-effort
         }
-      })();
+      });
     }
   });
 

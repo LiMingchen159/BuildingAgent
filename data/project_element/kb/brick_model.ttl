@@ -1,0 +1,2524 @@
+@prefix bldg: <urn:bms2brick#> .
+@prefix brick: <https://brickschema.org/schema/Brick#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+bldg:WCC_1_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_1_AV_17" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_1_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_1_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_1_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_1_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_1_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_1_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_1_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_1_COMPSALM" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_1_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_1_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_1_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_1_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_1_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_1_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_1_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_1_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_1_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_1_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_1_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_1_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_1_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_1_Control_Mode" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Control_Point a brick:Command ;
+    rdfs:label "WCC_1_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_DISCP a brick:Sensor ;
+    rdfs:label "WCC_1_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_1_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_1_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_1_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_1_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_1_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_1_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_1_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_1_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_1_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_1_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_1_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_1_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_1_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_1_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_1_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_1_Run_Status" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_1_SUAT" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_1_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_1_SUWT" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_1_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_1_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_1_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_1_TLHR" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_1_TLKW" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_1_TLKWH" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_1_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_1_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_1_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_1 .
+
+bldg:WCC_2_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_2_AV_17" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_2_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_2_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_2_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_2_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_2_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_2_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_2_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_2_COMPSALM" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_2_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_2_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_2_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_2_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_2_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_2_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_2_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_2_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_2_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_2_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_2_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_2_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_2_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_2_Control_Mode" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Control_Point a brick:Command ;
+    rdfs:label "WCC_2_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_DISCP a brick:Sensor ;
+    rdfs:label "WCC_2_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_2_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_2_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_2_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_2_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_2_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_2_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_2_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_2_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_2_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_2_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_2_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_2_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_2_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_2_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_2_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_2_Run_Status" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_2_SUAT" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_2_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_2_SUWT" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_2_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_2_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_2_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_2_TLHR" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_2_TLKW" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_2_TLKWH" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_2_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_2_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_2_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_2 .
+
+bldg:WCC_3_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_3_AV_17" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_3_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_3_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_3_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_3_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_3_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_3_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_3_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_3_COMPSALM" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_3_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_3_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_3_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_3_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_3_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_3_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_3_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_3_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_3_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_3_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_3_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_3_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_3_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_3_Control_Mode" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Control_Point a brick:Command ;
+    rdfs:label "WCC_3_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_DISCP a brick:Sensor ;
+    rdfs:label "WCC_3_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_3_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_3_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_3_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_3_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_3_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_3_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_3_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_3_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_3_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_3_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_3_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_3_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_3_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_3_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_3_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_3_Run_Status" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_3_SUAT" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_3_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_3_SUWT" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_3_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_3_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_3_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_3_TLHR" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_3_TLKW" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_3_TLKWH" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_3_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_3_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_3_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_3 .
+
+bldg:WCC_4_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_4_AV_17" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_4_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_4_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_4_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_4_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_4_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_4_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_4_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_4_COMPSALM" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_4_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_4_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_4_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_4_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_4_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_4_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_4_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_4_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_4_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_4_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_4_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_4_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_4_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_4_Control_Mode" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Control_Point a brick:Command ;
+    rdfs:label "WCC_4_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_DISCP a brick:Sensor ;
+    rdfs:label "WCC_4_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_4_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_4_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_4_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_4_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_4_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_4_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_4_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_4_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_4_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_4_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_4_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_4_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_4_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_4_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_4_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_4_Run_Status" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_4_SUAT" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_4_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_4_SUWT" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_4_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_4_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_4_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_4_TLHR" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_4_TLKW" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_4_TLKWH" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_4_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_4_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_4_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_4 .
+
+bldg:WCC_5_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_5_AV_17" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_5_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_5_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_5_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_5_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_5_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_5_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_5_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_5_COMPSALM" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_5_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_5_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_5_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_5_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_5_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_5_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_5_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_5_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_5_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_5_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_5_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_5_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_5_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_5_Control_Mode" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Control_Point a brick:Command ;
+    rdfs:label "WCC_5_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_DISCP a brick:Sensor ;
+    rdfs:label "WCC_5_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_5_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_5_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_5_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_5_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_5_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_5_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_5_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_5_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_5_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_5_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_5_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_5_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_5_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_5_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_5_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_5_Run_Status" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_5_SUAT" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_5_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_5_SUWT" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_5_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_5_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_5_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_5_TLHR" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_5_TLKW" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_5_TLKWH" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_5_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_5_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_5_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_5 .
+
+bldg:WCC_6_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_6_AV_17" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_6_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_6_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_6_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_6_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_6_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_6_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_6_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_6_COMPSALM" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_6_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_6_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_6_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_6_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_6_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_6_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_6_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_6_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_6_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_6_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_6_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_6_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_6_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_6_Control_Mode" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Control_Point a brick:Command ;
+    rdfs:label "WCC_6_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_DISCP a brick:Sensor ;
+    rdfs:label "WCC_6_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_6_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_6_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_6_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_6_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_6_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_6_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_6_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_6_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_6_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_6_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_6_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_6_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_6_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_6_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_6_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_6_Run_Status" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_6_SUAT" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_6_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_6_SUWT" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_6_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_6_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_6_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_6_TLHR" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_6_TLKW" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_6_TLKWH" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_6_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_6_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_6_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_6 .
+
+bldg:WCC_7_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_7_AV_17" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_7_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_7_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_7_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_7_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_7_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_7_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_7_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_7_COMPSALM" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_7_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_7_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_7_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_7_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_7_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_7_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_7_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_7_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_7_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_7_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_7_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_7_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_7_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_7_Control_Mode" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Control_Point a brick:Command ;
+    rdfs:label "WCC_7_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_DISCP a brick:Sensor ;
+    rdfs:label "WCC_7_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_7_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_7_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_7_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_7_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_7_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_7_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_7_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_7_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_7_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_7_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_7_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_7_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_7_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_7_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_7_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_7_Run_Status" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_7_SUAT" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_7_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_7_SUWT" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_7_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_7_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_7_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_7_TLHR" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_7_TLKW" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_7_TLKWH" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_7_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_7_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_7_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_7 .
+
+bldg:WCC_8_AV_17 a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_8_AV_17" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Active_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_8_Active_Delta_P" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Active_Delta_T a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_Active_Delta_T" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Active_Demand_Limit a brick:Demand_Setpoint ;
+    rdfs:label "WCC_8_Active_Demand_Limit" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Actual_Guide_Vane_Pos a brick:Damper_Position_Sensor ;
+    rdfs:label "WCC_8_Actual_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Actual_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_8_Actual_Line_Current" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Actual_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_8_Actual_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Average_Line_Current a brick:Current_Sensor ;
+    rdfs:label "WCC_8_Average_Line_Current" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Average_Line_Voltage a brick:Voltage_Sensor ;
+    rdfs:label "WCC_8_Average_Line_Voltage" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_COMPSALM a brick:Alarm ;
+    rdfs:label "WCC_8_COMPSALM" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Calc_Evap_Sat_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_8_Calc_Evap_Sat_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Chilled_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_8_Chilled_Water_Flow" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Chilled_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_8_Chilled_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Chilled_Water_Temp a brick:Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_8_Chilled_Water_Temp" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Chiller_Start_Stop a brick:Start_Stop_Command ;
+    rdfs:label "WCC_8_Chiller_Start_Stop" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Comp_Discharge_Temp a brick:Discharge_Air_Temperature_Sensor ;
+    rdfs:label "WCC_8_Comp_Discharge_Temp" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Comp_Motor_Winding_Temp a brick:Entering_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_8_Comp_Motor_Winding_Temp" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Comp_Thrust_Brg_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_Comp_Thrust_Brg_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Comp_Thrust_Lvg_Oil_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_Comp_Thrust_Lvg_Oil_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Compressor_Ontime a brick:On_Timer_Sensor ;
+    rdfs:label "WCC_8_Compressor_Ontime" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Compressor_Start_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_8_Compressor_Start_Relay" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Condenser_Approach a brick:Sensor ;
+    rdfs:label "WCC_8_Condenser_Approach" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Condenser_Refrig_Temp a brick:Pressure_Sensor ;
+    rdfs:label "WCC_8_Condenser_Refrig_Temp" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Condenser_Water_Flow a brick:Flow_Sensor ;
+    rdfs:label "WCC_8_Condenser_Water_Flow" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Condenser_Water_Pump a brick:Start_Stop_Status ;
+    rdfs:label "WCC_8_Condenser_Water_Pump" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Control_Mode a brick:Mode_Status ;
+    rdfs:label "WCC_8_Control_Mode" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Control_Point a brick:Command ;
+    rdfs:label "WCC_8_Control_Point" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_DAT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_DAT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_DISCP a brick:Sensor ;
+    rdfs:label "WCC_8_DISCP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_DWT a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_DWT" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_ECW_Setpoint a brick:Entering_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_8_ECW_Setpoint" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Evap_Refrig_Liquid_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_Evap_Refrig_Liquid_Temp" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Evaporator_Approach a brick:Entering_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_8_Evaporator_Approach" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Guide_Vane_Delta a brick:Position_Command ;
+    rdfs:label "WCC_8_Guide_Vane_Delta" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_LCW_Setpoint a brick:Leaving_Chilled_Water_Temperature_Setpoint ;
+    rdfs:label "WCC_8_LCW_Setpoint" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Line_Current_Phase_1 a brick:Current_Sensor ;
+    rdfs:label "WCC_8_Line_Current_Phase_1" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Line_Current_Phase_2 a brick:Current_Sensor ;
+    rdfs:label "WCC_8_Line_Current_Phase_2" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Line_Current_Phase_3 a brick:Current_Sensor ;
+    rdfs:label "WCC_8_Line_Current_Phase_3" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Line_Voltage_Phase_1 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_8_Line_Voltage_Phase_1" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Line_Voltage_Phase_2 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_8_Line_Voltage_Phase_2" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Line_Voltage_Phase_3 a brick:Voltage_Sensor ;
+    rdfs:label "WCC_8_Line_Voltage_Phase_3" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Motor_Percent_Kilowatts a brick:Power_Sensor ;
+    rdfs:label "WCC_8_Motor_Percent_Kilowatts" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Oil_Heater_Relay a brick:Start_Stop_Status ;
+    rdfs:label "WCC_8_Oil_Heater_Relay" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Oil_Pump_Delta_P a brick:Differential_Pressure_Sensor ;
+    rdfs:label "WCC_8_Oil_Pump_Delta_P" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Oil_Pump_Relay a brick:Relay_Command ;
+    rdfs:label "WCC_8_Oil_Pump_Relay" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Oil_Sump_Temp a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_Oil_Sump_Temp" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Remote_Start_Contact a brick:Start_Stop_Command ;
+    rdfs:label "WCC_8_Remote_Start_Contact" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Run_Status a brick:Run_Status ;
+    rdfs:label "WCC_8_Run_Status" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_SUAT a brick:Leaving_Condenser_Water_Temperature_Sensor ;
+    rdfs:label "WCC_8_SUAT" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_SUP a brick:Temperature_Sensor ;
+    rdfs:label "WCC_8_SUP" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_SUWT a brick:Leaving_Chilled_Water_Temperature_Sensor ;
+    rdfs:label "WCC_8_SUWT" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Start_Inhibit_Timer a brick:Duration_Sensor ;
+    rdfs:label "WCC_8_Start_Inhibit_Timer" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Starts_in_12_Hours a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_8_Starts_in_12_Hours" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Surge_Line_Delta_T a brick:Current_Sensor ;
+    rdfs:label "WCC_8_Surge_Line_Delta_T" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_TLHR a brick:Run_Time_Sensor ;
+    rdfs:label "WCC_8_TLHR" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_TLKW a brick:Power_Sensor ;
+    rdfs:label "WCC_8_TLKW" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_TLKWH a brick:Electric_Energy_Sensor ;
+    rdfs:label "WCC_8_TLKWH" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Target_Guide_Vane_Pos a brick:Damper_Position_Command ;
+    rdfs:label "WCC_8_Target_Guide_Vane_Pos" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_8_Total_Compressor_Starts a brick:Sensor ;
+    rdfs:label "WCC_8_Total_Compressor_Starts" ;
+    rdfs:comment "warning" ;
+    brick:isPointOf bldg:WCC_8 .
+
+bldg:WCC_1 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_1" ;
+    brick:hasPoint bldg:WCC_1_AV_17,
+        bldg:WCC_1_Active_Delta_P,
+        bldg:WCC_1_Active_Delta_T,
+        bldg:WCC_1_Active_Demand_Limit,
+        bldg:WCC_1_Actual_Guide_Vane_Pos,
+        bldg:WCC_1_Actual_Line_Current,
+        bldg:WCC_1_Actual_Line_Voltage,
+        bldg:WCC_1_Average_Line_Current,
+        bldg:WCC_1_Average_Line_Voltage,
+        bldg:WCC_1_COMPSALM,
+        bldg:WCC_1_Calc_Evap_Sat_Temp,
+        bldg:WCC_1_Chilled_Water_Flow,
+        bldg:WCC_1_Chilled_Water_Pump,
+        bldg:WCC_1_Chilled_Water_Temp,
+        bldg:WCC_1_Chiller_Start_Stop,
+        bldg:WCC_1_Comp_Discharge_Temp,
+        bldg:WCC_1_Comp_Motor_Winding_Temp,
+        bldg:WCC_1_Comp_Thrust_Brg_Temp,
+        bldg:WCC_1_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_1_Compressor_Ontime,
+        bldg:WCC_1_Compressor_Start_Relay,
+        bldg:WCC_1_Condenser_Approach,
+        bldg:WCC_1_Condenser_Refrig_Temp,
+        bldg:WCC_1_Condenser_Water_Flow,
+        bldg:WCC_1_Condenser_Water_Pump,
+        bldg:WCC_1_Control_Mode,
+        bldg:WCC_1_Control_Point,
+        bldg:WCC_1_DAT,
+        bldg:WCC_1_DISCP,
+        bldg:WCC_1_DWT,
+        bldg:WCC_1_ECW_Setpoint,
+        bldg:WCC_1_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_1_Evaporator_Approach,
+        bldg:WCC_1_Guide_Vane_Delta,
+        bldg:WCC_1_LCW_Setpoint,
+        bldg:WCC_1_Line_Current_Phase_1,
+        bldg:WCC_1_Line_Current_Phase_2,
+        bldg:WCC_1_Line_Current_Phase_3,
+        bldg:WCC_1_Line_Voltage_Phase_1,
+        bldg:WCC_1_Line_Voltage_Phase_2,
+        bldg:WCC_1_Line_Voltage_Phase_3,
+        bldg:WCC_1_Motor_Percent_Kilowatts,
+        bldg:WCC_1_Oil_Heater_Relay,
+        bldg:WCC_1_Oil_Pump_Delta_P,
+        bldg:WCC_1_Oil_Pump_Relay,
+        bldg:WCC_1_Oil_Sump_Temp,
+        bldg:WCC_1_Remote_Start_Contact,
+        bldg:WCC_1_Run_Status,
+        bldg:WCC_1_SUAT,
+        bldg:WCC_1_SUP,
+        bldg:WCC_1_SUWT,
+        bldg:WCC_1_Start_Inhibit_Timer,
+        bldg:WCC_1_Starts_in_12_Hours,
+        bldg:WCC_1_Surge_Line_Delta_T,
+        bldg:WCC_1_TLHR,
+        bldg:WCC_1_TLKW,
+        bldg:WCC_1_TLKWH,
+        bldg:WCC_1_Target_Guide_Vane_Pos,
+        bldg:WCC_1_Total_Compressor_Starts .
+
+bldg:WCC_2 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_2" ;
+    brick:hasPoint bldg:WCC_2_AV_17,
+        bldg:WCC_2_Active_Delta_P,
+        bldg:WCC_2_Active_Delta_T,
+        bldg:WCC_2_Active_Demand_Limit,
+        bldg:WCC_2_Actual_Guide_Vane_Pos,
+        bldg:WCC_2_Actual_Line_Current,
+        bldg:WCC_2_Actual_Line_Voltage,
+        bldg:WCC_2_Average_Line_Current,
+        bldg:WCC_2_Average_Line_Voltage,
+        bldg:WCC_2_COMPSALM,
+        bldg:WCC_2_Calc_Evap_Sat_Temp,
+        bldg:WCC_2_Chilled_Water_Flow,
+        bldg:WCC_2_Chilled_Water_Pump,
+        bldg:WCC_2_Chilled_Water_Temp,
+        bldg:WCC_2_Chiller_Start_Stop,
+        bldg:WCC_2_Comp_Discharge_Temp,
+        bldg:WCC_2_Comp_Motor_Winding_Temp,
+        bldg:WCC_2_Comp_Thrust_Brg_Temp,
+        bldg:WCC_2_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_2_Compressor_Ontime,
+        bldg:WCC_2_Compressor_Start_Relay,
+        bldg:WCC_2_Condenser_Approach,
+        bldg:WCC_2_Condenser_Refrig_Temp,
+        bldg:WCC_2_Condenser_Water_Flow,
+        bldg:WCC_2_Condenser_Water_Pump,
+        bldg:WCC_2_Control_Mode,
+        bldg:WCC_2_Control_Point,
+        bldg:WCC_2_DAT,
+        bldg:WCC_2_DISCP,
+        bldg:WCC_2_DWT,
+        bldg:WCC_2_ECW_Setpoint,
+        bldg:WCC_2_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_2_Evaporator_Approach,
+        bldg:WCC_2_Guide_Vane_Delta,
+        bldg:WCC_2_LCW_Setpoint,
+        bldg:WCC_2_Line_Current_Phase_1,
+        bldg:WCC_2_Line_Current_Phase_2,
+        bldg:WCC_2_Line_Current_Phase_3,
+        bldg:WCC_2_Line_Voltage_Phase_1,
+        bldg:WCC_2_Line_Voltage_Phase_2,
+        bldg:WCC_2_Line_Voltage_Phase_3,
+        bldg:WCC_2_Motor_Percent_Kilowatts,
+        bldg:WCC_2_Oil_Heater_Relay,
+        bldg:WCC_2_Oil_Pump_Delta_P,
+        bldg:WCC_2_Oil_Pump_Relay,
+        bldg:WCC_2_Oil_Sump_Temp,
+        bldg:WCC_2_Remote_Start_Contact,
+        bldg:WCC_2_Run_Status,
+        bldg:WCC_2_SUAT,
+        bldg:WCC_2_SUP,
+        bldg:WCC_2_SUWT,
+        bldg:WCC_2_Start_Inhibit_Timer,
+        bldg:WCC_2_Starts_in_12_Hours,
+        bldg:WCC_2_Surge_Line_Delta_T,
+        bldg:WCC_2_TLHR,
+        bldg:WCC_2_TLKW,
+        bldg:WCC_2_TLKWH,
+        bldg:WCC_2_Target_Guide_Vane_Pos,
+        bldg:WCC_2_Total_Compressor_Starts .
+
+bldg:WCC_3 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_3" ;
+    brick:hasPoint bldg:WCC_3_AV_17,
+        bldg:WCC_3_Active_Delta_P,
+        bldg:WCC_3_Active_Delta_T,
+        bldg:WCC_3_Active_Demand_Limit,
+        bldg:WCC_3_Actual_Guide_Vane_Pos,
+        bldg:WCC_3_Actual_Line_Current,
+        bldg:WCC_3_Actual_Line_Voltage,
+        bldg:WCC_3_Average_Line_Current,
+        bldg:WCC_3_Average_Line_Voltage,
+        bldg:WCC_3_COMPSALM,
+        bldg:WCC_3_Calc_Evap_Sat_Temp,
+        bldg:WCC_3_Chilled_Water_Flow,
+        bldg:WCC_3_Chilled_Water_Pump,
+        bldg:WCC_3_Chilled_Water_Temp,
+        bldg:WCC_3_Chiller_Start_Stop,
+        bldg:WCC_3_Comp_Discharge_Temp,
+        bldg:WCC_3_Comp_Motor_Winding_Temp,
+        bldg:WCC_3_Comp_Thrust_Brg_Temp,
+        bldg:WCC_3_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_3_Compressor_Ontime,
+        bldg:WCC_3_Compressor_Start_Relay,
+        bldg:WCC_3_Condenser_Approach,
+        bldg:WCC_3_Condenser_Refrig_Temp,
+        bldg:WCC_3_Condenser_Water_Flow,
+        bldg:WCC_3_Condenser_Water_Pump,
+        bldg:WCC_3_Control_Mode,
+        bldg:WCC_3_Control_Point,
+        bldg:WCC_3_DAT,
+        bldg:WCC_3_DISCP,
+        bldg:WCC_3_DWT,
+        bldg:WCC_3_ECW_Setpoint,
+        bldg:WCC_3_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_3_Evaporator_Approach,
+        bldg:WCC_3_Guide_Vane_Delta,
+        bldg:WCC_3_LCW_Setpoint,
+        bldg:WCC_3_Line_Current_Phase_1,
+        bldg:WCC_3_Line_Current_Phase_2,
+        bldg:WCC_3_Line_Current_Phase_3,
+        bldg:WCC_3_Line_Voltage_Phase_1,
+        bldg:WCC_3_Line_Voltage_Phase_2,
+        bldg:WCC_3_Line_Voltage_Phase_3,
+        bldg:WCC_3_Motor_Percent_Kilowatts,
+        bldg:WCC_3_Oil_Heater_Relay,
+        bldg:WCC_3_Oil_Pump_Delta_P,
+        bldg:WCC_3_Oil_Pump_Relay,
+        bldg:WCC_3_Oil_Sump_Temp,
+        bldg:WCC_3_Remote_Start_Contact,
+        bldg:WCC_3_Run_Status,
+        bldg:WCC_3_SUAT,
+        bldg:WCC_3_SUP,
+        bldg:WCC_3_SUWT,
+        bldg:WCC_3_Start_Inhibit_Timer,
+        bldg:WCC_3_Starts_in_12_Hours,
+        bldg:WCC_3_Surge_Line_Delta_T,
+        bldg:WCC_3_TLHR,
+        bldg:WCC_3_TLKW,
+        bldg:WCC_3_TLKWH,
+        bldg:WCC_3_Target_Guide_Vane_Pos,
+        bldg:WCC_3_Total_Compressor_Starts .
+
+bldg:WCC_4 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_4" ;
+    brick:hasPoint bldg:WCC_4_AV_17,
+        bldg:WCC_4_Active_Delta_P,
+        bldg:WCC_4_Active_Delta_T,
+        bldg:WCC_4_Active_Demand_Limit,
+        bldg:WCC_4_Actual_Guide_Vane_Pos,
+        bldg:WCC_4_Actual_Line_Current,
+        bldg:WCC_4_Actual_Line_Voltage,
+        bldg:WCC_4_Average_Line_Current,
+        bldg:WCC_4_Average_Line_Voltage,
+        bldg:WCC_4_COMPSALM,
+        bldg:WCC_4_Calc_Evap_Sat_Temp,
+        bldg:WCC_4_Chilled_Water_Flow,
+        bldg:WCC_4_Chilled_Water_Pump,
+        bldg:WCC_4_Chilled_Water_Temp,
+        bldg:WCC_4_Chiller_Start_Stop,
+        bldg:WCC_4_Comp_Discharge_Temp,
+        bldg:WCC_4_Comp_Motor_Winding_Temp,
+        bldg:WCC_4_Comp_Thrust_Brg_Temp,
+        bldg:WCC_4_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_4_Compressor_Ontime,
+        bldg:WCC_4_Compressor_Start_Relay,
+        bldg:WCC_4_Condenser_Approach,
+        bldg:WCC_4_Condenser_Refrig_Temp,
+        bldg:WCC_4_Condenser_Water_Flow,
+        bldg:WCC_4_Condenser_Water_Pump,
+        bldg:WCC_4_Control_Mode,
+        bldg:WCC_4_Control_Point,
+        bldg:WCC_4_DAT,
+        bldg:WCC_4_DISCP,
+        bldg:WCC_4_DWT,
+        bldg:WCC_4_ECW_Setpoint,
+        bldg:WCC_4_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_4_Evaporator_Approach,
+        bldg:WCC_4_Guide_Vane_Delta,
+        bldg:WCC_4_LCW_Setpoint,
+        bldg:WCC_4_Line_Current_Phase_1,
+        bldg:WCC_4_Line_Current_Phase_2,
+        bldg:WCC_4_Line_Current_Phase_3,
+        bldg:WCC_4_Line_Voltage_Phase_1,
+        bldg:WCC_4_Line_Voltage_Phase_2,
+        bldg:WCC_4_Line_Voltage_Phase_3,
+        bldg:WCC_4_Motor_Percent_Kilowatts,
+        bldg:WCC_4_Oil_Heater_Relay,
+        bldg:WCC_4_Oil_Pump_Delta_P,
+        bldg:WCC_4_Oil_Pump_Relay,
+        bldg:WCC_4_Oil_Sump_Temp,
+        bldg:WCC_4_Remote_Start_Contact,
+        bldg:WCC_4_Run_Status,
+        bldg:WCC_4_SUAT,
+        bldg:WCC_4_SUP,
+        bldg:WCC_4_SUWT,
+        bldg:WCC_4_Start_Inhibit_Timer,
+        bldg:WCC_4_Starts_in_12_Hours,
+        bldg:WCC_4_Surge_Line_Delta_T,
+        bldg:WCC_4_TLHR,
+        bldg:WCC_4_TLKW,
+        bldg:WCC_4_TLKWH,
+        bldg:WCC_4_Target_Guide_Vane_Pos,
+        bldg:WCC_4_Total_Compressor_Starts .
+
+bldg:WCC_5 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_5" ;
+    brick:hasPoint bldg:WCC_5_AV_17,
+        bldg:WCC_5_Active_Delta_P,
+        bldg:WCC_5_Active_Delta_T,
+        bldg:WCC_5_Active_Demand_Limit,
+        bldg:WCC_5_Actual_Guide_Vane_Pos,
+        bldg:WCC_5_Actual_Line_Current,
+        bldg:WCC_5_Actual_Line_Voltage,
+        bldg:WCC_5_Average_Line_Current,
+        bldg:WCC_5_Average_Line_Voltage,
+        bldg:WCC_5_COMPSALM,
+        bldg:WCC_5_Calc_Evap_Sat_Temp,
+        bldg:WCC_5_Chilled_Water_Flow,
+        bldg:WCC_5_Chilled_Water_Pump,
+        bldg:WCC_5_Chilled_Water_Temp,
+        bldg:WCC_5_Chiller_Start_Stop,
+        bldg:WCC_5_Comp_Discharge_Temp,
+        bldg:WCC_5_Comp_Motor_Winding_Temp,
+        bldg:WCC_5_Comp_Thrust_Brg_Temp,
+        bldg:WCC_5_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_5_Compressor_Ontime,
+        bldg:WCC_5_Compressor_Start_Relay,
+        bldg:WCC_5_Condenser_Approach,
+        bldg:WCC_5_Condenser_Refrig_Temp,
+        bldg:WCC_5_Condenser_Water_Flow,
+        bldg:WCC_5_Condenser_Water_Pump,
+        bldg:WCC_5_Control_Mode,
+        bldg:WCC_5_Control_Point,
+        bldg:WCC_5_DAT,
+        bldg:WCC_5_DISCP,
+        bldg:WCC_5_DWT,
+        bldg:WCC_5_ECW_Setpoint,
+        bldg:WCC_5_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_5_Evaporator_Approach,
+        bldg:WCC_5_Guide_Vane_Delta,
+        bldg:WCC_5_LCW_Setpoint,
+        bldg:WCC_5_Line_Current_Phase_1,
+        bldg:WCC_5_Line_Current_Phase_2,
+        bldg:WCC_5_Line_Current_Phase_3,
+        bldg:WCC_5_Line_Voltage_Phase_1,
+        bldg:WCC_5_Line_Voltage_Phase_2,
+        bldg:WCC_5_Line_Voltage_Phase_3,
+        bldg:WCC_5_Motor_Percent_Kilowatts,
+        bldg:WCC_5_Oil_Heater_Relay,
+        bldg:WCC_5_Oil_Pump_Delta_P,
+        bldg:WCC_5_Oil_Pump_Relay,
+        bldg:WCC_5_Oil_Sump_Temp,
+        bldg:WCC_5_Remote_Start_Contact,
+        bldg:WCC_5_Run_Status,
+        bldg:WCC_5_SUAT,
+        bldg:WCC_5_SUP,
+        bldg:WCC_5_SUWT,
+        bldg:WCC_5_Start_Inhibit_Timer,
+        bldg:WCC_5_Starts_in_12_Hours,
+        bldg:WCC_5_Surge_Line_Delta_T,
+        bldg:WCC_5_TLHR,
+        bldg:WCC_5_TLKW,
+        bldg:WCC_5_TLKWH,
+        bldg:WCC_5_Target_Guide_Vane_Pos,
+        bldg:WCC_5_Total_Compressor_Starts .
+
+bldg:WCC_6 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_6" ;
+    brick:hasPoint bldg:WCC_6_AV_17,
+        bldg:WCC_6_Active_Delta_P,
+        bldg:WCC_6_Active_Delta_T,
+        bldg:WCC_6_Active_Demand_Limit,
+        bldg:WCC_6_Actual_Guide_Vane_Pos,
+        bldg:WCC_6_Actual_Line_Current,
+        bldg:WCC_6_Actual_Line_Voltage,
+        bldg:WCC_6_Average_Line_Current,
+        bldg:WCC_6_Average_Line_Voltage,
+        bldg:WCC_6_COMPSALM,
+        bldg:WCC_6_Calc_Evap_Sat_Temp,
+        bldg:WCC_6_Chilled_Water_Flow,
+        bldg:WCC_6_Chilled_Water_Pump,
+        bldg:WCC_6_Chilled_Water_Temp,
+        bldg:WCC_6_Chiller_Start_Stop,
+        bldg:WCC_6_Comp_Discharge_Temp,
+        bldg:WCC_6_Comp_Motor_Winding_Temp,
+        bldg:WCC_6_Comp_Thrust_Brg_Temp,
+        bldg:WCC_6_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_6_Compressor_Ontime,
+        bldg:WCC_6_Compressor_Start_Relay,
+        bldg:WCC_6_Condenser_Approach,
+        bldg:WCC_6_Condenser_Refrig_Temp,
+        bldg:WCC_6_Condenser_Water_Flow,
+        bldg:WCC_6_Condenser_Water_Pump,
+        bldg:WCC_6_Control_Mode,
+        bldg:WCC_6_Control_Point,
+        bldg:WCC_6_DAT,
+        bldg:WCC_6_DISCP,
+        bldg:WCC_6_DWT,
+        bldg:WCC_6_ECW_Setpoint,
+        bldg:WCC_6_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_6_Evaporator_Approach,
+        bldg:WCC_6_Guide_Vane_Delta,
+        bldg:WCC_6_LCW_Setpoint,
+        bldg:WCC_6_Line_Current_Phase_1,
+        bldg:WCC_6_Line_Current_Phase_2,
+        bldg:WCC_6_Line_Current_Phase_3,
+        bldg:WCC_6_Line_Voltage_Phase_1,
+        bldg:WCC_6_Line_Voltage_Phase_2,
+        bldg:WCC_6_Line_Voltage_Phase_3,
+        bldg:WCC_6_Motor_Percent_Kilowatts,
+        bldg:WCC_6_Oil_Heater_Relay,
+        bldg:WCC_6_Oil_Pump_Delta_P,
+        bldg:WCC_6_Oil_Pump_Relay,
+        bldg:WCC_6_Oil_Sump_Temp,
+        bldg:WCC_6_Remote_Start_Contact,
+        bldg:WCC_6_Run_Status,
+        bldg:WCC_6_SUAT,
+        bldg:WCC_6_SUP,
+        bldg:WCC_6_SUWT,
+        bldg:WCC_6_Start_Inhibit_Timer,
+        bldg:WCC_6_Starts_in_12_Hours,
+        bldg:WCC_6_Surge_Line_Delta_T,
+        bldg:WCC_6_TLHR,
+        bldg:WCC_6_TLKW,
+        bldg:WCC_6_TLKWH,
+        bldg:WCC_6_Target_Guide_Vane_Pos,
+        bldg:WCC_6_Total_Compressor_Starts .
+
+bldg:WCC_7 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_7" ;
+    brick:hasPoint bldg:WCC_7_AV_17,
+        bldg:WCC_7_Active_Delta_P,
+        bldg:WCC_7_Active_Delta_T,
+        bldg:WCC_7_Active_Demand_Limit,
+        bldg:WCC_7_Actual_Guide_Vane_Pos,
+        bldg:WCC_7_Actual_Line_Current,
+        bldg:WCC_7_Actual_Line_Voltage,
+        bldg:WCC_7_Average_Line_Current,
+        bldg:WCC_7_Average_Line_Voltage,
+        bldg:WCC_7_COMPSALM,
+        bldg:WCC_7_Calc_Evap_Sat_Temp,
+        bldg:WCC_7_Chilled_Water_Flow,
+        bldg:WCC_7_Chilled_Water_Pump,
+        bldg:WCC_7_Chilled_Water_Temp,
+        bldg:WCC_7_Chiller_Start_Stop,
+        bldg:WCC_7_Comp_Discharge_Temp,
+        bldg:WCC_7_Comp_Motor_Winding_Temp,
+        bldg:WCC_7_Comp_Thrust_Brg_Temp,
+        bldg:WCC_7_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_7_Compressor_Ontime,
+        bldg:WCC_7_Compressor_Start_Relay,
+        bldg:WCC_7_Condenser_Approach,
+        bldg:WCC_7_Condenser_Refrig_Temp,
+        bldg:WCC_7_Condenser_Water_Flow,
+        bldg:WCC_7_Condenser_Water_Pump,
+        bldg:WCC_7_Control_Mode,
+        bldg:WCC_7_Control_Point,
+        bldg:WCC_7_DAT,
+        bldg:WCC_7_DISCP,
+        bldg:WCC_7_DWT,
+        bldg:WCC_7_ECW_Setpoint,
+        bldg:WCC_7_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_7_Evaporator_Approach,
+        bldg:WCC_7_Guide_Vane_Delta,
+        bldg:WCC_7_LCW_Setpoint,
+        bldg:WCC_7_Line_Current_Phase_1,
+        bldg:WCC_7_Line_Current_Phase_2,
+        bldg:WCC_7_Line_Current_Phase_3,
+        bldg:WCC_7_Line_Voltage_Phase_1,
+        bldg:WCC_7_Line_Voltage_Phase_2,
+        bldg:WCC_7_Line_Voltage_Phase_3,
+        bldg:WCC_7_Motor_Percent_Kilowatts,
+        bldg:WCC_7_Oil_Heater_Relay,
+        bldg:WCC_7_Oil_Pump_Delta_P,
+        bldg:WCC_7_Oil_Pump_Relay,
+        bldg:WCC_7_Oil_Sump_Temp,
+        bldg:WCC_7_Remote_Start_Contact,
+        bldg:WCC_7_Run_Status,
+        bldg:WCC_7_SUAT,
+        bldg:WCC_7_SUP,
+        bldg:WCC_7_SUWT,
+        bldg:WCC_7_Start_Inhibit_Timer,
+        bldg:WCC_7_Starts_in_12_Hours,
+        bldg:WCC_7_Surge_Line_Delta_T,
+        bldg:WCC_7_TLHR,
+        bldg:WCC_7_TLKW,
+        bldg:WCC_7_TLKWH,
+        bldg:WCC_7_Target_Guide_Vane_Pos,
+        bldg:WCC_7_Total_Compressor_Starts .
+
+bldg:WCC_8 a brick:Water_Cooled_Chiller ;
+    rdfs:label "WCC_8" ;
+    brick:hasPoint bldg:WCC_8_AV_17,
+        bldg:WCC_8_Active_Delta_P,
+        bldg:WCC_8_Active_Delta_T,
+        bldg:WCC_8_Active_Demand_Limit,
+        bldg:WCC_8_Actual_Guide_Vane_Pos,
+        bldg:WCC_8_Actual_Line_Current,
+        bldg:WCC_8_Actual_Line_Voltage,
+        bldg:WCC_8_Average_Line_Current,
+        bldg:WCC_8_Average_Line_Voltage,
+        bldg:WCC_8_COMPSALM,
+        bldg:WCC_8_Calc_Evap_Sat_Temp,
+        bldg:WCC_8_Chilled_Water_Flow,
+        bldg:WCC_8_Chilled_Water_Pump,
+        bldg:WCC_8_Chilled_Water_Temp,
+        bldg:WCC_8_Chiller_Start_Stop,
+        bldg:WCC_8_Comp_Discharge_Temp,
+        bldg:WCC_8_Comp_Motor_Winding_Temp,
+        bldg:WCC_8_Comp_Thrust_Brg_Temp,
+        bldg:WCC_8_Comp_Thrust_Lvg_Oil_Temp,
+        bldg:WCC_8_Compressor_Ontime,
+        bldg:WCC_8_Compressor_Start_Relay,
+        bldg:WCC_8_Condenser_Approach,
+        bldg:WCC_8_Condenser_Refrig_Temp,
+        bldg:WCC_8_Condenser_Water_Flow,
+        bldg:WCC_8_Condenser_Water_Pump,
+        bldg:WCC_8_Control_Mode,
+        bldg:WCC_8_Control_Point,
+        bldg:WCC_8_DAT,
+        bldg:WCC_8_DISCP,
+        bldg:WCC_8_DWT,
+        bldg:WCC_8_ECW_Setpoint,
+        bldg:WCC_8_Evap_Refrig_Liquid_Temp,
+        bldg:WCC_8_Evaporator_Approach,
+        bldg:WCC_8_Guide_Vane_Delta,
+        bldg:WCC_8_LCW_Setpoint,
+        bldg:WCC_8_Line_Current_Phase_1,
+        bldg:WCC_8_Line_Current_Phase_2,
+        bldg:WCC_8_Line_Current_Phase_3,
+        bldg:WCC_8_Line_Voltage_Phase_1,
+        bldg:WCC_8_Line_Voltage_Phase_2,
+        bldg:WCC_8_Line_Voltage_Phase_3,
+        bldg:WCC_8_Motor_Percent_Kilowatts,
+        bldg:WCC_8_Oil_Heater_Relay,
+        bldg:WCC_8_Oil_Pump_Delta_P,
+        bldg:WCC_8_Oil_Pump_Relay,
+        bldg:WCC_8_Oil_Sump_Temp,
+        bldg:WCC_8_Remote_Start_Contact,
+        bldg:WCC_8_Run_Status,
+        bldg:WCC_8_SUAT,
+        bldg:WCC_8_SUP,
+        bldg:WCC_8_SUWT,
+        bldg:WCC_8_Start_Inhibit_Timer,
+        bldg:WCC_8_Starts_in_12_Hours,
+        bldg:WCC_8_Surge_Line_Delta_T,
+        bldg:WCC_8_TLHR,
+        bldg:WCC_8_TLKW,
+        bldg:WCC_8_TLKWH,
+        bldg:WCC_8_Target_Guide_Vane_Pos,
+        bldg:WCC_8_Total_Compressor_Starts .
+
