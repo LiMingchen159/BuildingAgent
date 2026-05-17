@@ -52,6 +52,8 @@ export interface SeedUser {
   name: string;
   email: string;
   password: string;
+  loginAliases?: string[];
+  passwordAliases?: string[];
 }
 
 export interface SeedProject {
@@ -161,6 +163,7 @@ export function createSeedStore(): SeedStore {
     { id: "project_beta", name: "Beta Build" },
     { id: "project_gamma", name: "Gamma Build" },
     { id: "project_mortar", name: "Mortar" },
+    { id: "project_element", name: "Element" },
     { id: "project_demo", name: "Demo Project" }
   ];
 
@@ -233,6 +236,13 @@ export function createSeedStore(): SeedStore {
       domain: "runtime",
       status: "not_configured",
       description: "Synthetic runtime health skill with no external observability backend."
+    },
+    {
+      id: "skill_element_bms_data",
+      name: "Element BMS Data Access",
+      domain: "building",
+      status: "mock",
+      description: "Live BACnet via enteliWEB :20800; local history via BMS-database GET /api/v1/timeseries (merged, no source param)."
     }
   ];
 
@@ -338,19 +348,31 @@ export function createSeedStore(): SeedStore {
   return {
     users: [
       { id: "user_ada", name: "Ada Lovelace", email: "ada@example.test", password: "local-dev-password" },
-      { id: "user_grace", name: "Grace Hopper", email: "grace@example.test", password: "local-dev-password" }
+      { id: "user_grace", name: "Grace Hopper", email: "grace@example.test", password: "local-dev-password" },
+      {
+        id: "user_buildinggpt",
+        name: "BuildingGPT测试",
+        email: "buildinggpt@test.com",
+        password: "buildinggpt123",
+        loginAliases: ["buildinggpt@test.local"],
+        passwordAliases: ["buildinggpt-test"]
+      }
     ],
     tokens: {
       "seed-token-ada": "user_ada",
-      "seed-token-grace": "user_grace"
+      "seed-token-grace": "user_grace",
+      "seed-token-buildinggpt": "user_buildinggpt"
     },
     projects,
     memberships: [
       { userId: "user_ada", projectId: "project_alpha", permissions: ["chat:read", "chat:write"] },
       { userId: "user_ada", projectId: "project_beta", permissions: ["chat:read", "chat:write"] },
       { userId: "user_ada", projectId: "project_mortar", permissions: ["chat:read", "chat:write"] },
+      { userId: "user_ada", projectId: "project_element", permissions: ["chat:read", "chat:write"] },
       { userId: "user_ada", projectId: "project_demo", permissions: ["chat:read", "chat:write"] },
-      { userId: "user_grace", projectId: "project_gamma", permissions: ["chat:read", "chat:write"] }
+      { userId: "user_grace", projectId: "project_gamma", permissions: ["chat:read", "chat:write"] },
+      { userId: "user_buildinggpt", projectId: "project_element", permissions: ["chat:read", "chat:write"] },
+      { userId: "user_buildinggpt", projectId: "project_mortar", permissions: ["chat:read", "chat:write"] }
     ],
     messagesByProject,
     conversationsByProject,
@@ -364,7 +386,7 @@ export function createSeedStore(): SeedStore {
     managementByProject,
     sessionsByToken: {},
     maxListSize: 50,
-    maxChatMessages: 25
+    maxChatMessages: 5000
   };
 }
 

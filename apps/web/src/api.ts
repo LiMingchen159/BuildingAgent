@@ -131,6 +131,7 @@ export interface StreamEventHandlers {
   onActivity?: (event: ChatStreamActivityEvent) => void;
   onToken?: (content: string) => void;
   onTokenReset?: () => void;
+  onConversationTitle?: (payload: { conversationId: string; title: string }) => void;
   onError?: (error: ApiErrorDetail) => void;
   onDone?: (response: SendChatResponse) => void;
 }
@@ -240,6 +241,17 @@ export async function sendChatMessageStream(
               case "token_reset":
                 handlers.onTokenReset?.();
                 break;
+              case "conversation_title":
+                if (
+                  typeof (parsed as Record<string, unknown>).conversationId === "string"
+                  && typeof (parsed as Record<string, unknown>).title === "string"
+                ) {
+                  handlers.onConversationTitle?.({
+                    conversationId: (parsed as { conversationId: string }).conversationId,
+                    title: (parsed as { title: string }).title
+                  });
+                }
+                break;
               case "error":
                 failed = true;
                 handlers.onError?.({
@@ -267,7 +279,7 @@ export async function sendChatMessageStream(
   if (!completed && !failed) {
     handlers.onError?.({
       code: "stream_incomplete",
-      message: "Chat stream ended before the assistant returned a final response."
+      message: "The connection closed before the assistant finished. Long think/tool runs can hit proxy timeouts — please retry; your question may already be saved."
     });
   }
 }

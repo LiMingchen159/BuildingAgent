@@ -5707,7 +5707,8 @@ p {
   background: transparent;
 }
 
-.activity-think-details p {
+.activity-think-details p,
+.activity-think-details .markdown.markdown-think {
   background: transparent;
   border-radius: 0;
   color: #9a9a9a;
@@ -5718,6 +5719,19 @@ p {
   padding: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.activity-think-details .markdown.markdown-think strong {
+  color: #8b8b8b;
+  font-weight: 600;
+}
+
+.activity-think-details .markdown.markdown-think p {
+  margin: 0 0 0.5rem;
+}
+
+.activity-think-details .markdown.markdown-think p:last-child {
+  margin-bottom: 0;
 }
 
 .activity-context-narration {

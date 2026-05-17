@@ -102,13 +102,12 @@ describe("project-scoped chat contract", () => {
       lifecycle: expect.arrayContaining([
         expect.objectContaining({ type: "user_message_received" }),
         expect.objectContaining({ type: "memory_recalled", metadata: { memoryCount: 0 } }),
-        expect.objectContaining({ type: "skills_applied", metadata: { skillCount: 3 } }),
+        expect.objectContaining({ type: "skills_applied", metadata: { skillCount: expect.any(Number) } }),
         expect.objectContaining({ type: "provider_started" }),
         expect.objectContaining({ type: "assistant_message_completed" })
       ]),
       requestId: expect.stringMatching(/^req_/)
     });
-    // calls[0] = chat, calls[1] = auto-title
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0]).toMatchObject({ projectId: "project_alpha", userId: "user_ada", requestId: expect.stringMatching(/^req_/) });
     expect(calls[0]?.messages).toEqual([
@@ -305,7 +304,6 @@ describe("project-scoped chat contract", () => {
         expect.objectContaining({ type: "memory_recalled", metadata: { memoryCount: 1 } })
       ])
     );
-    // calls.at(-2) = 2nd chat turn; calls.at(-1) = auto-title call
     const chatCalls = calls.filter((c) => c.messages.length > 1);
     const lastChatCall = chatCalls.at(-1);
     expect(lastChatCall?.messages[0]?.content).toContain("Alpha prefers concise weekly summaries");
@@ -932,14 +930,61 @@ describe("chat streaming endpoint", () => {
     ]));
   });
 
-  it("sends the final SSE done event before best-effort auto-title completion finishes", async () => {
-    const titleGate = deferredPromise<void>();
+  it("includes an instant conversation title in the SSE done event", async () => {
     const provider: ChatProvider = {
       metadata: { id: "stream-real", mode: "real", model: "stream-model", status: "configured" },
       async complete() {
-        await titleGate.promise;
         return {
-          text: "Best effort title",
+          text: "BLDG40 device list",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      },
+      async *completeStream() {
+        yield { content: "Final body" };
+      }
+    };
+    const app = buildServer({ chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Title should not block done" }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect(doneEvent).toBeDefined();
+    expect(doneEvent?.data).toMatchObject({
+      assistantMessage: expect.objectContaining({ content: "Final body" }),
+      conversationTitle: "Title should not block done"
+    });
+    expect(events.some((e) => e.event === "conversation_title")).toBe(true);
+  });
+
+  it("sends the final SSE done event before LLM title refinement finishes", async () => {
+    const titleGate = deferredPromise<void>();
+    const provider: ChatProvider = {
+      metadata: { id: "stream-real", mode: "real", model: "stream-model", status: "configured" },
+      async complete(input) {
+        const isTitleCall = input.messages.some(
+          (message) => message.role === "user"
+            && typeof message.content === "string"
+            && message.content.includes("Summarize this chat")
+        );
+        if (isTitleCall) {
+          await titleGate.promise;
+          return {
+            text: "LLM summary title",
+            provider: provider.metadata,
+            fallbackUsed: false
+          };
+        }
+        return {
+          text: "Final body",
           provider: provider.metadata,
           fallbackUsed: false
         };
@@ -955,7 +1000,7 @@ describe("chat streaming endpoint", () => {
       method: "POST",
       url: "/api/projects/project_alpha/chat/stream",
       headers: bearer(adaToken),
-      payload: { message: "Title should not block done" }
+      payload: { message: "List BLDG40 devices" }
     });
 
     const res = await resPromise;
@@ -963,7 +1008,7 @@ describe("chat streaming endpoint", () => {
     const events = parseSseEvents(res.body);
     expect(events.find((e) => e.event === "done")).toBeDefined();
     expect(events.find((e) => e.event === "done")?.data).toMatchObject({
-      assistantMessage: expect.objectContaining({ content: "Final body" })
+      conversationTitle: "List BLDG40 devices"
     });
 
     titleGate.resolve();

@@ -11,6 +11,8 @@ import type { AgentTool } from "./types.js";
 import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
 import { parseCancelCommand, parseListCommand, parseTimeExpression, nextCronTime } from "../scheduler.js";
 import type { ProcessRegistry } from "./processRegistry.js";
+import { augmentToolResultForEnvironment } from "./environmentSetup.js";
+import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_READ_BYTES = 200_000;
@@ -429,14 +431,43 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
       }
     },
 
+    {
+      name: "bms_live_read",
+      category: "utility",
+      description:
+        "Read current present-value from enteliWEB for Element chiller points (demo server has credentials pre-configured). Prefer this over curl for live BACnet values.",
+      schema: {
+        name: "bms_live_read",
+        description:
+          "Fetch live BACnet present-value via enteliWEB. Provide point_name (e.g. WCC_1_Chilled_Water_Temp), object_ref, or full api_path. Resolves api_path from local BMS catalog :8765 when needed.",
+        parameters: {
+          type: "object",
+          properties: {
+            point_name: { type: "string", description: "Point name in BMS-database catalog, e.g. WCC_1_Chilled_Water_Temp" },
+            object_ref: { type: "string", description: "BACnet object ref, e.g. //Elements/10101.AV5" },
+            api_path: { type: "string", description: "Full enteliWEB URL if already known" }
+          },
+          required: []
+        }
+      },
+      async run(args) {
+        const result = await fetchEnteliLiveValue({
+          pointName: textArg(args, "point_name"),
+          objectRef: textArg(args, "object_ref"),
+          apiPath: textArg(args, "api_path")
+        });
+        return { ...result };
+      }
+    },
+
     // --- Terminal / execute_code tool ---
     {
       name: "terminal",
       category: "utility",
-      description: "Execute a shell command. Use this to run Python scripts, SPARQL queries, shell commands, or any CLI tool. The working directory is the project Repository. KB files are READ-ONLY input data at $KB_DIR. Outputs MUST go to the absolute path $OUTPUT_DIR — use os.environ['OUTPUT_DIR'] in Python. NEVER write to ../kb/. When done, check markdownHint in the result for the exact Markdown image paths to use.",
+      description: "Execute a shell command for installs, Python scripts, SPARQL, and CLIs. If a command fails due to missing packages or binaries, install them here first (pip/npm/apt), verify, then retry — do not workaround. Working directory is the Repository; outputs go to $OUTPUT_DIR.",
       schema: {
         name: "terminal",
-        description: "Execute a shell command with a timeout. Use for Python scripts, SPARQL queries, shell commands, git operations, or any CLI tool. The working directory is the project Repository root. Outputs MUST go to the absolute path $OUTPUT_DIR (os.environ['OUTPUT_DIR'] in Python). NEVER use relative paths or ../kb/.",
+        description: "Execute a shell command with timeout. Use to install dependencies (e.g. pip install matplotlib seaborn pandas) and run scripts/CLIs. On missing-library errors, install and retry before answering. cwd=Repository; outputs in $OUTPUT_DIR.",
         parameters: {
           type: "object",
           properties: {
@@ -501,7 +532,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           }
         }
 
-        return {
+        return augmentToolResultForEnvironment({
           command,
           cwd: repoRoot,
           outputDir,
@@ -510,7 +541,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
           outputFiles,
           synced,
           generatedImages
-        };
+        }, `${result}\n${augmentedOutput}`);
       }
     },
 
@@ -518,10 +549,10 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
     {
       name: "execute_code",
       category: "utility",
-      description: "Execute Python code in a sandboxed subprocess. Writes code to a temp file, runs it with timeout, captures stdout/stderr. Use this instead of terminal for running Python snippets. Outputs MUST go to the absolute path os.environ['OUTPUT_DIR']. NEVER use relative paths or ../kb/. When done, check markdownHint for exact image paths.",
+      description: "Run Python for analysis and charts (matplotlib+seaborn, English labels only, no overlapping text). If import fails, pip install then retry. Outputs via os.environ['OUTPUT_DIR'].",
       schema: {
         name: "execute_code",
-        description: "Execute Python code in a subprocess. Use this for data analysis, computations, charts, and processing project files. The working directory is the project Repository root. Outputs MUST go to the absolute path os.environ['OUTPUT_DIR']. NEVER use relative paths or ../kb/. Reference generated files in Markdown as outputs/filename.png.",
+        description: "Execute Python for analysis/charts. Use matplotlib+seaborn; all on-chart text in English; legend outside plot area; tight_layout; save to os.environ['OUTPUT_DIR'] with bbox_inches='tight'. Reference as outputs/filename.png.",
         parameters: {
           type: "object",
           properties: {
@@ -588,7 +619,7 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
             }
           }
 
-          return {
+          return augmentToolResultForEnvironment({
             stdout: augmentedStdout,
             stderr: stderr.slice(0, TERMINAL_MAX_OUTPUT),
             repoRoot,
@@ -597,14 +628,15 @@ export function createGenericToolRegistry(memory: AgentMemoryStore, scheduler?: 
             outputFiles,
             synced,
             generatedImages
-          };
+          }, `${stdout}\n${stderr}`);
         } catch (error) {
-          return {
+          const failureText = stderr.slice(0, TERMINAL_MAX_OUTPUT) || (error instanceof Error ? error.message : "Execution failed");
+          return augmentToolResultForEnvironment({
             stdout: stdout.slice(0, TERMINAL_MAX_OUTPUT),
-            stderr: stderr.slice(0, TERMINAL_MAX_OUTPUT) || (error instanceof Error ? error.message : "Execution failed"),
+            stderr: failureText,
             error: error instanceof Error ? error.message : "Execution failed",
             outputDir
-          };
+          }, failureText);
         } finally {
           try { await unlink(tempPath); } catch { /* best effort cleanup */ }
         }

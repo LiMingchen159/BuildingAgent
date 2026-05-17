@@ -24,6 +24,7 @@ export interface ChatCompletionRequest {
   signal?: AbortSignal;
   tools?: ChatToolDefinition[];
   toolChoice?: "auto" | "none" | "required";
+  maxTokens?: number;
   stream?: boolean;
 }
 
@@ -438,6 +439,11 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools;
       body.tool_choice = request.toolChoice ?? "auto";
+    } else if (request.toolChoice === "none") {
+      body.tool_choice = "none";
+    }
+    if (typeof request.maxTokens === "number" && request.maxTokens > 0) {
+      body.max_tokens = request.maxTokens;
     }
     if (request.stream) {
       body.stream = true;
