@@ -1,4 +1,6 @@
-export type Permission = "chat:read" | "chat:write";
+import { seedSkillsByProject } from "./projectSkills.js";
+
+export type Permission = "chat:read" | "chat:write" | "project:configure";
 export type PlaceholderStatus = "placeholder" | "mock" | "not_configured";
 
 export interface PlaceholderRuntimeProvider {
@@ -79,6 +81,8 @@ export interface ChatMessageActivity {
   output?: string;
   durationMs?: number;
   exitCode?: number;
+  /** Epoch ms when the activity row was first emitted. */
+  at?: number;
 }
 
 export interface ChatMessageImage {
@@ -89,6 +93,11 @@ export interface ChatMessageImage {
   source?: string | undefined;
 }
 
+export interface ChatMessageDownload {
+  path: string;
+  filename: string;
+}
+
 export interface ChatMessage {
   id: string;
   projectId: string;
@@ -97,6 +106,7 @@ export interface ChatMessage {
   content: string;
   artifactId?: string | undefined;
   images?: ChatMessageImage[] | undefined;
+  downloads?: ChatMessageDownload[] | undefined;
   activities?: ChatMessageActivity[] | undefined;
   workDuration?: number | undefined;
 }
@@ -137,9 +147,16 @@ export interface SessionState {
   selectedProjectId: string | null;
 }
 
+export interface TokenMeta {
+  issuedAt: number;
+  expiresAt: number | null;
+}
+
 export interface SeedStore {
   users: SeedUser[];
   tokens: Record<string, string>;
+  /** Optional expiry metadata; seed tokens without an entry never expire. */
+  tokenMeta?: Record<string, TokenMeta>;
   projects: SeedProject[];
   memberships: SeedMembership[];
   messagesByProject: Record<string, ChatMessage[]>;
@@ -152,6 +169,18 @@ export interface SeedStore {
   gateways: PlaceholderGateway[];
   buildingCapabilities: PlaceholderCapability[];
   managementByProject: Record<string, ProjectManagementFixtures>;
+  /** Agent skill ids enabled per project (see projectSkills.ts). */
+  skillsByProject: Record<string, string[]>;
+  /** Site-specific grounding rules per project (see projectGrounding.ts). */
+  projectGroundingByProject?: Record<string, import("./projectGrounding.js").ProjectGroundingRule[]>;
+  /** Correction proposals per project (see projectFeedback.ts). */
+  feedbackProposalsByProject?: Record<string, import("./projectFeedback.js").FeedbackProposal[]>;
+  /** Committed playbooks per project (see projectFeedback.ts). */
+  projectPlaybooksByProject?: Record<string, import("./projectFeedback.js").ProjectPlaybook[]>;
+  /** Pending memory proposals per project (see projectMemoryProposals.ts). */
+  pendingMemoryProposalsByProject?: Record<string, import("./projectMemoryProposals.js").MemoryProposal[]>;
+  /** Draft feedback episodes keyed by conversation (see projectFeedback.ts). */
+  pendingFeedbackByConversation?: Record<string, import("./projectRules.js").FeedbackEpisode>;
   sessionsByToken: Record<string, SessionState>;
   maxListSize: number;
   maxChatMessages: number;
@@ -239,10 +268,10 @@ export function createSeedStore(): SeedStore {
     },
     {
       id: "skill_element_bms_data",
-      name: "Element BMS Data Access",
+      name: "Element BMS Data",
       domain: "building",
       status: "mock",
-      description: "Live BACnet via enteliWEB :20800; local history via BMS-database GET /api/v1/timeseries (merged, no source param)."
+      description: "bms_points_query / bms_timeseries_query / bms_live_read (≤3 live)."
     }
   ];
 
@@ -351,7 +380,7 @@ export function createSeedStore(): SeedStore {
       { id: "user_grace", name: "Grace Hopper", email: "grace@example.test", password: "local-dev-password" },
       {
         id: "user_buildinggpt",
-        name: "BuildingGPT测试",
+        name: "BuildingGPT",
         email: "buildinggpt@test.com",
         password: "buildinggpt123",
         loginAliases: ["buildinggpt@test.local"],
@@ -371,8 +400,16 @@ export function createSeedStore(): SeedStore {
       { userId: "user_ada", projectId: "project_element", permissions: ["chat:read", "chat:write"] },
       { userId: "user_ada", projectId: "project_demo", permissions: ["chat:read", "chat:write"] },
       { userId: "user_grace", projectId: "project_gamma", permissions: ["chat:read", "chat:write"] },
-      { userId: "user_buildinggpt", projectId: "project_element", permissions: ["chat:read", "chat:write"] },
-      { userId: "user_buildinggpt", projectId: "project_mortar", permissions: ["chat:read", "chat:write"] }
+      {
+        userId: "user_buildinggpt",
+        projectId: "project_element",
+        permissions: ["chat:read", "chat:write", "project:configure"]
+      },
+      {
+        userId: "user_buildinggpt",
+        projectId: "project_mortar",
+        permissions: ["chat:read", "chat:write", "project:configure"]
+      }
     ],
     messagesByProject,
     conversationsByProject,
@@ -384,6 +421,12 @@ export function createSeedStore(): SeedStore {
     gateways,
     buildingCapabilities,
     managementByProject,
+    skillsByProject: seedSkillsByProject(),
+    projectGroundingByProject: {},
+    feedbackProposalsByProject: {},
+    projectPlaybooksByProject: {},
+    pendingMemoryProposalsByProject: {},
+    pendingFeedbackByConversation: {},
     sessionsByToken: {},
     maxListSize: 50,
     maxChatMessages: 5000
@@ -394,6 +437,13 @@ export function cloneStore(store: SeedStore): SeedStore {
   return {
     users: store.users.map((user) => ({ ...user })),
     tokens: { ...store.tokens },
+    ...(store.tokenMeta
+      ? {
+          tokenMeta: Object.fromEntries(
+            Object.entries(store.tokenMeta).map(([token, meta]) => [token, { ...meta }])
+          )
+        }
+      : {}),
     projects: store.projects.map((project) => ({ ...project })),
     memberships: store.memberships.map((membership) => ({ ...membership, permissions: [...membership.permissions] })),
     messagesByProject: Object.fromEntries(
@@ -433,6 +483,34 @@ export function cloneStore(store: SeedStore): SeedStore {
           capabilities: management.capabilities.map((capability) => ({ ...capability })),
           tools: management.tools.map((tool) => ({ ...tool }))
         }
+      ])
+    ),
+    skillsByProject: Object.fromEntries(
+      Object.entries(store.skillsByProject ?? {}).map(([projectId, skillIds]) => [projectId, [...skillIds]])
+    ),
+    pendingFeedbackByConversation: { ...(store.pendingFeedbackByConversation ?? {}) },
+    projectGroundingByProject: Object.fromEntries(
+      Object.entries(store.projectGroundingByProject ?? {}).map(([projectId, rules]) => [
+        projectId,
+        rules.map((rule) => ({ ...rule }))
+      ])
+    ),
+    feedbackProposalsByProject: Object.fromEntries(
+      Object.entries(store.feedbackProposalsByProject ?? {}).map(([projectId, proposals]) => [
+        projectId,
+        proposals.map((proposal) => ({ ...proposal, triggerTopics: [...proposal.triggerTopics] }))
+      ])
+    ),
+    projectPlaybooksByProject: Object.fromEntries(
+      Object.entries(store.projectPlaybooksByProject ?? {}).map(([projectId, playbooks]) => [
+        projectId,
+        playbooks.map((playbook) => ({ ...playbook, triggerTopics: [...playbook.triggerTopics] }))
+      ])
+    ),
+    pendingMemoryProposalsByProject: Object.fromEntries(
+      Object.entries(store.pendingMemoryProposalsByProject ?? {}).map(([projectId, proposals]) => [
+        projectId,
+        proposals.map((proposal) => ({ ...proposal }))
       ])
     ),
     sessionsByToken: Object.fromEntries(

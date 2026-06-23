@@ -20,6 +20,7 @@ test -f apps/data/store.json && echo "OK apps/data/store.json" || echo "MISSING 
 test -d data && echo "OK data/" || echo "MISSING data/"
 test -d "Knowledge Base" && echo "OK Knowledge Base/" || echo "MISSING Knowledge Base/"
 
+python3 -m pip install --break-system-packages -r scripts/requirements-chart.txt
 npm run build
 pm2 restart buildingagent-api
 

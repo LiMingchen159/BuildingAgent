@@ -85,16 +85,148 @@ export async function indexKnowledgeBase(projectId: string, options: KnowledgeBa
   return entries;
 }
 
+/** Catalog index — route here before blind KB exploration when present. */
+export const KB_CATALOG_SUMMARY_NAME = "KB_CATALOG_SUMMARY.md";
+
+/** BMS ops guide — use after Summary routing for fetch/API questions. */
+export const KB_BMS_GUIDE_NAME = "bms_guide.md";
+
+const KB_PROMPT_PINNED = [KB_CATALOG_SUMMARY_NAME, KB_BMS_GUIDE_NAME] as const;
+
+function kbPromptRank(document: KnowledgeBaseDocument): number {
+  const base = path.basename(document.path);
+  const pinnedIndex = KB_PROMPT_PINNED.indexOf(base as (typeof KB_PROMPT_PINNED)[number]);
+  if (pinnedIndex >= 0) {
+    return pinnedIndex;
+  }
+  if (document.kind === "markdown" || document.kind === "turtle") {
+    return KB_PROMPT_PINNED.length;
+  }
+  if (document.kind === "data" || document.kind === "text") {
+    return KB_PROMPT_PINNED.length + 1;
+  }
+  return KB_PROMPT_PINNED.length + 2;
+}
+
+export function sortKnowledgeBaseForPrompt(documents: KnowledgeBaseDocument[]): KnowledgeBaseDocument[] {
+  return [...documents].sort((left, right) => {
+    const rankDiff = kbPromptRank(left) - kbPromptRank(right);
+    if (rankDiff !== 0) {
+      return rankDiff;
+    }
+    return left.path.localeCompare(right.path);
+  });
+}
+
+export function hasKbCatalogSummary(documents: KnowledgeBaseDocument[]): boolean {
+  return documents.some((document) => path.basename(document.path) === KB_CATALOG_SUMMARY_NAME);
+}
+
+export function kbCatalogRoutingBlock(documents: KnowledgeBaseDocument[]): string {
+  if (!hasKbCatalogSummary(documents)) {
+    return "";
+  }
+
+  const bmsGuide = documents.some((document) => path.basename(document.path) === KB_BMS_GUIDE_NAME);
+
+  return [
+    "KB ROUTING (catalog for naming/inventory — not for live values):",
+    `- This project has \`${KB_CATALOG_SUMMARY_NAME}\` — use \`read_file\` for point names, inventories, manuals, Brick types, and task routing (§1 overview, §5 routing).`,
+    "- **Values / trends / history / relative time** (yesterday, today, 昨天, 今天, metrics, show data) → call data tools first; do NOT `read_file` KB as a prefetch step.",
+    "- Point names, Brick types, equipment inventory, manuals → Summary §2 and related KB sections via `read_file`.",
+    "- Do NOT call data-query tools once per device to build inventories when Summary exists.",
+    "- Current/historical **numeric values** → use project data tools (timeseries, points, live read per Available skills); KB catalog is for naming only.",
+    bmsGuide
+      ? "- `bms_guide.md` is API/ops detail — read only if tools fail; do not read it before trying data tools."
+      : "- Use project data tools first; KB only to resolve point names or manuals.",
+    "- PDF manuals / drawings → Summary §4 to pick the folder and filename.",
+    "- Do not inject the full Summary into answers; read the sections you need via `read_file` offset/limit."
+  ].join("\n");
+}
+
+const KB_CATALOG_QUESTION_PATTERNS = [
+  /what points?/i,
+  /which points?/i,
+  /point list/i,
+  /point catalog/i,
+  /point names?/i,
+  /equipment inventory/i,
+  /brick type/i,
+  /有哪些/,
+  /有哪些点/,
+  /点位清单/,
+  /点名/,
+  /清单/,
+  /手册/,
+  /manual/i,
+  /catalog/i,
+  /inventory/i
+];
+
+/** Relative time / trends / metrics — data tools first, not KB prefetch. */
+const KB_DATA_QUERY_NEGATIVE_PATTERNS = [
+  /\byesterday\b/i,
+  /\btoday\b/i,
+  /\blast\s+(week|month|day|hour|24h|7\s*days?)\b/i,
+  /昨天/,
+  /今天/,
+  /昨日/,
+  /趋势/,
+  /\btrend/i,
+  /\bhistory\b/i,
+  /\bmetrics?\b/i,
+  /show\s+data/i,
+  /数据/,
+  /读数/,
+  /当前值/,
+  /历史/
+];
+
+export function shouldPrefetchKbCatalog(userMessage: string): boolean {
+  const trimmed = userMessage.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (KB_DATA_QUERY_NEGATIVE_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return false;
+  }
+  return KB_CATALOG_QUESTION_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+export function kbCatalogPrefetchHintBlock(
+  userMessage: string,
+  documents: KnowledgeBaseDocument[]
+): string {
+  if (!hasKbCatalogSummary(documents) || !shouldPrefetchKbCatalog(userMessage)) {
+    return "";
+  }
+
+  return [
+    "KB CATALOG HINT: The user is asking about point names, inventories, manuals, or equipment lists.",
+    `Read \`${KB_CATALOG_SUMMARY_NAME}\` via read_file (§1 overview, §2 for point tables, §5 task routing).`,
+    "Do not run data-query tools across all devices to assemble inventories — use Summary §2 instead.",
+    "If they also need current/historical **values**, call data tools directly; do not read KB first for numeric/trend questions."
+  ].join(" ");
+}
+
 export function knowledgeBasePrompt(documents: KnowledgeBaseDocument[], limit = 5): string {
   if (documents.length === 0 || limit <= 0) {
     return "Knowledge Base files: none discovered.";
   }
 
+  const ordered = sortKnowledgeBaseForPrompt(documents);
+
   return [
-    "Knowledge Base files discovered for this project:",
-    ...documents.slice(0, limit).map((document) => {
+    "Knowledge Base files discovered for this project (pinned catalog guides first):",
+    ...ordered.slice(0, limit).map((document) => {
       const excerpt = document.excerpt ? ` Excerpt: ${document.excerpt}` : "";
-      return `- ${document.path} (${document.kind}, ${document.sizeBytes} bytes).${excerpt}`;
+      const pin =
+        path.basename(document.path) === KB_CATALOG_SUMMARY_NAME
+          ? " [catalog index — read §1+§5 first]"
+          : path.basename(document.path) === KB_BMS_GUIDE_NAME
+            ? " [BMS ops — after Summary for fetch questions]"
+            : "";
+      return `- ${document.path} (${document.kind}, ${document.sizeBytes} bytes).${pin}${excerpt}`;
     })
   ].join("\n");
 }

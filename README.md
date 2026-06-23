@@ -15,6 +15,12 @@ Production auth and SSO are out of scope for this slice. There are no anonymous 
 
 Seeded bearer tokens exist only for local fixture behavior and should not be logged or reused for production auth.
 
+### API authentication for integrations
+
+Call `POST /api/login` once with email and password. The response includes a long-lived `token` (`tokenType: "Bearer"`, `expiresAt` or `null`). Reuse that token on every request via `Authorization: Bearer <token>`. Do not call `/api/login` before each API call.
+
+`GET /api/session` is optional for bootstrapping; bearer validation on protected routes is a read-only lookup and does not rewrite session state. Re-login does not clear the selected project. Set `BUILDING_AGENT_TOKEN_TTL_DAYS=0` for non-expiring newly issued `ba_*` tokens (default TTL is 90 days for new API tokens only; seeded `seed-token-*` values never expire).
+
 ### Install and run
 
 ```bash

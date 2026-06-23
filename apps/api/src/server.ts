@@ -6,12 +6,26 @@ import {
   requirePermission,
   requireProjectMembership,
   requireSelectedProject,
-  sendError
+  sendError,
+  writeSessionForToken
 } from "./auth.js";
-import { createSeedStore, type ChatMessage, type ChatMessageImage, type Conversation, type KnowledgeBaseDocument, type RepositoryArtifact, type SeedStore } from "./seed.js";
+import {
+  ensureTokenMeta,
+  getTokenTtlMs,
+  issueTokenForUser,
+  resolveUserIdForToken,
+  tokenExpiresAtIso
+} from "./authTokens.js";
+import { createSeedStore, type ChatMessage, type ChatMessageDownload, type ChatMessageImage, type Conversation, type KnowledgeBaseDocument, type RepositoryArtifact, type SeedStore } from "./seed.js";
+import {
+  finalizeAssistantDownloads,
+  sanitizeRepositoryDownloadMarkdown,
+  type RepositoryDownloadLink
+} from "./repositoryDownloadLinks.js";
 import {
   ProviderError,
   createDeterministicMockProvider,
+  formatProviderFailureMessage,
   redactedProviderError,
   resolveChatProvider,
   shouldAllowProviderFallback,
@@ -22,9 +36,31 @@ import {
 } from "./providers.js";
 import { createGenericToolRegistry } from "./agent/genericTools.js";
 import { AgentMemoryStore } from "./agent/memory.js";
+import { SessionSearchIndex } from "./sessionIndex.js";
 import { ProcessRegistry } from "./agent/processRegistry.js";
+import { createParallelToolActivityCoordinator } from "./agent/parallelToolActivity.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createGenericSkillRegistry } from "./agent/skills.js";
+import { createProjectSkillBindings, ensureStoreSkillsByProject, mergeSkillIdsForRegistry } from "./projectSkills.js";
+import {
+  createProjectGroundingBindings,
+  ensureStoreProjectGrounding,
+  restoreGroundingSequence
+} from "./projectGrounding.js";
+import {
+  captureFeedbackEpisode,
+  createProjectFeedbackBindings,
+  ensureStoreProjectFeedback,
+  restoreFeedbackSequence
+} from "./projectFeedback.js";
+import { createEmbeddingProvider } from "./embeddingProvider.js";
+import { GroundingRuleIndex } from "./groundingRuleIndex.js";
+import { hasConfigurePermission, platformBoundsPayload } from "./platformBounds.js";
+import {
+  createProjectMemoryProposalBindings,
+  ensureStoreMemoryProposals,
+  restoreMemoryProposalSequence
+} from "./projectMemoryProposals.js";
 import { countFiles, dataRoot, indexKnowledgeBase, indexRepository, kbRootForProject, repoRootForProject } from "./agent/knowledgeBase.js";
 import { loadStoreSync, saveStoreSync, scheduleSave } from "./persistence.js";
 import { SchedulerService, parseTimeExpression, parseRecurringExpression, parseCancelCommand, parseListCommand } from "./scheduler.js";
@@ -38,6 +74,7 @@ import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import { StructuredLogger, attachStructuredLogging } from "./agent/logger.js";
 import { randomUUID } from "node:crypto";
 import { BmsDatabaseBridge } from "./bmsDatabaseBridge.js";
+import { proxyBmsCollector } from "./bmsCollectorProxy.js";
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -269,6 +306,21 @@ interface ParsedPreviewData {
   warnings?: string[];
 }
 
+const DOWNLOAD_ATTACHMENT_EXTENSIONS = new Set([
+  ".csv",
+  ".md",
+  ".json",
+  ".txt",
+  ".pdf",
+  ".xlsx",
+  ".xls",
+  ".zip",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".tsv"
+]);
+
 const MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -342,6 +394,21 @@ function finalizeAssistantImages(
   return filterImagesReferencedInContent(dedupeChatImages(images), content);
 }
 
+function finalizeAssistantContent(
+  text: string,
+  images: ChatMessageImage[] | undefined,
+  downloads: RepositoryDownloadLink[] | undefined
+): { content: string; images?: ChatMessageImage[]; downloads?: ChatMessageDownload[] } {
+  const content = sanitizeRepositoryDownloadMarkdown(text);
+  const finalizedImages = finalizeAssistantImages(images, content);
+  const finalizedDownloads = finalizeAssistantDownloads(downloads, content);
+  return {
+    content,
+    ...(finalizedImages ? { images: finalizedImages } : {}),
+    ...(finalizedDownloads ? { downloads: finalizedDownloads } : {})
+  };
+}
+
 function stripProviderThinkingMarkup(content: string): string {
   return content
     .replace(/<(think|redacted_thinking)>[\s\S]*?<\/(think|redacted_thinking)>/gi, "")
@@ -409,7 +476,7 @@ async function refineConversationTitleWithLlm(params: {
       messages: [
         {
           role: "user",
-          content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text. Do not include thinking tags or markdown.\n\nUser: ${params.userText}\nAssistant: ${assistantForPrompt}`
+          content: `Summarize this chat in 5 words or fewer. Reply ONLY with the summary, no other text. Do not include thinking tags or markdown. Use the same language as the User message (e.g. Hong Kong Cantonese if they wrote in Cantonese).\n\nUser: ${params.userText}\nAssistant: ${assistantForPrompt}`
         }
       ],
       projectId: params.projectId,
@@ -573,10 +640,50 @@ function restoreSequences(store: SeedStore): void {
     for (const c of conversations) {
       const match = /^conv_(\d+)$/.exec(c.id);
       if (match) maxConv = Math.max(maxConv, Number(match[1]!));
+      for (const messageId of c.messageIds) {
+        const msgMatch = /^msg_(\d+)$/.exec(messageId);
+        if (msgMatch) maxMsg = Math.max(maxMsg, Number(msgMatch[1]!));
+      }
     }
   }
   messageSequence = maxMsg;
   conversationSequence = maxConv;
+}
+
+/** Re-insert message rows missing from store.json but still present in the session SQLite index. */
+function repairMissingConversationMessages(
+  store: SeedStore,
+  projectId: string,
+  conversation: Conversation,
+  sessionIndex: SessionSearchIndex,
+  defaultUserId: string
+): boolean {
+  const pool = store.messagesByProject[projectId] ?? [];
+  const byId = new Map(pool.map((message) => [message.id, message]));
+  const repaired: ChatMessage[] = [];
+
+  for (const messageId of conversation.messageIds) {
+    if (byId.has(messageId)) continue;
+    const recovered = sessionIndex.getMessageById(messageId);
+    if (!recovered || recovered.conversationId !== conversation.id) continue;
+    const message: ChatMessage = {
+      id: messageId,
+      projectId,
+      userId: defaultUserId,
+      role: recovered.role,
+      content: recovered.content
+    };
+    pool.push(message);
+    byId.set(messageId, message);
+    repaired.push(message);
+  }
+
+  if (repaired.length === 0) {
+    return false;
+  }
+
+  store.messagesByProject[projectId] = pool;
+  return true;
 }
 
 function bounded<T>(items: T[], limit: number): T[] {
@@ -1063,6 +1170,13 @@ async function proxyBms(
 
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? (options.persist ? (loadStoreSync() ?? createSeedStore()) : createSeedStore());
+  ensureStoreSkillsByProject(store);
+  ensureStoreProjectGrounding(store);
+  restoreGroundingSequence(store);
+  ensureStoreProjectFeedback(store);
+  restoreFeedbackSequence(store);
+  ensureStoreMemoryProposals(store);
+  restoreMemoryProposalSequence(store);
   const persistStore = options.persist === true;
   const persistSoon = (): void => {
     if (persistStore) {
@@ -1089,7 +1203,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const fetchProxy = options.fetch ?? fetch;
   const memory = new AgentMemoryStore(dataRoot(env));
   memory.start();
+  const sessionIndex = new SessionSearchIndex(dataRoot(env));
+  sessionIndex.rebuildFromStore(store);
+  const embeddingProvider = createEmbeddingProvider(env, fetchProxy);
+  const groundingRuleIndex = new GroundingRuleIndex(dataRoot(env), embeddingProvider);
+  groundingRuleIndex.rebuildFromStore(store);
   const skills = createGenericSkillRegistry();
+  const projectSkillBindings = createProjectSkillBindings(store, persistSoon);
+  const projectGroundingBindings = createProjectGroundingBindings(store, persistSoon, {
+    onRuleSaved: (rule) => groundingRuleIndex.upsertRule(rule)
+  });
+  const projectFeedbackBindings = createProjectFeedbackBindings(store, projectGroundingBindings, persistSoon);
+  const projectMemoryProposalBindings = createProjectMemoryProposalBindings(store, persistSoon);
 
   // Structured JSON logging with file rotation (before scheduler so callbacks can use it)
   const logDir = dataRoot(env);
@@ -1201,9 +1326,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   };
 
   const processRegistry = new ProcessRegistry();
-  const tools = createGenericToolRegistry(memory, scheduler, processRegistry, skills);
+  const tools = createGenericToolRegistry(
+    memory,
+    scheduler,
+    processRegistry,
+    skills,
+    projectSkillBindings,
+    projectGroundingBindings,
+    projectFeedbackBindings,
+    sessionIndex,
+    projectMemoryProposalBindings
+  );
   tools.enableLogging(dataRoot(env));
-  const agentRuntime = new AgentRuntime({ memory, tools, skills });
+  const agentRuntime = new AgentRuntime({
+    memory,
+    tools,
+    skills,
+    resolveProjectSkillIds: (projectId) => projectSkillBindings.getSkillIds(projectId),
+    projectGrounding: projectGroundingBindings,
+    projectFeedback: projectFeedbackBindings,
+    groundingRuleIndex,
+    onCaptureFeedback: (input) => {
+      const episodeInput = {
+        projectId: input.projectId,
+        conversationId: input.conversationId,
+        messages: input.messages,
+        userCorrection: input.userCorrection
+      };
+      if (input.errorType) {
+        return captureFeedbackEpisode(store, { ...episodeInput, errorType: input.errorType }, persistSoon);
+      }
+      return captureFeedbackEpisode(store, episodeInput, persistSoon);
+    }
+  });
 
   const app = Fastify({
     logger: {
@@ -1270,6 +1425,26 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const proxied = await proxyBms(env, fetchProxy, "/health", { method: "GET" });
     return reply.status(proxied.statusCode).send(proxied.payload);
   });
+
+  const forwardBmsCollector = async (request: { url: string; method: string }, reply: FastifyReply) => {
+    const session = authenticateRequest(request as Parameters<typeof authenticateRequest>[0], reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+    const parsed = new URL(request.url, "http://buildingagent.local");
+    const prefix = "/api/bms/collector";
+    const pathname = parsed.pathname.startsWith(prefix)
+      ? parsed.pathname.slice(prefix.length) || "/"
+      : "/";
+    const proxied = await proxyBmsCollector(env, fetchProxy, pathname, parsed.search, { method: request.method });
+    if (proxied.contentType) {
+      reply.header("content-type", proxied.contentType);
+    }
+    return reply.status(proxied.statusCode).send(proxied.payload);
+  };
+
+  app.get("/api/bms/collector/*", forwardBmsCollector);
+  app.get("/api/bms/collector", async (request, reply) => forwardBmsCollector({ url: "/api/bms/collector/health", method: "GET" }, reply));
 
   app.post<{ Body: BmsTempUploadPayload }>("/api/bms/temp-upload", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
@@ -1629,16 +1804,24 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return sendError(request, reply, 401, "auth_invalid", "Invalid email or password.");
     }
 
-    const token = Object.entries(store.tokens).find(([, userId]) => userId === user.id)?.[0];
-    if (!token) {
-      return sendError(request, reply, 401, "auth_invalid", "Invalid credentials.");
+    const token = issueTokenForUser(store, user.id);
+    const ttlMs = getTokenTtlMs(env);
+    let shouldPersist = false;
+    if (token.startsWith("ba_") && ttlMs !== null && ensureTokenMeta(store, token, ttlMs)) {
+      shouldPersist = true;
     }
-
-    store.sessionsByToken[token] = { userId: user.id, selectedProjectId: null };
-    persistSoon();
+    if (!store.sessionsByToken[token]) {
+      writeSessionForToken(store, token, { userId: user.id, selectedProjectId: null });
+      shouldPersist = true;
+    }
+    if (shouldPersist) {
+      persistSoon();
+    }
 
     return {
       token,
+      tokenType: "Bearer",
+      expiresAt: tokenExpiresAtIso(store, token),
       user: { id: user.id, name: user.name },
       requestId: requestIdFor(request)
     };
@@ -1695,9 +1878,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     store.knowledgeBaseByProject[projectId] = [];
     store.repositoryByProject[projectId] = [];
     store.managementByProject[projectId] = { gateways: [], capabilities: [], tools: [] };
+    projectSkillBindings.initProject(projectId);
 
     const selectedSession = { userId: session.userId, selectedProjectId: projectId };
-    store.sessionsByToken[session.token] = selectedSession;
+    writeSessionForToken(store, session.token, selectedSession);
     persistSoon();
 
     return reply.status(201).send({
@@ -1717,6 +1901,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return session;
     }
 
+    const registryProjectIds = session.projectId
+      ? [session.projectId]
+      : store.memberships.filter((membership) => membership.userId === session.userId).map((membership) => membership.projectId);
+    const activeSkillIds = mergeSkillIdsForRegistry(registryProjectIds, projectSkillBindings);
+    const activeAgentSkills = skills.listForProject(activeSkillIds);
+
     return {
       runtimeProviders: boundedPlaceholderList(store.runtimeProviders, store),
       tools: boundedPlaceholderList(
@@ -1734,8 +1924,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       ),
       skills: boundedPlaceholderList(
         [
-          ...store.skills,
-          ...skills.list().map((skill) => ({
+          ...store.skills.filter((skill) => activeSkillIds.includes(skill.id)),
+          ...activeAgentSkills.map((skill) => ({
             id: skill.id,
             name: skill.name,
             domain: skill.domain,
@@ -1806,7 +1996,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       userId: session.userId,
       selectedProjectId: request.params.projectId
     };
-    store.sessionsByToken[session.token] = selectedSession;
+    writeSessionForToken(store, session.token, selectedSession);
     persistSoon();
 
     return {
@@ -1815,6 +2005,206 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         projectId: request.params.projectId,
         permissions: getPermissionsForSelectedProject(store, selectedSession)
       },
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/bounds", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) {
+      return membership;
+    }
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) {
+      return selected;
+    }
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) {
+      return readable;
+    }
+
+    const canConfigure = hasConfigurePermission(store, session.userId, request.params.projectId);
+    return platformBoundsPayload(canConfigure);
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/memory/user", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const bank = memory.readProjectUserBank(request.params.projectId, session.userId);
+    return {
+      projectId: request.params.projectId,
+      scope: "project",
+      entries: bank.entries,
+      usage: bank.usage,
+      charLimit: bank.charLimit,
+      mutable: true,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.patch<{ Params: ProjectParams; Body: { entries?: unknown } }>("/api/projects/:projectId/memory/user", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const writable = requirePermission(request, reply, membership, "chat:write");
+    if (isReply(writable)) return writable;
+
+    const entries = Array.isArray(request.body?.entries)
+      ? request.body.entries.filter((entry): entry is string => typeof entry === "string")
+      : null;
+    if (!entries) {
+      return sendError(request, reply, 422, "memory_invalid", "Body must include entries: string[].");
+    }
+    const result = memory.setEntries(request.params.projectId, session.userId, "user", entries);
+    if (!result.success) {
+      return sendError(request, reply, 422, "memory_update_failed", result.error ?? "Failed to update user memory.");
+    }
+    return {
+      projectId: request.params.projectId,
+      scope: "project",
+      entries: result.entries ?? [],
+      usage: result.usage,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/memory/project", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const canConfigure = hasConfigurePermission(store, session.userId, request.params.projectId);
+    const bank = memory.readBank(request.params.projectId, session.userId, "project");
+    return {
+      projectId: request.params.projectId,
+      scope: "project",
+      entries: bank.entries,
+      usage: bank.usage,
+      charLimit: bank.charLimit,
+      mutable: canConfigure,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.patch<{ Params: ProjectParams; Body: { entries?: unknown } }>("/api/projects/:projectId/memory/project", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    if (!hasConfigurePermission(store, session.userId, request.params.projectId)) {
+      return sendError(request, reply, 403, "bounds_violation", "Project memory bank writes require project:configure.");
+    }
+
+    const entries = Array.isArray(request.body?.entries)
+      ? request.body.entries.filter((entry): entry is string => typeof entry === "string")
+      : null;
+    if (!entries) {
+      return sendError(request, reply, 422, "memory_invalid", "Body must include entries: string[].");
+    }
+    const result = memory.setEntries(request.params.projectId, session.userId, "project", entries);
+    if (!result.success) {
+      return sendError(request, reply, 422, "memory_update_failed", result.error ?? "Failed to update project memory.");
+    }
+    return {
+      projectId: request.params.projectId,
+      scope: "project",
+      entries: result.entries ?? [],
+      usage: result.usage,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/memory/global", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const bank = memory.readGlobalUserBank(session.userId);
+    return {
+      scope: "global",
+      entries: bank.entries,
+      usage: bank.usage,
+      charLimit: bank.charLimit,
+      mutable: true,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.patch<{ Params: ProjectParams; Body: { entries?: unknown } }>("/api/projects/:projectId/memory/global", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const writable = requirePermission(request, reply, membership, "chat:write");
+    if (isReply(writable)) return writable;
+
+    const entries = Array.isArray(request.body?.entries)
+      ? request.body.entries.filter((entry): entry is string => typeof entry === "string")
+      : null;
+    if (!entries) {
+      return sendError(request, reply, 422, "memory_invalid", "Body must include entries: string[].");
+    }
+    const result = memory.setGlobalUserEntries(session.userId, entries);
+    if (!result.success) {
+      return sendError(request, reply, 422, "memory_update_failed", result.error ?? "Failed to update global user memory.");
+    }
+    return {
+      scope: "global",
+      entries: result.entries ?? [],
+      usage: result.usage,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/memory/rules", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const projectId = request.params.projectId;
+    return {
+      projectId,
+      grounding: projectGroundingBindings.list(projectId),
+      playbooks: projectFeedbackBindings.listPlaybooks(projectId),
+      pendingMemoryProposals: projectMemoryProposalBindings
+        .list(projectId, session.userId)
+        .filter((proposal) => proposal.status === "proposed"),
       requestId: requestIdFor(request)
     };
   });
@@ -1840,7 +2230,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return readable;
     }
 
-    const allMessages = store.messagesByProject[request.params.projectId] ?? [];
+    let allMessages = store.messagesByProject[request.params.projectId] ?? [];
     const conversationId = typeof request.query?.conversationId === "string" ? request.query.conversationId : undefined;
     let messages = allMessages;
     let activeConversationId: string | null = null;
@@ -1848,16 +2238,22 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (conversationId) {
       const conversation = (store.conversationsByProject[request.params.projectId] ?? []).find((c) => c.id === conversationId);
       if (conversation) {
-        const idSet = new Set(conversation.messageIds);
-        messages = allMessages.filter((m) => idSet.has(m.id));
+        if (repairMissingConversationMessages(store, request.params.projectId, conversation, sessionIndex, session.userId)) {
+          persistSoon();
+          allMessages = store.messagesByProject[request.params.projectId] ?? [];
+        }
+        messages = orderedConversationMessages(allMessages, conversation);
         activeConversationId = conversation.id;
       }
     } else {
       const conversations = store.conversationsByProject[request.params.projectId] ?? [];
       const lastConv = conversations.length > 0 ? conversations[conversations.length - 1] : undefined;
       if (lastConv) {
-        const idSet = new Set(lastConv.messageIds);
-        messages = allMessages.filter((m) => idSet.has(m.id));
+        if (repairMissingConversationMessages(store, request.params.projectId, lastConv, sessionIndex, session.userId)) {
+          persistSoon();
+          allMessages = store.messagesByProject[request.params.projectId] ?? [];
+        }
+        messages = orderedConversationMessages(allMessages, lastConv);
         activeConversationId = lastConv.id;
       }
     }
@@ -2027,6 +2423,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const data = await readFile(absolutePath);
       const ext = path.extname(absolutePath).toLowerCase();
       const mime = MIME_TYPES[ext] ?? "application/octet-stream";
+      const filename = path.basename(absolutePath);
+      if (DOWNLOAD_ATTACHMENT_EXTENSIONS.has(ext)) {
+        return reply
+          .header("Content-Type", mime)
+          .header("Content-Disposition", `attachment; filename="${filename}"`)
+          .header("Cache-Control", "public, max-age=3600")
+          .send(data);
+      }
       return reply.header("Content-Type", mime).header("Cache-Control", "public, max-age=3600").send(data);
     } catch {
       return sendError(request, reply, 500, "repo_read_error", "Failed to read file.");
@@ -2095,6 +2499,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     trimProjectMessages(store, projectId, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
     tryInstantConversationTitle({ conversation, userText: content });
+    sessionIndex.upsertMessage(message, conversationId, {
+      title: conversation.title,
+      messageCount: conversation.messageIds.length
+    });
     persistNow();
 
     // Pre-process time expressions (reminders) before agent turn
@@ -2202,6 +2610,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         userId: session.userId,
         requestId: requestIdFor(request),
         conversationId,
+        canConfigure: hasConfigurePermission(store, session.userId, projectId),
         messages: agentInputs.conversationMessages,
         providerMessages: agentInputs.providerMessages,
         provider,
@@ -2212,7 +2621,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       if (!allowProviderFallback) {
         messages.pop();
         conversation.messageIds.pop();
-        return sendError(request, reply, 502, "provider_error", "Chat provider failed before producing a safe response.");
+        return sendError(request, reply, 502, "provider_error", formatProviderFailureMessage(error));
       }
 
       request.log.warn(
@@ -2220,13 +2629,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         "Chat provider failed; using deterministic fallback"
       );
       const fallbackProvider = createDeterministicMockProvider(
-        providerErrorCode(error)
+        providerErrorCode(error),
+        error
       );
       agentTurn = await agentRuntime.runTurn({
         projectId,
         userId: session.userId,
         requestId: requestIdFor(request),
         conversationId,
+        canConfigure: hasConfigurePermission(store, session.userId, projectId),
         messages: agentInputs.conversationMessages,
         providerMessages: agentInputs.providerMessages,
         provider: fallbackProvider,
@@ -2236,19 +2647,28 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     const assistantText = stripProviderThinkingMarkup(agentTurn.completion.text);
-    const syncedAssistantImages = finalizeAssistantImages(agentTurn.generatedImages, assistantText);
+    const finalizedAssistant = finalizeAssistantContent(
+      assistantText,
+      agentTurn.generatedImages,
+      agentTurn.generatedDownloads
+    );
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: assistantText,
-      ...(syncedAssistantImages ? { images: syncedAssistantImages } : {})
+      content: finalizedAssistant.content,
+      ...(finalizedAssistant.images ? { images: finalizedAssistant.images } : {}),
+      ...(finalizedAssistant.downloads ? { downloads: finalizedAssistant.downloads } : {})
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);
     trimProjectMessages(store, projectId, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
+    sessionIndex.upsertMessage(assistantMessage, conversationId, {
+      title: conversation.title,
+      messageCount: conversation.messageIds.length
+    });
 
     persistSoon();
 
@@ -2353,6 +2773,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       messages.push(userMessage);
       conversation.messageIds.push(userMessage.id);
       store.messagesByProject[projectId] = messages;
+      sessionIndex.upsertMessage(userMessage, conversationId, {
+        title: conversation.title,
+        messageCount: conversation.messageIds.length
+      });
       persistNow();
     }
 
@@ -2366,7 +2790,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
 
     const sseWrite = (event: string, data: unknown): void => {
+      if (
+        event === "narration_token"
+        || event === "final_answer_start"
+        || event === "answer_token"
+        || event === "final_answer_end"
+      ) {
+        const contentPreview = typeof (data as { content?: unknown })?.content === "string"
+          ? (data as { content: string }).content.slice(0, 30)
+          : undefined;
+        request.log.info({ requestId: reqId, sseEvent: event, contentPreview }, "[SSE] event");
+      }
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      const raw = reply.raw as NodeJS.WritableStream & { flush?: () => void };
+      raw.flush?.();
     };
 
     tryInstantConversationTitle({
@@ -2480,7 +2917,22 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     let finalProviderDiagnostics: ReturnType<typeof providerDiagnostics> | null = null;
     let streamError: string | null = null;
     let streamGeneratedImages: ChatMessageImage[] = [];
+    let streamGeneratedDownloads: ChatMessageDownload[] = [];
     const turnStartedAt = Date.now();
+    let workElapsedMs = 0;
+    let workSegmentStartedAt: number | null = turnStartedAt;
+    const pauseWorkTimeline = (): void => {
+      const now = Date.now();
+      if (workSegmentStartedAt != null) {
+        workElapsedMs += Math.max(0, now - workSegmentStartedAt);
+        workSegmentStartedAt = null;
+      }
+    };
+    const resumeWorkTimeline = (): void => {
+      if (workSegmentStartedAt == null) {
+        workSegmentStartedAt = Date.now();
+      }
+    };
     const capturedActivities: import("./seed.js").ChatMessageActivity[] = [];
     const captureActivity = (payload: Record<string, unknown>): import("./seed.js").ChatMessageActivity | null => {
       if (typeof payload.label !== "string" || typeof payload.kind !== "string") return null;
@@ -2497,7 +2949,22 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       if (typeof payload.output === "string") act.output = payload.output;
       if (typeof payload.durationMs === "number") act.durationMs = payload.durationMs;
       if (typeof payload.exitCode === "number") act.exitCode = payload.exitCode;
+      if (typeof payload.at === "number") act.at = payload.at;
       return act;
+    };
+    const storeCapturedActivity = (captured: import("./seed.js").ChatMessageActivity): void => {
+      if (captured.id) {
+        const existingIndex = capturedActivities.findIndex((a) => a.id === captured.id);
+        if (existingIndex >= 0) {
+          const previous = capturedActivities[existingIndex]!;
+          if (previous.at != null) {
+            captured.at = previous.at;
+          }
+          capturedActivities[existingIndex] = captured;
+          return;
+        }
+      }
+      capturedActivities.push(captured);
     };
 
     const agentInputs = await buildAgentTurnInputs({
@@ -2515,7 +2982,33 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         const trimmed = value.replace(/[A-Za-z0-9_./\\-]*(?:api[_-]?key|token|secret|password)[A-Za-z0-9_./\\-]*/gi, "[redacted]").trim();
         return trimmed ? trimmed.slice(0, 180) : undefined;
       };
-      const toolLabelFor = (toolName: string, state: "running" | "done"): string => {
+      const groundingToolLabel = (state: "running" | "done", metadata?: Record<string, unknown>): string => {
+        if (state === "running") {
+          return "Retrieving site rules";
+        }
+        const count = metadata?.retrievedGroundingCount;
+        const names = metadata?.retrievedRuleNames;
+        if (typeof count === "number" && count > 0) {
+          if (Array.isArray(names)) {
+            const listed = names.filter((name): name is string => typeof name === "string").slice(0, 3);
+            if (listed.length > 0) {
+              const joined = listed.join(", ");
+              return count === 1
+                ? `Retrieved site rule: ${joined}`
+                : `Retrieved site rules (${count}): ${joined}${names.length > 3 ? ", …" : ""}`;
+            }
+          }
+          return `Retrieved site rules (${count})`;
+        }
+        return "No matching site rules";
+      };
+      const toolLabelFor = (toolName: string, state: "running" | "done", metadata?: Record<string, unknown>): string => {
+        if (state === "done" && typeof metadata?.exitCode === "number" && metadata.exitCode !== 0) {
+          return "Tool failed";
+        }
+        if (toolName === "project_grounding") {
+          return groundingToolLabel(state, metadata);
+        }
         const lower = toolName.toLowerCase();
         if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
         if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";
@@ -2525,42 +3018,33 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
       const emitActivity = (payload: Record<string, unknown>): void => {
         activitySequence += 1;
-        const enriched = { id: `act_${reqId}_${activitySequence}`, requestId: reqId, ...payload };
+        const enriched = { requestId: reqId, at: Date.now(), id: `act_${reqId}_${activitySequence}`, ...payload };
         sseWrite("activity", enriched);
         const captured = captureActivity(enriched);
         if (!captured) return;
-        // Replace by id so paired tool started/completed events collapse to one row in history.
-        if (captured.id) {
-          const existingIndex = capturedActivities.findIndex((a) => a.id === captured.id);
-          if (existingIndex >= 0) {
-            capturedActivities[existingIndex] = captured;
-            return;
-          }
-        }
-        capturedActivities.push(captured);
+        storeCapturedActivity(captured);
       };
-      // Thinking tokens for the current iteration are streamed live to the client
-      // as `token` events. If the iteration ends up calling tools, the same text
-      // was interim narration, not the final answer — we then move it to a
-      // context activity and send `token_reset` so the client drops it from the
-      // streamed answer body. If the iteration ends without tool calls, the
-      // buffered text IS the final answer and stays in the answer body.
-      let pendingThinking = "";
-      const promotePendingToActivity = (): void => {
-        const trimmed = pendingThinking.trim();
-        pendingThinking = "";
-        if (!trimmed) return;
+      const parallelToolActivity = createParallelToolActivityCoordinator();
+      // Runtime emits work_token / answer_start / answer_token / answer_end with explicit
+      // answer-phase gating. Server maps work → narration_token, answer → final-answer.
+      let pendingWork = "";
+      let answerPhaseStarted = false;
+      const promotePendingWorkToActivity = (): void => {
+        const trimmed = pendingWork.trim();
+        pendingWork = "";
+        if (!trimmed || answerPhaseStarted) return;
         emitActivity({
           label: trimmed.slice(0, 600),
           kind: "context"
         });
-        sseWrite("token_reset", { requestId: reqId });
+        sseWrite("narration_reset", { requestId: reqId });
       };
       const primaryStream = agentRuntime.runTurnStream({
         projectId,
         userId: session.userId,
         requestId: reqId,
         conversationId,
+        canConfigure: hasConfigurePermission(store, session.userId, projectId),
         messages: agentInputs.conversationMessages,
         providerMessages: agentInputs.providerMessages,
         provider,
@@ -2570,9 +3054,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       let primaryStep = await primaryStream.next();
       while (!primaryStep.done) {
         const event = primaryStep.value;
-        if (event.type === "thinking") {
-          pendingThinking += event.message;
-          sseWrite("token", { content: event.message });
+        if (event.type === "work_token") {
+          if (answerPhaseStarted) break;
+          pendingWork += event.message;
+          pauseWorkTimeline();
+          sseWrite("narration_token", { content: event.message });
+        } else if (event.type === "answer_start") {
+          answerPhaseStarted = true;
+          pendingWork = "";
+          pauseWorkTimeline();
+          sseWrite("final_answer_start", { requestId: reqId });
+        } else if (event.type === "answer_token") {
+          pauseWorkTimeline();
+          sseWrite("answer_token", { content: event.message });
+        } else if (event.type === "answer_end") {
+          sseWrite("final_answer_end", { requestId: reqId });
         } else if (event.type === "progress") {
           const kind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
           const dedupKey = `${kind}:${event.message}`;
@@ -2586,41 +3082,31 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             });
           }
         } else if (event.type === "tool_started") {
+          resumeWorkTimeline();
           const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
-          if (toolName) {
-            // Any thinking streamed in this iteration was interim narration, not
-            // the final answer. Roll it back on the client and promote to activity.
-            promotePendingToActivity();
-            const toolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
-            emitActivity({
-              ...(toolCallId ? { id: `tool_${reqId}_${toolCallId}` } : {}),
-              label: toolLabelFor(toolName, "running"),
-              kind: "tool",
-              tool: toolName,
-              status: "running",
-              ...(sanitizeToolDetail(event.metadata?.args) ? { detail: sanitizeToolDetail(event.metadata?.args) } : {})
-            });
+          const toolCount = event.metadata?.toolCount;
+          if (toolName || typeof toolCount === "number") {
+            promotePendingWorkToActivity();
           }
+          parallelToolActivity.onToolStarted(event, emitActivity, toolLabelFor, sanitizeToolDetail, reqId);
         } else if (event.type === "tool_completed") {
           const toolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
-          if (toolName) {
-            const toolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
-            emitActivity({
-              ...(toolCallId ? { id: `tool_${reqId}_${toolCallId}` } : {}),
-              label: toolLabelFor(toolName, "done"),
-              kind: "tool",
-              tool: toolName,
-              status: "done",
-              ...(sanitizeToolDetail(event.metadata?.resultPreview) ? { output: sanitizeToolDetail(event.metadata?.resultPreview) } : {})
-            });
+          const shouldHandle =
+            toolName ||
+            event.metadata?.parallel === true ||
+            event.metadata?.flushToolActivities === true;
+          if (shouldHandle) {
+            parallelToolActivity.onToolCompleted(event, emitActivity, toolLabelFor, sanitizeToolDetail, reqId);
           }
         } else if (event.type === "turn_completed") {
-          pendingThinking = "";
+          pendingWork = "";
           finalText = event.message || "";
         }
         primaryStep = await primaryStream.next();
       }
-      streamGeneratedImages = primaryStep.value.generatedImages;
+      const primaryResult = primaryStep.done ? primaryStep.value : null;
+      streamGeneratedImages = primaryResult?.generatedImages ?? [];
+      streamGeneratedDownloads = primaryResult?.generatedDownloads ?? [];
 
       finalProviderDiagnostics = providerDiagnostics(provider.metadata, false);
     } catch (error) {
@@ -2629,7 +3115,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           { requestId: reqId, providerError: redactedProviderError(error) },
           "Chat provider streaming failed; using deterministic fallback"
         );
-        const fallbackProvider = createDeterministicMockProvider(providerErrorCode(error));
+        const fallbackProvider = createDeterministicMockProvider(providerErrorCode(error), error);
 
         try {
           const knowledgeBaseDocuments = store.knowledgeBaseByProject[projectId] ?? [];
@@ -2641,7 +3127,33 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             const trimmed = value.replace(/[A-Za-z0-9_./\\-]*(?:api[_-]?key|token|secret|password)[A-Za-z0-9_./\\-]*/gi, "[redacted]").trim();
             return trimmed ? trimmed.slice(0, 180) : undefined;
           };
-          const fallbackToolLabelFor = (toolName: string, state: "running" | "done"): string => {
+          const fallbackGroundingToolLabel = (state: "running" | "done", metadata?: Record<string, unknown>): string => {
+            if (state === "running") {
+              return "Retrieving site rules";
+            }
+            const count = metadata?.retrievedGroundingCount;
+            const names = metadata?.retrievedRuleNames;
+            if (typeof count === "number" && count > 0) {
+              if (Array.isArray(names)) {
+                const listed = names.filter((name): name is string => typeof name === "string").slice(0, 3);
+                if (listed.length > 0) {
+                  const joined = listed.join(", ");
+                  return count === 1
+                    ? `Retrieved site rule: ${joined}`
+                    : `Retrieved site rules (${count}): ${joined}${names.length > 3 ? ", …" : ""}`;
+                }
+              }
+              return `Retrieved site rules (${count})`;
+            }
+            return "No matching site rules";
+          };
+          const fallbackToolLabelFor = (toolName: string, state: "running" | "done", metadata?: Record<string, unknown>): string => {
+            if (state === "done" && typeof metadata?.exitCode === "number" && metadata.exitCode !== 0) {
+              return "Tool failed";
+            }
+            if (toolName === "project_grounding") {
+              return fallbackGroundingToolLabel(state, metadata);
+            }
             const lower = toolName.toLowerCase();
             if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
             if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";
@@ -2651,35 +3163,31 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           };
           const emitFallbackActivity = (payload: Record<string, unknown>): void => {
             fallbackActivitySequence += 1;
-            const enriched = { id: `act_${reqId}_fb_${fallbackActivitySequence}`, requestId: reqId, ...payload };
+            const enriched = { requestId: reqId, at: Date.now(), id: `act_${reqId}_fb_${fallbackActivitySequence}`, ...payload };
             sseWrite("activity", enriched);
             const captured = captureActivity(enriched);
             if (!captured) return;
-            if (captured.id) {
-              const existingIndex = capturedActivities.findIndex((a) => a.id === captured.id);
-              if (existingIndex >= 0) {
-                capturedActivities[existingIndex] = captured;
-                return;
-              }
-            }
-            capturedActivities.push(captured);
+            storeCapturedActivity(captured);
           };
-          let fallbackPendingThinking = "";
-          const promoteFallbackPendingToActivity = (): void => {
-            const trimmed = fallbackPendingThinking.trim();
-            fallbackPendingThinking = "";
-            if (!trimmed) return;
+          const fallbackParallelToolActivity = createParallelToolActivityCoordinator();
+          let fallbackPendingWork = "";
+          let fallbackAnswerPhaseStarted = false;
+          const promoteFallbackPendingWorkToActivity = (): void => {
+            const trimmed = fallbackPendingWork.trim();
+            fallbackPendingWork = "";
+            if (!trimmed || fallbackAnswerPhaseStarted) return;
             emitFallbackActivity({
               label: trimmed.slice(0, 600),
               kind: "context"
             });
-            sseWrite("token_reset", { requestId: reqId });
+            sseWrite("narration_reset", { requestId: reqId });
           };
           const fallbackStream = agentRuntime.runTurnStream({
             projectId,
             userId: session.userId,
             requestId: reqId,
             conversationId,
+            canConfigure: hasConfigurePermission(store, session.userId, projectId),
             messages: agentInputs.conversationMessages,
             providerMessages: agentInputs.providerMessages,
             provider: fallbackProvider,
@@ -2689,9 +3197,22 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           let fallbackStep = await fallbackStream.next();
           while (!fallbackStep.done) {
             const event = fallbackStep.value;
-            if (event.type === "thinking") {
-              fallbackPendingThinking += event.message;
-              sseWrite("token", { content: event.message });
+            if (event.type === "work_token") {
+              fallbackPendingWork += event.message;
+              if (!fallbackAnswerPhaseStarted) {
+                pauseWorkTimeline();
+                sseWrite("narration_token", { content: event.message });
+              }
+            } else if (event.type === "answer_start") {
+              fallbackAnswerPhaseStarted = true;
+              fallbackPendingWork = "";
+              pauseWorkTimeline();
+              sseWrite("final_answer_start", { requestId: reqId });
+            } else if (event.type === "answer_token") {
+              pauseWorkTimeline();
+              sseWrite("answer_token", { content: event.message });
+            } else if (event.type === "answer_end") {
+              sseWrite("final_answer_end", { requestId: reqId });
             } else if (event.type === "progress") {
               const fkind = typeof event.metadata?.progressKind === "string" ? event.metadata.progressKind : "context";
               const fdedupKey = `${fkind}:${event.message}`;
@@ -2705,39 +3226,42 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
                 });
               }
             } else if (event.type === "tool_started") {
+              resumeWorkTimeline();
               const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
-              if (ftoolName) {
-                promoteFallbackPendingToActivity();
-                const ftoolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
-                emitFallbackActivity({
-                  ...(ftoolCallId ? { id: `tool_${reqId}_fb_${ftoolCallId}` } : {}),
-                  label: fallbackToolLabelFor(ftoolName, "running"),
-                  kind: "tool",
-                  tool: ftoolName,
-                  status: "running",
-                  ...(sanitizeFallbackToolDetail(event.metadata?.args) ? { detail: sanitizeFallbackToolDetail(event.metadata?.args) } : {})
-                });
+              const ftoolCount = event.metadata?.toolCount;
+              if (ftoolName || typeof ftoolCount === "number") {
+                promoteFallbackPendingWorkToActivity();
               }
+              fallbackParallelToolActivity.onToolStarted(
+                event,
+                emitFallbackActivity,
+                fallbackToolLabelFor,
+                sanitizeFallbackToolDetail,
+                `${reqId}_fb`
+              );
             } else if (event.type === "tool_completed") {
               const ftoolName = typeof event.metadata?.tool === "string" ? event.metadata.tool : null;
-              if (ftoolName) {
-                const ftoolCallId = typeof event.metadata?.toolCallId === "string" ? event.metadata.toolCallId : null;
-                emitFallbackActivity({
-                  ...(ftoolCallId ? { id: `tool_${reqId}_fb_${ftoolCallId}` } : {}),
-                  label: fallbackToolLabelFor(ftoolName, "done"),
-                  kind: "tool",
-                  tool: ftoolName,
-                  status: "done",
-                  ...(sanitizeFallbackToolDetail(event.metadata?.resultPreview) ? { output: sanitizeFallbackToolDetail(event.metadata?.resultPreview) } : {})
-                });
+              const fshouldHandle =
+                ftoolName ||
+                event.metadata?.parallel === true ||
+                event.metadata?.flushToolActivities === true;
+              if (fshouldHandle) {
+                fallbackParallelToolActivity.onToolCompleted(
+                  event,
+                  emitFallbackActivity,
+                  fallbackToolLabelFor,
+                  sanitizeFallbackToolDetail,
+                  `${reqId}_fb`
+                );
               }
             } else if (event.type === "turn_completed") {
-              fallbackPendingThinking = "";
+              fallbackPendingWork = "";
               finalText = event.message || "";
             }
             fallbackStep = await fallbackStream.next();
           }
           streamGeneratedImages = fallbackStep.value.generatedImages;
+          streamGeneratedDownloads = fallbackStep.value.generatedDownloads;
 
           finalProviderDiagnostics = providerDiagnostics(fallbackProvider.metadata, true);
         } catch (fallbackError) {
@@ -2749,7 +3273,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           });
         }
       } else {
-        streamError = "Chat provider failed before producing a safe response.";
+        streamError = formatProviderFailureMessage(error);
         sseWrite("error", {
           code: "provider_error",
           message: streamError,
@@ -2767,21 +3291,33 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     // Store assistant message
     const assistantContent = stripProviderThinkingMarkup(finalText || "I wasn't able to complete the analysis.");
-    const finalGeneratedImages = finalizeAssistantImages(streamGeneratedImages, assistantContent);
+    const finalizedAssistant = finalizeAssistantContent(
+      assistantContent,
+      streamGeneratedImages,
+      streamGeneratedDownloads
+    );
     const assistantMessage: ChatMessage = {
       id: nextMessageId(),
       projectId,
       userId: session.userId,
       role: "assistant",
-      content: assistantContent,
-      ...(finalGeneratedImages ? { images: finalGeneratedImages } : {}),
+      content: finalizedAssistant.content,
+      ...(finalizedAssistant.images ? { images: finalizedAssistant.images } : {}),
+      ...(finalizedAssistant.downloads ? { downloads: finalizedAssistant.downloads } : {}),
       ...(capturedActivities.length > 0 ? { activities: capturedActivities } : {}),
-      workDuration: Date.now() - turnStartedAt
+      workDuration: (() => {
+        pauseWorkTimeline();
+        return workElapsedMs;
+      })()
     };
     messages.push(assistantMessage);
     conversation.messageIds.push(assistantMessage.id);
     trimProjectMessages(store, projectId, store.maxChatMessages);
     store.messagesByProject[projectId] = messages;
+    sessionIndex.upsertMessage(assistantMessage, conversationId, {
+      title: conversation.title,
+      messageCount: conversation.messageIds.length
+    });
 
     persistSoon();
 
@@ -2802,7 +3338,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       void refineConversationTitleWithLlm({
         conversation,
         userText: content,
-        assistantText: assistantContent,
+        assistantText: finalizedAssistant.content,
         provider,
         projectId,
         userId: session.userId,
@@ -2870,6 +3406,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         userId: session.userId,
         requestId: requestIdFor(request),
         conversationId: conversation?.id ?? "",
+        canConfigure: hasConfigurePermission(store, session.userId, projectId),
         messages: []
       }
     );
@@ -3000,9 +3537,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return sendError(request, reply, 404, "conversation_not_found", "The requested conversation does not exist in this project.");
     }
 
-    const allMessages = store.messagesByProject[request.params.projectId] ?? [];
-    const idSet = new Set(conversation.messageIds);
-    const messages = allMessages.filter((m) => idSet.has(m.id));
+    let allMessages = store.messagesByProject[request.params.projectId] ?? [];
+    if (repairMissingConversationMessages(store, request.params.projectId, conversation, sessionIndex, session.userId)) {
+      persistSoon();
+      allMessages = store.messagesByProject[request.params.projectId] ?? [];
+    }
+    const messages = orderedConversationMessages(allMessages, conversation);
 
     return {
       conversation: { id: conversation.id, title: conversation.title, messageCount: conversation.messageIds.length, createdAt: conversation.createdAt },
@@ -3106,7 +3646,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     delete store.conversationsByProject[projectId];
     delete store.repositoryByProject[projectId];
     delete store.knowledgeBaseByProject[projectId];
-    store.sessionsByToken[session.token] = { userId: session.userId, selectedProjectId: null };
+    writeSessionForToken(store, session.token, { userId: session.userId, selectedProjectId: null });
     persistSoon();
 
     return {
@@ -3176,13 +3716,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     const projectId = match[1]!;
     const token = url.searchParams.get("token");
-    if (!token || !store.tokens[token]) {
+    const userId = token ? resolveUserIdForToken(store, token) : null;
+    if (!userId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
-
-    const userId = store.tokens[token]!;
     const member = store.memberships.find((m) => m.projectId === projectId && m.userId === userId);
     if (!member || !member.permissions.includes("chat:read")) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");

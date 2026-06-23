@@ -1,4 +1,7 @@
-import type { AgentSkill, AgentTool } from "./types.js";
+import { boundsViolationResult } from "../platformBounds.js";
+import { BUILTIN_SKILL_IDS, type ProjectSkillBindings } from "../projectSkills.js";
+import { dataBridgeSkillHint, scientificChartSkillHint } from "./chartStyle.js";
+import type { AgentSkill, AgentTool, AgentToolContext } from "./types.js";
 
 export class AgentSkillRegistry {
   private readonly skills = new Map<string, AgentSkill>();
@@ -33,17 +36,28 @@ export class AgentSkillRegistry {
   }
 
   promptHints(): string {
-    return this.list().map((skill) => `- ${skill.name}: ${skill.promptHint}`).join("\n");
+    return this.promptHintsForProject(this.list().map((skill) => skill.id));
+  }
+
+  listForProject(skillIds: string[]): AgentSkill[] {
+    const wanted = new Set(skillIds);
+    return this.list().filter((skill) => wanted.has(skill.id));
+  }
+
+  promptHintsForProject(skillIds: string[]): string {
+    return this.listForProject(skillIds)
+      .map((skill) => `• ${skill.promptHint}`)
+      .join("\n");
   }
 
   /** Build tool definitions for skill CRUD operations. */
-  buildCrudToolDefs(): AgentTool[] {
+  buildCrudToolDefs(bindings?: ProjectSkillBindings): AgentTool[] {
     const registry = this;
     return [
       {
         name: "skill_create",
         category: "utility",
-        description: "Create a new agent skill at runtime. Skills shape how the agent approaches problem domains.",
+        description: "Create a project-scoped agent skill and attach it to the current project.",
         schema: {
           name: "skill_create",
           description: "Create a new agent skill.",
@@ -59,7 +73,10 @@ export class AgentSkillRegistry {
             required: ["id", "name", "domain", "description", "promptHint"]
           }
         },
-        run: async (args) => {
+        run: async (args, context: AgentToolContext) => {
+          if (!context.canConfigure) {
+            return boundsViolationResult("skill_create requires project:configure.");
+          }
           const id = String(args.id ?? "");
           if (!id) return { error: "id is required" };
           if (registry.get(id)) return { error: `Skill already exists: ${id}` };
@@ -75,7 +92,10 @@ export class AgentSkillRegistry {
             promptHint: String(args.promptHint ?? "")
           };
           registry.register(skill);
-          return { created: { id: skill.id, name: skill.name, domain: skill.domain } };
+          bindings?.addSkill(context.projectId, id);
+          return {
+            created: { id: skill.id, name: skill.name, domain: skill.domain, projectId: context.projectId }
+          };
         }
       },
       {
@@ -97,9 +117,15 @@ export class AgentSkillRegistry {
             required: ["id"]
           }
         },
-        run: async (args) => {
+        run: async (args, context: AgentToolContext) => {
+          if (!context.canConfigure) {
+            return boundsViolationResult("skill_edit requires project:configure.");
+          }
           const id = String(args.id ?? "");
           if (!id) return { error: "id is required" };
+          if ((BUILTIN_SKILL_IDS as readonly string[]).includes(id)) {
+            return boundsViolationResult(`Cannot edit built-in skill via chat: ${id}. Deploy a code change instead.`);
+          }
           if (!registry.get(id)) return { error: `Skill not found: ${id}` };
           const patch: Partial<Omit<AgentSkill, "id">> = {};
           if (typeof args.name === "string") patch.name = args.name;
@@ -131,44 +157,42 @@ export class AgentSkillRegistry {
             required: ["id"]
           }
         },
-        run: async (args) => {
+        run: async (args, context: AgentToolContext) => {
+          if (!context.canConfigure) {
+            return boundsViolationResult("skill_delete requires project:configure.");
+          }
           const id = String(args.id ?? "");
           if (!id) return { error: "id is required" };
-          if (
-            [
-              "skill_building_triage",
-              "skill_project_readiness",
-              "skill_runtime_health",
-              "skill_element_bms_data"
-            ].includes(id)
-          ) {
-            return { error: `Cannot delete built-in skill: ${id}` };
+          if ((BUILTIN_SKILL_IDS as readonly string[]).includes(id)) {
+            return boundsViolationResult(`Cannot delete built-in skill: ${id}`);
           }
+          bindings?.removeSkill(context.projectId, id);
           const deleted = registry.remove(id);
-          return { deleted, id };
+          return { deleted, id, projectId: context.projectId };
         }
       },
       {
         name: "skill_list",
         category: "utility",
-        description: "List all registered agent skills with their domains and descriptions.",
+        description: "List agent skills enabled for the current project.",
         schema: {
           name: "skill_list",
-          description: "List all registered skills.",
+          description: "List skills for the current project.",
           parameters: {
             type: "object",
             properties: {},
             required: []
           }
         },
-        run: async () => {
-          const items = registry.list().map((s) => ({
+        run: async (_args, context: AgentToolContext) => {
+          const skillIds = bindings?.getSkillIds(context.projectId) ?? [];
+          const items = registry.listForProject(skillIds).map((s) => ({
             id: s.id,
             name: s.name,
             domain: s.domain,
             description: s.description
           }));
-          return { skills: items, count: items.length };
+          return { skills: items, count: items.length, projectId: context.projectId };
         }
       }
     ];
@@ -182,53 +206,59 @@ export function createGenericSkillRegistry(): AgentSkillRegistry {
     name: "Building Triage",
     domain: "building",
     description: "Ask concise follow-up questions and separate known building facts from assumptions.",
-    promptHint: "When building data is missing, state assumptions and keep BIM/IFC/timeseries details as placeholders."
+    promptHint: "Missing building data: state assumptions; keep BIM/IFC/timeseries as placeholders."
   });
   registry.register({
     id: "skill_project_readiness",
     name: "Project Readiness",
     domain: "project",
     description: "Organize answers around next actions, blockers, owners, and verification.",
-    promptHint: "Prefer actionable project guidance over broad background explanation."
+    promptHint: "Prefer next actions, blockers, owners—not long background."
   });
   registry.register({
     id: "skill_runtime_health",
     name: "Runtime Health",
     domain: "runtime",
     description: "Explain provider, fallback, tool, and session state in redaction-safe terms.",
-    promptHint: "Never expose secrets; mention only provider id, mode, model, request id, and fallback reason."
+    promptHint: "No secrets; only provider id, mode, model, requestId, fallback reason."
   });
   registry.register({
     id: "environment-setup",
     name: "Environment setup",
     domain: "runtime",
     description: "Install missing runtimes and packages before analysis.",
-    promptHint: "When pip, npm, or a CLI is missing, use terminal to install and verify first. Never substitute workarounds for missing Python/Node/system tooling."
+    promptHint: "Missing pip/npm/CLI: terminal install+verify, retry—no workaround math or fake charts."
+  });
+  registry.register({
+    id: "skill_tool_data_bridge",
+    name: "Tool Data Bridge",
+    domain: "runtime",
+    description: "Wire tool results into execute_code via manifest helpers and pandas-safe transforms.",
+    promptHint: dataBridgeSkillHint()
   });
   registry.register({
     id: "skill_chart_quality",
     name: "Chart Quality",
     domain: "runtime",
-    description: "Produce clear English-labeled charts with matplotlib/seaborn and non-overlapping layout.",
+    description: "Produce unified scientific-style charts via injected matplotlib/seaborn helpers.",
+    promptHint: scientificChartSkillHint()
+  });
+  registry.register({
+    id: "skill_feedback_workflow",
+    name: "Feedback workflow",
+    domain: "runtime",
+    description: "User correction → propose → approve → implement script → commit playbook lifecycle.",
     promptHint:
-      "For charts: matplotlib + seaborn, English-only on-figure text, legend outside plot, tight_layout/bbox_inches=tight, no crowded data labels; save to OUTPUT_DIR as outputs/*.png."
+      "CORRECTION WORKFLOW: Platform bounds — do not edit kernel/skills via chat. MEMORY ROUTING: user preferences→memory(target=user) or memory_propose; declarative site facts→memory(target=project, configure) or memory_propose; user-approved judgment rules→feedback_save_site_rule after consent (requires project:configure); script playbooks→feedback_implement→feedback_commit_playbook (operator-only). memory_propose requires save memory: yes. (1) Do not auto-seed rules without user approval. (2) On user correction — same turn, in order: (a) re-fetch/recompute with tools (do not only acknowledge); (b) give the corrected answer with evidence; (c) explain why the prior answer was wrong (root cause); (d) state a broad generalized checking principle — not a rule tied to one question wording; (e) ask plainly whether to remember for similar questions. Do NOT call feedback_save_site_rule or feedback_propose on that turn. (3) Only after explicit save consent on a later message (e.g. yes, yes remember, 是的保存)→feedback_save_site_rule with rule_key from SITE RULE TEMPLATE KEYS plus LLM-authored name, scope, trigger, action, wrong_pattern, trigger_topics (≥4 paraphrases EN/ZH), systems/equipment when relevant — not a single paragraph rule_summary. (4) Never claim saved until the tool succeeds. (5) Prefer feedback_run_playbook only when script playbooks exist. (6) When applicable project rules are already in the prompt (retrieved site rules), follow them directly — do NOT read feedback_tools/*.py scripts unless the user explicitly asks to run a playbook. Past threads→session_search, not memory banks."
   });
   registry.register({
     id: "skill_element_bms_data",
-    name: "Element BMS Data Access",
+    name: "Element BMS Data",
     domain: "building",
     description:
-      "Fetch Element chiller BMS data: live via enteliWEB :20800; local history via BMS-database GET /api/v1/timeseries (poll+history merged, no source param).",
-    promptHint: [
-      "Element project (project_element) BMS data routing — follow strictly:",
-      "1) DECIDE: 'current/live/now/alarm' → enteliWEB :20800 (tool bms_live_read or api_path XML). 'yesterday/trend/report/history' → BMS REST timeseries ONLY — NOT live BACnet.",
-      "2) CATALOG: GET {BMS_DATABASE_API_URL}/api/v1/points?q=<keyword>&limit=50 — name, point_id, object_ref, api_path, last_value (~5min lag).",
-      "3) LIVE: tool bms_live_read(point_name|object_ref|api_path); demo enteliWEB auth pre-configured.",
-      "4) HISTORICAL (canonical): GET /api/v1/timeseries?name=<name>&from=<UTC ISO>&to=&limit=5000&order=asc — NO source=poll/history/merged. Response items: ts, value, value_num (no source field). Aliases: /api/v1/readings, /api/v1/points/{id}/timeseries. Public collector example: http://117.72.185.234:8765; server local: http://127.0.0.1:8765.",
-      "5) GRANULARITY: API returns server-merged series (device trend ~6d @15min + 5min poll after collector start); do not assume uniform 5min for all past days. Display ts in Asia/Shanghai for users; stored as UTC.",
-      "6) TOOLS: bms_live_read, terminal curl timeseries, run_python requests, read_file data/project_element/kb/bms_data_access.md. SQLite direct only if API down.",
-      "7) REPORT: live vs timeseries path, time range, staleness."
-    ].join(" ")
+      "Element BMS local DB: bms_points_query / bms_timeseries_query for catalog, last_value, history; bms_live_read for ≤3 live points.",
+    promptHint:
+      "BMS DATA ROUTING (always on): NAMES → KB_CATALOG_SUMMARY.md §1.1–§2 only (COP §2.3.1, Plant `WCC-L1-0n_COP` not `WCC_n_COP`); never bms_points_query×8 to build inventories. POINT PICK: match the question — running → Run_Status+TLKW; leaving CHW temp → Chilled_Water_Temp or SUWT; COP → Plant layer (e.g. WCC-L1-04_COP), not HL `WCC_n_COP`. TOOLS: history/trend/batch/>3 points or last_value → bms_timeseries_query / bms_points_query; ≤3 live/alarm → bms_live_read; unknown name → bms_points_query(q=, limit=20). Relative time → copy from/to from CURRENT TIME CALENDAR RANGES; re-fetch every turn. Local DB = one readings timeline (backfill + 15-min poll, no source param); last_value ~15 min lag unless live read. Parallel tool calls. Do not read_file API docs unless tools fail."
   });
   return registry;
 }

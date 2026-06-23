@@ -35,12 +35,37 @@ export interface ProjectSummary {
   permissions: string[];
 }
 
+export interface PlatformBoundsLayer {
+  mutable: boolean;
+  description: string;
+}
+
+export interface PlatformBoundsResponse {
+  layers: {
+    platform: PlatformBoundsLayer;
+    operator: PlatformBoundsLayer;
+    playbook: PlatformBoundsLayer;
+    userMemory: PlatformBoundsLayer;
+    projectMemory: PlatformBoundsLayer;
+    /** @deprecated Use userMemory */
+    personalMemory: PlatformBoundsLayer;
+  };
+  currentUser: {
+    canConfigure: boolean;
+  };
+}
+
 export interface ChatMessageImage {
   src: string;
   alt: string;
   filename?: string | undefined;
   capturedAt?: string | undefined;
   source?: string | undefined;
+}
+
+export interface ChatMessageDownload {
+  path: string;
+  filename: string;
 }
 
 export interface ChatMessage {
@@ -50,9 +75,12 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   images?: ChatMessageImage[] | undefined;
+  downloads?: ChatMessageDownload[] | undefined;
   artifactId?: string | undefined;
   activities?: ChatStreamActivityEvent[] | undefined;
   workDuration?: number | undefined;
+  /** Tool-only duration per work segment (client-computed; excludes narration). */
+  workSegmentDurations?: number[] | undefined;
 }
 
 export interface KnowledgeBaseDocument {
@@ -106,6 +134,7 @@ export interface ChatStreamActivityEvent {
   output?: string;
   durationMs?: number;
   exitCode?: number;
+  at?: number;
 }
 
 export interface ChatStreamProgressEvent {
@@ -130,7 +159,11 @@ export interface StreamEventHandlers {
   onProgress?: (event: ChatStreamProgressEvent) => void;
   onActivity?: (event: ChatStreamActivityEvent) => void;
   onToken?: (content: string) => void;
+  onNarrationToken?: (content: string) => void;
+  onNarrationReset?: () => void;
+  onAnswerToken?: (content: string) => void;
   onTokenReset?: () => void;
+  onFinalAnswerStart?: () => void;
   onConversationTitle?: (payload: { conversationId: string; title: string }) => void;
   onError?: (error: ApiErrorDetail) => void;
   onDone?: (response: SendChatResponse) => void;
@@ -223,7 +256,8 @@ export async function sendChatMessageStream(
                     ...(typeof act.detail === "string" ? { detail: act.detail } : {}),
                     ...(typeof act.output === "string" ? { output: act.output } : {}),
                     ...(typeof act.durationMs === "number" ? { durationMs: act.durationMs } : {}),
-                    ...(typeof act.exitCode === "number" ? { exitCode: act.exitCode } : {})
+                    ...(typeof act.exitCode === "number" ? { exitCode: act.exitCode } : {}),
+                    ...(typeof act.at === "number" ? { at: act.at } : {})
                   });
                 }
                 break;
@@ -238,8 +272,32 @@ export async function sendChatMessageStream(
                   handlers.onToken?.((parsed as { content: string }).content);
                 }
                 break;
+              case "narration_token":
+                if (typeof (parsed as Record<string, unknown>).content === "string") {
+                  const content = (parsed as { content: string }).content;
+                  console.debug("[SSE] narration_token", content.slice(0, 30));
+                  handlers.onNarrationToken?.(content);
+                }
+                break;
+              case "answer_token":
+                if (typeof (parsed as Record<string, unknown>).content === "string") {
+                  const chunk = (parsed as { content: string }).content;
+                  console.debug("[SSE] answer_token", chunk.slice(0, 30));
+                  handlers.onAnswerToken?.(chunk);
+                  handlers.onToken?.(chunk);
+                }
+                break;
+              case "narration_reset":
               case "token_reset":
+                handlers.onNarrationReset?.();
                 handlers.onTokenReset?.();
+                break;
+              case "final_answer_start":
+                console.debug("[SSE] final_answer_start");
+                handlers.onFinalAnswerStart?.();
+                break;
+              case "final_answer_end":
+                console.debug("[SSE] final_answer_end");
                 break;
               case "conversation_title":
                 if (
@@ -333,6 +391,9 @@ export interface ResetChatResponse {
 
 export interface LoginResponse {
   token: string;
+  tokenType: "Bearer";
+  /** ISO-8601 expiry, or null when the token does not expire. */
+  expiresAt: string | null;
   user: UserSummary;
   requestId: string;
 }
@@ -663,10 +724,26 @@ export async function login(email: string, password: string): Promise<LoginRespo
     method: "POST",
     body: JSON.stringify({ email, password })
   });
-  if (!isRecord(payload) || typeof payload.token !== "string" || !isRecord(payload.user) || typeof payload.user.id !== "string" || typeof payload.user.name !== "string" || typeof payload.requestId !== "string") {
+  if (
+    !isRecord(payload) ||
+    typeof payload.token !== "string" ||
+    !isRecord(payload.user) ||
+    typeof payload.user.id !== "string" ||
+    typeof payload.user.name !== "string" ||
+    typeof payload.requestId !== "string"
+  ) {
     throw malformed("Login returned an unexpected response.");
   }
-  return { token: payload.token, user: { id: payload.user.id, name: payload.user.name }, requestId: payload.requestId };
+  const tokenType = payload.tokenType === "Bearer" ? "Bearer" : "Bearer";
+  const expiresAt =
+    payload.expiresAt === null || typeof payload.expiresAt === "string" ? payload.expiresAt : null;
+  return {
+    token: payload.token,
+    tokenType,
+    expiresAt,
+    user: { id: payload.user.id, name: payload.user.name },
+    requestId: payload.requestId
+  };
 }
 
 export async function getSession(token: string): Promise<{ session: SessionSummary; requestId: string }> {
@@ -715,6 +792,254 @@ export async function selectProject(token: string, projectId: string): Promise<{
       permissions: payload.session.permissions.filter((permission): permission is string => typeof permission === "string")
     },
     requestId: payload.requestId
+  };
+}
+
+export interface MemoryBankResponse {
+  projectId?: string;
+  scope: "project" | "global";
+  entries: string[];
+  usage: string;
+  charLimit: number;
+  mutable: boolean;
+  requestId: string;
+}
+
+export interface MemoryGroundingRule {
+  id: string;
+  content: string;
+  createdAt: string;
+  name?: string;
+  scope?: string;
+  trigger?: string;
+  action?: string;
+  wrongPattern?: string;
+  triggerTopics?: string[];
+  status?: string;
+  source?: string;
+}
+
+export interface MemoryPlaybookSummary {
+  id: string;
+  title: string;
+  triggerTopics: string[];
+  groundingSummary: string;
+  active: boolean;
+}
+
+export interface MemoryProposalSummary {
+  id: string;
+  target: "user" | "project";
+  content: string;
+  reason: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface ProjectMemoryRulesResponse {
+  projectId: string;
+  grounding: MemoryGroundingRule[];
+  playbooks: MemoryPlaybookSummary[];
+  pendingMemoryProposals: MemoryProposalSummary[];
+  requestId: string;
+}
+
+export async function getProjectUserMemory(token: string, projectId: string): Promise<MemoryBankResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/memory/user`, {
+    headers: authHeaders(token)
+  });
+  return parseMemoryBankResponse(payload, "project");
+}
+
+export async function patchProjectUserMemory(
+  token: string,
+  projectId: string,
+  entries: string[]
+): Promise<{ entries: string[]; usage?: string; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/memory/user`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), "content-type": "application/json" },
+    body: JSON.stringify({ entries })
+  });
+  if (!isRecord(payload) || !Array.isArray(payload.entries) || typeof payload.requestId !== "string") {
+    throw malformed("User memory update returned an unexpected response.");
+  }
+  return {
+    entries: payload.entries.filter((entry): entry is string => typeof entry === "string"),
+    ...(typeof payload.usage === "string" ? { usage: payload.usage } : {}),
+    requestId: payload.requestId
+  };
+}
+
+export async function getProjectMemoryBank(token: string, projectId: string): Promise<MemoryBankResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/memory/project`, {
+    headers: authHeaders(token)
+  });
+  return parseMemoryBankResponse(payload, "project");
+}
+
+export async function patchProjectMemoryBank(
+  token: string,
+  projectId: string,
+  entries: string[]
+): Promise<{ entries: string[]; usage?: string; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/memory/project`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), "content-type": "application/json" },
+    body: JSON.stringify({ entries })
+  });
+  if (!isRecord(payload) || !Array.isArray(payload.entries) || typeof payload.requestId !== "string") {
+    throw malformed("Project memory update returned an unexpected response.");
+  }
+  return {
+    entries: payload.entries.filter((entry): entry is string => typeof entry === "string"),
+    ...(typeof payload.usage === "string" ? { usage: payload.usage } : {}),
+    requestId: payload.requestId
+  };
+}
+
+export async function getGlobalUserMemory(token: string, projectId: string): Promise<MemoryBankResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/memory/global`, {
+    headers: authHeaders(token)
+  });
+  return parseMemoryBankResponse(payload, "global");
+}
+
+export async function patchGlobalUserMemory(
+  token: string,
+  projectId: string,
+  entries: string[]
+): Promise<{ entries: string[]; usage?: string; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/memory/global`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), "content-type": "application/json" },
+    body: JSON.stringify({ entries })
+  });
+  if (!isRecord(payload) || !Array.isArray(payload.entries) || typeof payload.requestId !== "string") {
+    throw malformed("Global memory update returned an unexpected response.");
+  }
+  return {
+    entries: payload.entries.filter((entry): entry is string => typeof entry === "string"),
+    ...(typeof payload.usage === "string" ? { usage: payload.usage } : {}),
+    requestId: payload.requestId
+  };
+}
+
+export async function getProjectMemoryRules(token: string, projectId: string): Promise<ProjectMemoryRulesResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/memory/rules`, {
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.projectId !== "string" || typeof payload.requestId !== "string") {
+    throw malformed("Memory rules returned an unexpected response.");
+  }
+  return {
+    projectId: payload.projectId,
+    grounding: Array.isArray(payload.grounding)
+      ? payload.grounding
+          .map((rule) => {
+            if (!isRecord(rule) || typeof rule.id !== "string" || typeof rule.content !== "string") {
+              return null;
+            }
+            return {
+              id: rule.id,
+              content: rule.content,
+              createdAt: typeof rule.createdAt === "string" ? rule.createdAt : "",
+              ...(typeof rule.name === "string" ? { name: rule.name } : {}),
+              ...(typeof rule.scope === "string" ? { scope: rule.scope } : {}),
+              ...(typeof rule.trigger === "string" ? { trigger: rule.trigger } : {}),
+              ...(typeof rule.action === "string" ? { action: rule.action } : {}),
+              ...(typeof rule.wrongPattern === "string" ? { wrongPattern: rule.wrongPattern } : {}),
+              ...(Array.isArray(rule.triggerTopics)
+                ? { triggerTopics: rule.triggerTopics.filter((topic): topic is string => typeof topic === "string") }
+                : {}),
+              ...(typeof rule.status === "string" ? { status: rule.status } : {}),
+              ...(typeof rule.source === "string" ? { source: rule.source } : {})
+            };
+          })
+          .filter((rule): rule is MemoryGroundingRule => rule !== null)
+      : [],
+    playbooks: Array.isArray(payload.playbooks)
+      ? payload.playbooks
+          .map((playbook) => {
+            if (!isRecord(playbook) || typeof playbook.id !== "string" || typeof playbook.title !== "string") {
+              return null;
+            }
+            return {
+              id: playbook.id,
+              title: playbook.title,
+              triggerTopics: Array.isArray(playbook.triggerTopics)
+                ? playbook.triggerTopics.filter((topic): topic is string => typeof topic === "string")
+                : [],
+              groundingSummary: typeof playbook.groundingSummary === "string" ? playbook.groundingSummary : "",
+              active: playbook.active !== false
+            };
+          })
+          .filter((playbook): playbook is MemoryPlaybookSummary => playbook !== null)
+      : [],
+    pendingMemoryProposals: Array.isArray(payload.pendingMemoryProposals)
+      ? payload.pendingMemoryProposals
+          .map((proposal) => {
+            if (!isRecord(proposal) || typeof proposal.id !== "string" || typeof proposal.content !== "string") {
+              return null;
+            }
+            return {
+              id: proposal.id,
+              target: proposal.target === "project" ? "project" : "user",
+              content: proposal.content,
+              reason: typeof proposal.reason === "string" ? proposal.reason : "",
+              status: typeof proposal.status === "string" ? proposal.status : "proposed",
+              createdAt: typeof proposal.createdAt === "string" ? proposal.createdAt : ""
+            };
+          })
+          .filter((proposal): proposal is MemoryProposalSummary => proposal !== null)
+      : [],
+    requestId: payload.requestId
+  };
+}
+
+function parseMemoryBankResponse(payload: unknown, scope: "project" | "global"): MemoryBankResponse {
+  if (!isRecord(payload) || !Array.isArray(payload.entries) || typeof payload.requestId !== "string") {
+    throw malformed("Memory bank returned an unexpected response.");
+  }
+  return {
+    ...(typeof payload.projectId === "string" ? { projectId: payload.projectId } : {}),
+    scope,
+    entries: payload.entries.filter((entry): entry is string => typeof entry === "string"),
+    usage: typeof payload.usage === "string" ? payload.usage : "",
+    charLimit: typeof payload.charLimit === "number" ? payload.charLimit : 0,
+    mutable: payload.mutable !== false,
+    requestId: payload.requestId
+  };
+}
+
+export async function getProjectBounds(token: string, projectId: string): Promise<PlatformBoundsResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/bounds`, {
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || !isRecord(payload.layers) || !isRecord(payload.currentUser)) {
+    throw malformed("Project bounds returned an unexpected response.");
+  }
+  const layers = payload.layers as Record<string, unknown>;
+  const layer = (key: string): PlatformBoundsLayer => {
+    const value = layers[key];
+    if (!isRecord(value) || typeof value.mutable !== "boolean" || typeof value.description !== "string") {
+      throw malformed("Project bounds returned an unexpected response.");
+    }
+    return { mutable: value.mutable, description: value.description };
+  };
+  if (typeof payload.currentUser.canConfigure !== "boolean") {
+    throw malformed("Project bounds returned an unexpected response.");
+  }
+  return {
+    layers: {
+      platform: layer("platform"),
+      operator: layer("operator"),
+      playbook: layer("playbook"),
+      userMemory: layer("userMemory"),
+      projectMemory: layer("projectMemory"),
+      personalMemory: layer("personalMemory")
+    },
+    currentUser: { canConfigure: payload.currentUser.canConfigure }
   };
 }
 
@@ -790,6 +1115,7 @@ function parseChatMessageActivity(value: unknown): ChatStreamActivityEvent | nul
   if (typeof value.output === "string") result.output = value.output;
   if (typeof value.durationMs === "number") result.durationMs = value.durationMs;
   if (typeof value.exitCode === "number") result.exitCode = value.exitCode;
+  if (typeof value.at === "number") result.at = value.at;
   return result;
 }
 
@@ -808,6 +1134,7 @@ function parseChatMessage(value: unknown, message: string): ChatMessage {
     throw malformed(message);
   }
   const images = parseChatMessageImages(value.images, message);
+  const downloads = parseChatMessageDownloads(value.downloads, message);
   const activities = parseChatMessageActivities(value.activities);
   return {
     id: value.id,
@@ -817,6 +1144,7 @@ function parseChatMessage(value: unknown, message: string): ChatMessage {
     content: value.content,
     ...(typeof value.artifactId === "string" ? { artifactId: value.artifactId } : {}),
     ...(images ? { images } : {}),
+    ...(downloads ? { downloads } : {}),
     ...(activities ? { activities } : {}),
     ...(typeof value.workDuration === "number" ? { workDuration: value.workDuration } : {})
   };
@@ -886,6 +1214,24 @@ function parseChatMessageImages(value: unknown, message: string): ChatMessageIma
       ...(typeof entry.filename === "string" ? { filename: entry.filename } : {}),
       ...(typeof entry.capturedAt === "string" ? { capturedAt: entry.capturedAt } : {}),
       ...(typeof entry.source === "string" ? { source: entry.source } : {})
+    };
+  });
+}
+
+function parseChatMessageDownloads(value: unknown, message: string): ChatMessageDownload[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw malformed(message);
+  }
+  return value.map((entry) => {
+    if (!isRecord(entry) || typeof entry.path !== "string" || typeof entry.filename !== "string") {
+      throw malformed(message);
+    }
+    return {
+      path: entry.path,
+      filename: entry.filename
     };
   });
 }

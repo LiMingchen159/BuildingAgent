@@ -10,8 +10,10 @@ export interface BmsTimeseriesRow {
   value_text?: string | null;
 }
 
+import { bmsCollectorBaseUrl } from "./bmsCollectorUrl.js";
+
 export function bmsApiBase(env: Record<string, string | undefined> = process.env): string {
-  return (env.BMS_DATABASE_API_URL ?? "http://127.0.0.1:8765").replace(/\/+$/, "");
+  return bmsCollectorBaseUrl(env);
 }
 
 export function buildTimeseriesUrl(baseUrl: string, params: Record<string, string>): string {

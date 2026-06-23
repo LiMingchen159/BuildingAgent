@@ -793,6 +793,12 @@ interface StreamingTurnState {
   userId: string | null;
   activities: ChatStreamActivityEvent[];
   startedAt: number;
+  interimNarration: string;
+  answerPhase: boolean;
+  workElapsedMs: number;
+  workSegmentStartedAt: number | null;
+  workTimelinePaused: boolean;
+  streamTimelineFinalized: boolean;
 }
 
 interface ConversationStreamState {
@@ -801,6 +807,12 @@ interface ConversationStreamState {
   streamingAssistant: ChatMessage;
   activities: ChatStreamActivityEvent[];
   startedAt: number;
+  interimNarration: string;
+  answerPhase: boolean;
+  workElapsedMs: number;
+  workSegmentStartedAt: number | null;
+  workTimelinePaused: boolean;
+  streamTimelineFinalized: boolean;
 }
 
 interface SidebarRefreshSnapshot {
@@ -888,6 +900,54 @@ function formatElapsedTime(ms: number): string {
   return `${seconds}s`;
 }
 
+function computeStreamingWorkMs(
+  workElapsedMs: number,
+  workSegmentStartedAt: number | null,
+  now = Date.now()
+): number {
+  return workElapsedMs + (workSegmentStartedAt != null ? Math.max(0, now - workSegmentStartedAt) : 0);
+}
+
+function streamShowsWorkedFor(
+  state: Pick<ConversationStreamState, "workTimelinePaused" | "streamTimelineFinalized"> | null | undefined
+): boolean {
+  if (!state) return false;
+  return state.streamTimelineFinalized || state.workTimelinePaused;
+}
+
+function activitiesHaveRunningTools(activities: ChatStreamActivityEvent[]): boolean {
+  return activities.some((activity) => activity.kind === "tool" && activity.status === "running");
+}
+
+function pauseWorkingTimelineForStream(turn: StreamingTurnState): void {
+  if (turn.streamTimelineFinalized) return;
+  const now = Date.now();
+  if (turn.workSegmentStartedAt != null) {
+    turn.workElapsedMs += Math.max(0, now - turn.workSegmentStartedAt);
+    turn.workSegmentStartedAt = null;
+  }
+  turn.workTimelinePaused = true;
+}
+
+function resumeWorkingTimelineForOngoingTask(turn: StreamingTurnState): void {
+  if (turn.streamTimelineFinalized || !turn.workTimelinePaused) return;
+  turn.workTimelinePaused = false;
+  turn.workSegmentStartedAt = Date.now();
+  turn.answerPhase = false;
+}
+
+function streamingWorkFieldsFromTurn(turn: StreamingTurnState): Pick<
+  ConversationStreamState,
+  "workElapsedMs" | "workSegmentStartedAt" | "workTimelinePaused" | "answerPhase"
+> {
+  return {
+    workElapsedMs: turn.workElapsedMs,
+    workSegmentStartedAt: turn.workSegmentStartedAt,
+    workTimelinePaused: turn.workTimelinePaused,
+    answerPhase: turn.answerPhase
+  };
+}
+
 function activityIcon(kind: ChatStreamActivityEvent["kind"], label: string): IconName {
   const normalized = label.toLowerCase();
   if (kind === "tool" && normalized.includes("search")) return "file-search";
@@ -952,7 +1012,7 @@ function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActi
   );
 }
 
-function ChatWorkspace({ project, user, token, messages, activeConversationId, onSend, busy, provider, requestId, streamingActivity, streamStartTime, streamElapsed, onStop }: { project: ProjectSummary; user: UserSummary | null; token: string; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamStartTime: number | null; streamElapsed: number; onStop: () => void }) {
+function ChatWorkspace({ project, user, token, messages, activeConversationId, onSend, busy, provider, requestId, streamingActivity, streamInterimNarration, streamWorkElapsedMs = 0, streamWorkSegmentStartedAt = null, streamOutputStarted, streamAnswerPhase = false, streamTick = 0, onStop }: { project: ProjectSummary; user: UserSummary | null; token: string; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamInterimNarration?: string; streamWorkElapsedMs?: number; streamWorkSegmentStartedAt?: number | null; streamOutputStarted: boolean; streamAnswerPhase?: boolean; streamTick?: number; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
@@ -1344,11 +1404,21 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
           const isStreaming = message.id.startsWith("streaming_");
           const isThinking = message.id.startsWith("pending_assistant_");
           const messageActivities = isStreaming ? activities : (message.activities ?? []);
-          const messageDuration = isStreaming ? streamElapsed : (message.workDuration ?? 0);
           const hasActivity = messageActivities.length > 0 || isStreaming;
           const hasContent = message.content.trim().length > 0;
+          const showRunningTimeline = isStreaming && !streamOutputStarted;
           const isCollapsed = timelineCollapsed[message.id] ?? true;
-          const showRunningTimeline = isStreaming;
+          void streamTick;
+          const timelineDurationMs = isStreaming
+            ? computeStreamingWorkMs(streamWorkElapsedMs, streamWorkSegmentStartedAt)
+            : (message.workDuration ?? 0);
+          const timelineTitle = showRunningTimeline
+            ? `Working for ${formatElapsedTime(timelineDurationMs)}`
+            : `Worked for ${formatElapsedTime(timelineDurationMs)}`;
+          const answerText = message.role === "assistant"
+            ? (isStreaming ? message.content : stripThinkingFromAnswer(message.content))
+            : message.content;
+          const liveInterimNarration = isStreaming && !streamAnswerPhase ? (streamInterimNarration ?? "") : "";
 
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
@@ -1376,30 +1446,32 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
                       showRunningTimeline ? (
                         <section className="worked-timeline worked-timeline-running" aria-label="Assistant activity">
                           <div className="worked-timeline-header" aria-live="polite">
-                            <span className="worked-timeline-title is-running">Working for {formatElapsedTime(messageDuration)}</span>
+                            <span className="worked-timeline-title is-running">{timelineTitle}</span>
                           </div>
                           <div className="worked-timeline-content">
-                            {isStreaming ? (() => {
-                              const streamThink = parseAssistantContent(message.content);
-                              return streamThink.thinkingBlocks.length > 0 || streamThink.streamingThinking ? (
-                                <ThinkDetails
-                                  blocks={streamThink.thinkingBlocks}
-                                  streamingBlock={streamThink.streamingThinking}
-                                />
-                              ) : null;
-                            })() : null}
                             {messageActivities.length > 0 ? messageActivities.map((act, i) => (
-                              <ActivityRow key={act.id ?? `${act.kind}-${act.label}-${i}`} activity={act} streaming={isStreaming} isLast={i === messageActivities.length - 1} />
+                              <ActivityRow
+                                key={act.id ?? `${act.kind}-${act.label}-${i}`}
+                                activity={act}
+                                streaming={true}
+                                isLast={i === messageActivities.length - 1 && !liveInterimNarration.trim()}
+                              />
                             )) : (
-                              <p className="activity-progress-text activity-progress-pending is-running">Thinking</p>
+                              <p className="activity-progress-text activity-progress-pending is-running">Working</p>
                             )}
                           </div>
                         </section>
                       ) : (
-                        <details className="worked-timeline worked-timeline-done" open={!isCollapsed} onToggle={(e) => setTimelineCollapsed(prev => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}>
+                        <details
+                          className={`worked-timeline worked-timeline-done${isStreaming && streamOutputStarted ? " worked-timeline-output-streaming" : ""}`}
+                          open={isStreaming && streamOutputStarted ? false : !isCollapsed}
+                          onToggle={(e) => setTimelineCollapsed((prev) => ({ ...prev, [message.id]: !(e.target as HTMLDetailsElement).open }))}
+                        >
                           <summary className="worked-timeline-header">
-                            <span className="worked-timeline-title">Worked for {formatElapsedTime(messageDuration)}</span>
-                            <Icon name="chevron-down" className="worked-timeline-chevron" />
+                            <span className="worked-timeline-header-label">
+                              <span className="worked-timeline-title">{timelineTitle}</span>
+                              <Icon name="chevron-down" className="worked-timeline-chevron" />
+                            </span>
                           </summary>
                           <div className="worked-timeline-content">
                             {messageActivities.map((act, i) => (
@@ -1409,11 +1481,13 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
                         </details>
                       )
                     ) : null}
+                    {liveInterimNarration.trim() ? (
+                      <div className="activity-context-block is-running">
+                        <Markdown source={liveInterimNarration} resolveImageUrl={resolveImageUrl} />
+                      </div>
+                    ) : null}
                     {hasContent ? (() => {
-                      const answerText = message.role === "assistant"
-                        ? (isStreaming ? parseAssistantContent(message.content).visibleText : stripThinkingFromAnswer(message.content))
-                        : message.content;
-                      if (!answerText.trim()) {
+                      if (!answerText.trim() || (isStreaming && !streamOutputStarted && !streamAnswerPhase)) {
                         return null;
                       }
                       return (
@@ -1823,8 +1897,12 @@ function Workspace({
   onDeleteProject,
   onStop,
   streamingActivity,
-  streamStartTime,
-  streamElapsed,
+  streamOutputStarted,
+  streamAnswerPhase,
+  streamInterimNarration,
+  streamWorkElapsedMs,
+  streamWorkSegmentStartedAt,
+  streamTick,
   restoringSession
 }: {
   project: ProjectSummary | null;
@@ -1860,8 +1938,12 @@ function Workspace({
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
   streamingActivity?: ChatStreamActivityEvent[];
-  streamStartTime: number | null;
-  streamElapsed: number;
+  streamOutputStarted: boolean;
+  streamAnswerPhase?: boolean;
+  streamInterimNarration?: string;
+  streamWorkElapsedMs?: number;
+  streamWorkSegmentStartedAt?: number | null;
+  streamTick?: number;
   restoringSession?: boolean;
 }) {
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
@@ -1906,7 +1988,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamStartTime={streamStartTime} streamElapsed={streamElapsed} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamOutputStarted={streamOutputStarted} {...(streamAnswerPhase !== undefined ? { streamAnswerPhase } : {})} {...(streamInterimNarration !== undefined ? { streamInterimNarration } : {})} {...(streamWorkElapsedMs !== undefined ? { streamWorkElapsedMs } : {})} {...(streamWorkSegmentStartedAt !== undefined ? { streamWorkSegmentStartedAt } : {})} {...(streamTick !== undefined ? { streamTick } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
       {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
@@ -2049,8 +2131,6 @@ export default function App() {
     [messages, visibleStreamState]
   );
   const visibleStreamingActivity = visibleStreamState?.activities ?? [];
-  const visibleStreamStartTime = visibleStreamState?.startedAt ?? null;
-  const visibleStreamElapsed = visibleStreamState ? Math.max(0, Date.now() - visibleStreamState.startedAt) + streamElapsedTick * 0 : 0;
 
   function clearAuth(nextBanner?: BannerState) {
     setToken("");
@@ -2239,16 +2319,20 @@ export default function App() {
     };
   }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
 
-  // Timer tick for visible streaming elapsed time
+  // Re-render once per second only while a Working-for segment is active
   useEffect(() => {
-    if (!visibleStreamState) {
+    if (!visibleStreamState || visibleStreamState.workSegmentStartedAt == null) {
       return;
     }
     const interval = setInterval(() => {
       setStreamElapsedTick((current) => current + 1);
     }, 1000);
     return () => clearInterval(interval);
-  }, [visibleStreamState?.conversationId]);
+  }, [
+    visibleStreamState?.conversationId,
+    visibleStreamState?.workSegmentStartedAt,
+    visibleStreamState?.streamTimelineFinalized
+  ]);
 
   useEffect(() => {
     if (!token || !selectedProject) return;
@@ -2492,12 +2576,20 @@ export default function App() {
       content: ""
     };
 
+    const turnStartedAt = Date.now();
+    setStreamElapsedTick(0);
     streamingTurnRef.current = {
       conversationId: targetConversationId,
       assistantId: streamingId,
       userId: optimisticUser.id,
       activities: [],
-      startedAt: Date.now()
+      startedAt: turnStartedAt,
+      interimNarration: "",
+      answerPhase: false,
+      workElapsedMs: 0,
+      workSegmentStartedAt: turnStartedAt,
+      workTimelinePaused: false,
+      streamTimelineFinalized: false
     };
     setConversationStreams((current) => ({
       ...current,
@@ -2506,7 +2598,13 @@ export default function App() {
         optimisticUser,
         streamingAssistant,
         activities: [],
-        startedAt: streamingTurnRef.current!.startedAt
+        startedAt: turnStartedAt,
+        interimNarration: "",
+        answerPhase: false,
+        workElapsedMs: 0,
+        workSegmentStartedAt: turnStartedAt,
+        workTimelinePaused: false,
+        streamTimelineFinalized: false
       }
     }));
     setMessages((current) => (activeConversationIdRef.current === targetConversationId ? [...current, optimisticUser, streamingAssistant] : current));
@@ -2521,9 +2619,11 @@ export default function App() {
 
     try {
       await sendChatMessageStream(token, projectId, message.trim(), {
-        onToken(content: string) {
+        onNarrationToken(content: string) {
           const turn = streamingTurnRef.current;
-          if (!turn || turn.assistantId !== streamingId || !turn.conversationId) return;
+          if (!turn || turn.assistantId !== streamingId || !turn.conversationId || turn.answerPhase) return;
+          pauseWorkingTimelineForStream(turn);
+          turn.interimNarration += content;
           setConversationStreams((current) => {
             const stream = current[turn.conversationId!];
             if (!stream) return current;
@@ -2531,7 +2631,70 @@ export default function App() {
               ...current,
               [turn.conversationId!]: {
                 ...stream,
-                streamingAssistant: { ...stream.streamingAssistant, content: stream.streamingAssistant.content + content }
+                interimNarration: turn.interimNarration,
+                ...streamingWorkFieldsFromTurn(turn)
+              }
+            };
+          });
+        },
+        onAnswerToken(content: string) {
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId || !turn.conversationId) return;
+          pauseWorkingTimelineForStream(turn);
+          if (!turn.answerPhase) {
+            turn.answerPhase = true;
+          }
+          setConversationStreams((current) => {
+            const stream = current[turn.conversationId!];
+            if (!stream) return current;
+            return {
+              ...current,
+              [turn.conversationId!]: {
+                ...stream,
+                streamingAssistant: { ...stream.streamingAssistant, content: stream.streamingAssistant.content + content },
+                ...streamingWorkFieldsFromTurn(turn)
+              }
+            };
+          });
+          if (turn.conversationId === activeConversationIdRef.current) {
+            setMessages((current) => current.map((m) => (m.id === streamingId ? { ...m, content: m.content + content } : m)));
+          }
+        },
+        onFinalAnswerStart() {
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId || !turn.conversationId) return;
+          pauseWorkingTimelineForStream(turn);
+          turn.answerPhase = true;
+          turn.interimNarration = "";
+          setConversationStreams((current) => {
+            const stream = current[turn.conversationId!];
+            if (!stream) return current;
+            return {
+              ...current,
+              [turn.conversationId!]: {
+                ...stream,
+                interimNarration: "",
+                ...streamingWorkFieldsFromTurn(turn)
+              }
+            };
+          });
+        },
+        onToken(content: string) {
+          const turn = streamingTurnRef.current;
+          if (!turn || turn.assistantId !== streamingId || !turn.conversationId) return;
+          pauseWorkingTimelineForStream(turn);
+          if (!turn.answerPhase) {
+            turn.answerPhase = true;
+          }
+          setConversationStreams((current) => {
+            const stream = current[turn.conversationId!];
+            if (!stream) return current;
+            return {
+              ...current,
+              [turn.conversationId!]: {
+                ...stream,
+                streamingAssistant: { ...stream.streamingAssistant, content: stream.streamingAssistant.content + content },
+                ...streamingWorkFieldsFromTurn(turn)
               }
             };
           });
@@ -2578,6 +2741,12 @@ export default function App() {
             }
             return [...current, event];
           })();
+          if (event.kind === "context") {
+            turn.interimNarration = "";
+          }
+          if (activitiesHaveRunningTools(turn.activities)) {
+            resumeWorkingTimelineForOngoingTask(turn);
+          }
           if (turn.conversationId) {
             setConversationStreams((current) => {
               const stream = current[turn.conversationId!];
@@ -2586,7 +2755,9 @@ export default function App() {
                 ...current,
                 [turn.conversationId!]: {
                   ...stream,
-                  activities: turn.activities
+                  activities: turn.activities,
+                  interimNarration: turn.interimNarration,
+                  ...streamingWorkFieldsFromTurn(turn)
                 }
               };
             });
@@ -2663,8 +2834,27 @@ export default function App() {
         },
         onDone(response) {
           const turn = streamingTurnRef.current;
+          if (turn?.assistantId === streamingId && turn.conversationId) {
+            pauseWorkingTimelineForStream(turn);
+            turn.streamTimelineFinalized = true;
+            turn.workTimelinePaused = true;
+            setConversationStreams((current) => {
+              const stream = current[turn.conversationId!];
+              if (!stream) return current;
+              return {
+                ...current,
+                [turn.conversationId!]: {
+                  ...stream,
+                  streamTimelineFinalized: true,
+                  ...streamingWorkFieldsFromTurn(turn)
+                }
+              };
+            });
+          }
           const capturedActivities = turn?.assistantId === streamingId ? [...turn.activities] : [];
-          const finalDuration = turn?.assistantId === streamingId ? Date.now() - turn.startedAt : 0;
+          const finalDuration = turn?.assistantId === streamingId
+            ? computeStreamingWorkMs(turn.workElapsedMs, turn.workSegmentStartedAt)
+            : 0;
           const completedConversationId = turn?.conversationId ?? response.conversationId ?? null;
           const finalAssistantMessage = {
             ...response.assistantMessage,
@@ -3015,8 +3205,12 @@ export default function App() {
           onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }}
           onStop={handleStop}
           streamingActivity={visibleStreamingActivity}
-          streamStartTime={visibleStreamStartTime}
-          streamElapsed={visibleStreamElapsed}
+          streamOutputStarted={streamShowsWorkedFor(visibleStreamState)}
+          {...(visibleStreamState ? { streamAnswerPhase: visibleStreamState.answerPhase } : {})}
+          streamTick={streamElapsedTick}
+          {...(visibleStreamState ? { streamInterimNarration: visibleStreamState.interimNarration } : {})}
+          {...(visibleStreamState ? { streamWorkElapsedMs: visibleStreamState.workElapsedMs } : {})}
+          {...(visibleStreamState ? { streamWorkSegmentStartedAt: visibleStreamState.workSegmentStartedAt } : {})}
           restoringSession={bootstrapping}
         />
       ) : null}

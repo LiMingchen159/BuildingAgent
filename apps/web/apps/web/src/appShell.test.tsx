@@ -23,21 +23,21 @@ beforeEach(() => {
  window.localStorage.clear();
 });
 
-describe("BuildingAgent shell and primitives via workspace-relative filter", () => {
+describe("BuildingGPT shell and primitives via workspace-relative filter", () => {
  it("ships a non-empty static fallback and clears it when React mounts", async () => {
  const rootFromFile = getRootFromIndexHtml();
- expect(rootFromFile.textContent).toMatch(/BuildingAgent/i);
+ expect(rootFromFile.textContent).toMatch(/BuildingGPT/i);
  expect(rootFromFile.querySelector('[role="status"]')?.textContent).toMatch(/safe startup mode/i);
 
- const { mountBuildingAgent } = await import("../../../src/main");
+ const { mountBuildingGPT } = await import("../../../src/main");
  const root = document.createElement("div");
  root.id = "root";
  root.innerHTML = rootFromFile.innerHTML;
  document.body.append(root);
- mountBuildingAgent(root);
+ mountBuildingGPT(root);
 
  expect(root.querySelector("[data-static-fallback]")).toBeNull();
- expect(await screen.findByRole("heading", { name: /sign in to buildingagent/i })).toBeInTheDocument();
+ expect(await screen.findByRole("heading", { name: /sign in to buildinggpt/i })).toBeInTheDocument();
  await waitFor(() => expect(screen.queryByText(/safe startup mode/i)).not.toBeInTheDocument());
  });
 
@@ -85,11 +85,11 @@ describe("BuildingAgent shell and primitives via workspace-relative filter", () 
 
  expect(screen.getByRole("heading", { name: /restoring your saved session/i })).toBeInTheDocument();
  expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toHaveTextContent(/restoring your saved session/i);
- expect(screen.queryByText(/checking your saved buildingagent session/i)).not.toBeInTheDocument();
+ expect(screen.queryByText(/checking your saved buildinggpt session/i)).not.toBeInTheDocument();
  expect(screen.queryByText(/startup shell only/i)).not.toBeInTheDocument();
  expect(document.body).not.toHaveTextContent(/bearer|api[-_ ]?key|seed-token-ada|secret/i);
 
  resolveSession(new Response(JSON.stringify({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }), { status: 200, headers: { "content-type": "application/json" } }));
- expect(await screen.findByRole("heading", { name: /buildingagent workspace/i })).toBeInTheDocument();
+ expect(await screen.findByRole("heading", { name: /buildinggpt workspace/i })).toBeInTheDocument();
  });
 });

@@ -126,7 +126,11 @@ function liveResult(base: {
 
 export async function fetchEnteliLiveValue(input: BmsLiveReadInput): Promise<BmsLiveReadResult> {
   const enteli = resolveElementEnteliConfig();
-  const catalogBase = (input.bmsDatabaseApiUrl ?? process.env.BMS_DATABASE_API_URL ?? "http://127.0.0.1:8765").replace(/\/+$/, "");
+  const catalogBase = (
+    input.bmsDatabaseApiUrl ??
+    process.env.BMS_DATABASE_API_URL ??
+    "http://127.0.0.1:8765"
+  ).replace(/\/+$/, "");
 
   let apiPath = input.apiPath?.trim() ?? "";
   let pointName = input.pointName?.trim();

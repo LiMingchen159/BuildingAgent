@@ -30,3 +30,25 @@ coverage/
 .cache/
 tmp/
 .temp/
+.ref/
+
+# Local runtime state and imported knowledge-base working copies
+data/*.log
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/agent_memory.json
+data/scheduled_jobs.json
+data/tool_call_logs.json
+apps/data/
+Knowledge Base/
+
+# Local project imports and generated analysis artifacts.
+data/project_alpha/
+data/project_element/kb/Elements Chiller Plant API.xlsx
+data/project_element/kb/Poc Project-20260517T050008Z-3-001/
+data/project_element/kb/bms_guide.md
+data/project_element/kb/new_model_0609.ttl
+data/project_element/memories/
+data/project_element/repository/
+data/project_mortar/

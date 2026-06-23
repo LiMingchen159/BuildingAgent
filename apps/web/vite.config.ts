@@ -7,7 +7,9 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": "http://127.0.0.1:3000",
-      "/health": "http://127.0.0.1:3000"
+      "/health": "http://127.0.0.1:3000",
+      // Direct collector (no auth) — mirrors production nginx /bms → :8765
+      "/bms": "http://127.0.0.1:8765"
     }
   },
   build: {

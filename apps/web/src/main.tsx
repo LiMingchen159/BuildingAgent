@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles.css";
 
-export function mountBuildingAgent(root: HTMLElement): void {
+export function mountBuildingGPT(root: HTMLElement): void {
   root.querySelector("[data-static-fallback]")?.setAttribute("data-static-fallback", "superseded");
   root.replaceChildren();
 
@@ -17,5 +17,5 @@ export function mountBuildingAgent(root: HTMLElement): void {
 const root = document.getElementById("root");
 
 if (root) {
-  mountBuildingAgent(root);
+  mountBuildingGPT(root);
 }

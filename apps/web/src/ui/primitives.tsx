@@ -68,7 +68,7 @@ function classNames(...names: Array<string | false | null | undefined>): string 
 }
 
 export function BrandMark() {
-  return <span className="brand-mark" aria-hidden="true">BA</span>;
+  return <span className="brand-mark" aria-hidden="true">BG</span>;
 }
 
 export function BrandHeader({ authenticated = false, onSignOut }: { authenticated?: boolean | undefined; onSignOut?: (() => void) | undefined }) {
@@ -76,7 +76,7 @@ export function BrandHeader({ authenticated = false, onSignOut }: { authenticate
     <header className="topbar">
       <div>
         <BrandMark />
-        <span className="brand-name">BuildingAgent</span>
+        <span className="brand-name">BuildingGPT</span>
       </div>
       {authenticated && onSignOut ? <button className="secondary" type="button" onClick={onSignOut}>Sign out</button> : null}
     </header>
@@ -153,7 +153,7 @@ export function EmptyState({ children, title = "Nothing to show yet" }: EmptySta
   );
 }
 
-export function LoadingSkeleton({ label = "Loading BuildingAgent workspace...", lines = 3 }: LoadingSkeletonProps) {
+export function LoadingSkeleton({ label = "Loading BuildingGPT workspace...", lines = 3 }: LoadingSkeletonProps) {
   const count = Math.max(1, Math.min(lines, 8));
   return (
     <section className="loading-skeleton" role="status" aria-live="polite" aria-label={label}>

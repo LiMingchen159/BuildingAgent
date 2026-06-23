@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  PROVIDER_UNAVAILABLE_MESSAGE,
   ProviderError,
   createDeterministicMockProvider,
   createOpenAICompatibleProvider,
+  formatProviderFailureMessage,
   redactedProviderError,
   resolveChatProvider
 } from "./providers.js";
@@ -127,10 +129,38 @@ describe("chat provider resolution and adapters", () => {
     });
   });
 
+  it("retries transient provider failures before surfacing an error", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const provider = createOpenAICompatibleProvider({
+      apiKey: "provider-test-key",
+      fetch: async () => {
+        calls += 1;
+        if (calls < 3) {
+          return jsonResponse({ error: { message: "busy" } }, { status: 503 });
+        }
+        return jsonResponse({ choices: [{ message: { content: "Recovered" } }] });
+      }
+    });
+
+    const promise = provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_test",
+      messages: [{ role: "user", content: "Hello" }]
+    });
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(calls).toBe(3);
+    expect(result.text).toBe("Recovered");
+    vi.useRealTimers();
+  });
+
   it("normalizes HTTP and malformed response failures without exposing provider secrets", async () => {
     const httpProvider = createOpenAICompatibleProvider({
       apiKey: "provider-test-key",
-      fetch: async () => jsonResponse({ error: { message: "nope" } }, { status: 429 })
+      fetch: async () => jsonResponse({ error: { message: "nope" } }, { status: 401 })
     });
 
     await expect(
@@ -140,7 +170,7 @@ describe("chat provider resolution and adapters", () => {
         requestId: "req_test",
         messages: [{ role: "user", content: "Hello" }]
       })
-    ).rejects.toMatchObject({ code: "provider_http_error", status: 429 });
+    ).rejects.toMatchObject({ code: "provider_http_error", status: 401 });
 
     try {
       await httpProvider.complete({
@@ -151,7 +181,7 @@ describe("chat provider resolution and adapters", () => {
       });
     } catch (error) {
       const redacted = redactedProviderError(error);
-      expect(redacted).toMatchObject({ code: "provider_http_error", status: 429 });
+      expect(redacted).toMatchObject({ code: "provider_http_error", status: 401 });
       assertNoSecrets(redacted);
     }
 
@@ -170,7 +200,13 @@ describe("chat provider resolution and adapters", () => {
   });
 
   it("allows explicit deterministic fallback provider construction for configured failure paths", async () => {
-    const fallback = createDeterministicMockProvider("provider_error");
+    const sourceError = new ProviderError("Chat provider returned an unsuccessful status.", {
+      code: "provider_http_error",
+      status: 400,
+      provider: { id: "openai-compatible", mode: "real", model: "deepseek-v4-pro", status: "400" },
+      responseDetail: "maximum context length exceeded"
+    });
+    const fallback = createDeterministicMockProvider("provider_http_error", sourceError);
     const result = await fallback.complete({
       projectId: "project_alpha",
       userId: "user_ada",
@@ -179,6 +215,49 @@ describe("chat provider resolution and adapters", () => {
     });
 
     expect(result.fallbackUsed).toBe(true);
-    expect(result.provider).toMatchObject({ fallbackReason: "provider_error", mode: "mock" });
+    expect(result.text).toContain("HTTP status: 400");
+    expect(result.text).toContain("provider_http_error");
+    expect(result.text).toContain("maximum context length exceeded");
+    expect(result.text).not.toBe(PROVIDER_UNAVAILABLE_MESSAGE);
+    expect(result.provider).toMatchObject({ fallbackReason: "provider_http_error", mode: "mock" });
+  });
+
+  it("formats provider failures with upstream response detail", () => {
+    const message = formatProviderFailureMessage(
+      new ProviderError("Chat provider returned an unsuccessful status.", {
+        code: "provider_http_error",
+        status: 400,
+        provider: { id: "openai-compatible", mode: "real", model: "deepseek-v4-pro" },
+        responseDetail: "request timeout after 120s"
+      })
+    );
+    expect(message).toContain("HTTP status: 400");
+    expect(message).toContain("request timeout after 120s");
+    expect(message).toContain("deepseek-v4-pro");
+  });
+
+  it("captures sanitized HTTP error bodies from the provider", async () => {
+    const provider = createOpenAICompatibleProvider({
+      apiKey: "provider-test-key",
+      baseUrl: "https://provider.example/v1",
+      fetch: async () =>
+        new Response(JSON.stringify({ error: { message: "maximum context length exceeded" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" }
+        })
+    });
+
+    await expect(
+      provider.complete({
+        projectId: "project_alpha",
+        userId: "user_ada",
+        requestId: "req_test",
+        messages: [{ role: "user", content: "Hello" }]
+      })
+    ).rejects.toMatchObject({
+      code: "provider_http_error",
+      status: 400,
+      responseDetail: "maximum context length exceeded"
+    });
   });
 });

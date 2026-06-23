@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within, type RenderResult } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./ui/Markdown";
 import { ChatImageGallery } from "./ui/ChatImageGallery";
@@ -9,6 +10,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function renderInMessage(ui: ReactElement): RenderResult {
+  return render(
+    <article className="message message-assistant">
+      <div className="message-content">
+        <div className="final-answer">{ui}</div>
+      </div>
+    </article>
+  );
+}
+
+const copFormulaSource = [
+  "## COP (製冷效能係數) for Your Chillers",
+  "",
+  "COP = Coefficient of Performance — the key efficiency metric for chillers:",
+  "",
+  "$$ \\text{COP} = \\frac{\\text{Cooling Output (kW)}}{\\text{Electrical Input (kW)}} $$"
+].join("\n");
+
 describe("Markdown renderer", () => {
   it("renders headings, lists, inline formatting, and links with safe target", () => {
     render(
@@ -16,7 +35,7 @@ describe("Markdown renderer", () => {
         source={[
           "# Title",
           "",
-          "Paragraph with **bold**, _italic_, and `inline()` plus a [BuildingAgent](https://example.test) link.",
+          "Paragraph with **bold**, _italic_, and `inline()` plus a [BuildingGPT](https://example.test) link.",
           "",
           "- alpha",
           "- beta",
@@ -28,7 +47,7 @@ describe("Markdown renderer", () => {
     );
 
     expect(screen.getByRole("heading", { level: 1, name: "Title" })).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: "BuildingAgent" });
+    const link = screen.getByRole("link", { name: "BuildingGPT" });
     expect(link).toHaveAttribute("href", "https://example.test");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -91,11 +110,103 @@ describe("Markdown renderer", () => {
     expect(within(table).getByRole("cell", { name: "Alpha" })).toBeInTheDocument();
   });
 
+  it("does not break markdown links that already wrap outputs paths", () => {
+    const source =
+      "- CSV: [chiller_plant_bms_point_list.csv](outputs/chiller_plant_bms_point_list.csv)";
+    render(
+      <Markdown
+        source={source}
+        resolveLinkUrl={(url) => `/api/projects/project_element/repository/files/${url}?token=test`}
+      />
+    );
+    const link = screen.getByRole("link", { name: "chiller_plant_bms_point_list.csv" });
+    expect(link.getAttribute("href")).toBe(
+      "/api/projects/project_element/repository/files/outputs/chiller_plant_bms_point_list.csv?token=test"
+    );
+  });
+
+  it("renders repository output download links when resolveLinkUrl is provided", () => {
+    render(
+      <Markdown
+        source={"Download: [chiller_plant_bms_point_list.csv](outputs/chiller_plant_bms_point_list.csv)"}
+        resolveLinkUrl={(url) => `/api/projects/project_element/repository/files/${url}?token=test`}
+      />
+    );
+    const link = screen.getByRole("link", { name: "chiller_plant_bms_point_list.csv" });
+    expect(link).toHaveAttribute(
+      "href",
+      "/api/projects/project_element/repository/files/outputs/chiller_plant_bms_point_list.csv?token=test"
+    );
+    expect(link).toHaveAttribute("download", "chiller_plant_bms_point_list.csv");
+  });
+
   it("renders blockquotes and horizontal rules", () => {
     const { container } = render(<Markdown source={"> A quoted line.\n\n---\n\nAfter rule."} />);
     expect(container.querySelector("blockquote")?.textContent).toContain("A quoted line.");
-    expect(container.querySelector("hr")).toBeInTheDocument();
+    expect(container.querySelector(".md-break")).toBeInTheDocument();
     expect(screen.getByText("After rule.")).toBeInTheDocument();
+  });
+
+  it("renders display and inline LaTeX formulas inside message DOM", () => {
+    const { container } = renderInMessage(
+      <Markdown
+        source={[
+          "$$ \\text{COP} = \\frac{\\text{Cooling Output (kW)}}{\\text{Electrical Input (kW)}} $$",
+          "",
+          "Inline $E = mc^2$ example."
+        ].join("\n")}
+      />
+    );
+    expect(container.querySelector(".katex-display")).toBeInTheDocument();
+    expect(container.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).toMatch(/COP/i);
+    expect(container.textContent).toMatch(/mc/);
+  });
+
+  it("renders COP fraction with visible frac-line inside message DOM", () => {
+    const { container } = renderInMessage(<Markdown source={copFormulaSource} />);
+
+    const fracLine = container.querySelector(".katex-display .frac-line");
+    expect(fracLine).toBeInTheDocument();
+
+    const styles = window.getComputedStyle(fracLine!);
+    expect(styles.borderBottomStyle).not.toBe("none");
+    expect(Number.parseFloat(styles.borderBottomWidth)).toBeGreaterThan(0);
+
+    const display = container.querySelector(".katex-display");
+    expect(display).toBeInTheDocument();
+    const displayStyles = window.getComputedStyle(display!);
+    expect(displayStyles.overflowY).not.toBe("auto");
+    expect(displayStyles.overflowY).not.toBe("scroll");
+
+    expect(container.textContent).toMatch(/Cooling/i);
+    expect(container.textContent).toMatch(/Electrical/i);
+  });
+
+  it("normalizes GPT-style \\(...\\) and \\[...\\] delimiters", () => {
+    const { container } = renderInMessage(
+      <Markdown
+        source={[
+          "\\[ E = mc^2 \\]",
+          "",
+          "Inline \\(a + b\\) example."
+        ].join("\n")}
+      />
+    );
+
+    expect(container.querySelector(".katex-display")).toBeInTheDocument();
+    expect(container.textContent).toMatch(/mc/);
+    expect(container.textContent).toMatch(/a/);
+    expect(container.textContent).toMatch(/b/);
+  });
+
+  it("does not normalize math delimiters inside fenced code blocks", () => {
+    const { container } = renderInMessage(
+      <Markdown source={"```text\n\\(not math\\)\n```\n\nReal \\(x\\) math."} />
+    );
+
+    expect(container.querySelector("pre")?.textContent).toContain("\\(not math\\)");
+    expect(container.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(1);
   });
 });
 

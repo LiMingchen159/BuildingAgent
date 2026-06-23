@@ -1,5 +1,5 @@
 import type { ChatCompletionResult, ChatProvider, ChatToolCall, ProviderChatMessage } from "../providers.js";
-import type { ChatMessage, ChatMessageImage, KnowledgeBaseDocument, RepositoryArtifact } from "../seed.js";
+import type { ChatMessage, ChatMessageDownload, ChatMessageImage, KnowledgeBaseDocument, RepositoryArtifact } from "../seed.js";
 
 export type AgentLifecycleEventType =
   | "user_message_received"
@@ -12,14 +12,21 @@ export type AgentLifecycleEventType =
   | "memory_synced"
   | "loop_started"
   | "progress"
-  | "thinking"
-  | "turn_completed";
+  /** Agent work narration shown in Worked-for gray area (maps to narration_token). */
+  | "work_token"
+  /** Explicit gate: subsequent answer_token chunks belong in final-answer. */
+  | "answer_start"
+  /** Final answer chunk (maps to SSE answer_token). */
+  | "answer_token"
+  | "answer_end"
+  | "turn_completed"
+  | "validation_warning";
 
 export interface AgentLifecycleEvent {
   type: AgentLifecycleEventType;
   message: string;
   at: string;
-  metadata?: Record<string, string | number | boolean>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AgentTurnRequest {
@@ -27,6 +34,7 @@ export interface AgentTurnRequest {
   userId: string;
   requestId: string;
   conversationId: string;
+  canConfigure: boolean;
   messages: ChatMessage[];
   providerMessages: ProviderChatMessage[];
   provider: ChatProvider;
@@ -38,6 +46,7 @@ export interface AgentTurnResult {
   completion: ChatCompletionResult;
   events: AgentLifecycleEvent[];
   generatedImages: ChatMessageImage[];
+  generatedDownloads: ChatMessageDownload[];
 }
 
 export interface AgentLoopResult {
@@ -46,6 +55,7 @@ export interface AgentLoopResult {
   toolCallHistory: Array<{ name: string; args: Record<string, unknown>; result: Record<string, unknown> }>;
   iterations: number;
   generatedImages: ChatMessageImage[];
+  generatedDownloads: ChatMessageDownload[];
 }
 
 export interface AgentStreamEvent {
@@ -70,7 +80,10 @@ export interface AgentToolContext {
   userId: string;
   requestId: string;
   conversationId: string;
+  canConfigure: boolean;
   messages: ChatMessage[];
+  /** OpenAI tool_call id — used for compaction cache filenames. */
+  toolCallId?: string;
 }
 
 export interface AgentTool {

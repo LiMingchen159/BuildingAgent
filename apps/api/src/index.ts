@@ -43,8 +43,8 @@ const app = buildServer({ persist: true });
 
 try {
   await app.listen({ port, host });
-  app.log.info({ host, port }, "BuildingAgent API listening");
+  app.log.info({ host, port }, "BuildingGPT API listening");
 } catch (error) {
-  app.log.error({ err: error }, "BuildingAgent API failed to start");
+  app.log.error({ err: error }, "BuildingGPT API failed to start");
   process.exit(1);
 }

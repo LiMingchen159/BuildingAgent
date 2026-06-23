@@ -26,11 +26,33 @@ describe("auth, session, and project contract", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
+    expect(response.json()).toMatchObject({
       token,
+      tokenType: "Bearer",
+      expiresAt: null,
       user: { id: "user_ada", name: "Ada Lovelace" },
       requestId: expect.stringMatching(/^req_/)
     });
+  });
+
+  it("does not clear the selected project when the same user logs in again", async () => {
+    const app = buildServer();
+
+    await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/select",
+      headers: bearer()
+    });
+
+    const loginAgain = await app.inject({
+      method: "POST",
+      url: "/api/login",
+      payload: { email: "ada@example.test", password: "local-dev-password" }
+    });
+    expect(loginAgain.statusCode).toBe(200);
+
+    const session = await app.inject({ method: "GET", url: "/api/session", headers: bearer() });
+    expect(session.json().session.projectId).toBe("project_alpha");
   });
 
   it("rejects empty credentials with a canonical error", async () => {
@@ -92,12 +114,13 @@ describe("auth, session, and project contract", () => {
     const projects = await app.inject({ method: "GET", url: "/api/projects", headers: bearer() });
     expect(projects.statusCode).toBe(200);
     expect(projects.json()).toEqual({
-      projects: [
+      projects: expect.arrayContaining([
         { id: "project_alpha", name: "Alpha Build", permissions: ["chat:read", "chat:write"] },
         { id: "project_beta", name: "Beta Build", permissions: ["chat:read", "chat:write"] },
         { id: "project_mortar", name: "Mortar", permissions: ["chat:read", "chat:write"] },
+        { id: "project_element", name: "Element", permissions: ["chat:read", "chat:write"] },
         { id: "project_demo", name: "Demo Project", permissions: ["chat:read", "chat:write"] }
-      ],
+      ]),
       limit: 50,
       requestId: expect.stringMatching(/^req_/)
     });

@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { resolveUserIdForToken } from "./authTokens.js";
 import type { Permission, SeedMembership, SeedStore, SessionState } from "./seed.js";
 
 export interface ApiSessionContext {
@@ -78,6 +79,14 @@ export function getPermissionsForSelectedProject(store: SeedStore, session: Sess
   return membershipFor(store, session.userId, session.selectedProjectId)?.permissions ?? [];
 }
 
+export function readSessionForToken(store: SeedStore, token: string, userId: string): SessionState {
+  return store.sessionsByToken[token] ?? { userId, selectedProjectId: null };
+}
+
+export function writeSessionForToken(store: SeedStore, token: string, session: SessionState): void {
+  store.sessionsByToken[token] = session;
+}
+
 export function authenticateRequest(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -90,13 +99,12 @@ export function authenticateRequest(
     return sendError(request, reply, 401, "auth_missing", "Missing bearer token.");
   }
 
-  const userId = store.tokens[token];
+  const userId = resolveUserIdForToken(store, token);
   if (!userId) {
-    return sendError(request, reply, 401, "auth_invalid", "Invalid bearer token.");
+    return sendError(request, reply, 401, "auth_invalid", "Invalid or expired bearer token.");
   }
 
-  const session = store.sessionsByToken[token] ?? { userId, selectedProjectId: null };
-  store.sessionsByToken[token] = session;
+  const session = readSessionForToken(store, token, userId);
 
   return {
     token,

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ChatToolDefinition } from "../providers.js";
+import { compactToolResult } from "./toolResultCompaction.js";
 import type { AgentTool, AgentToolContext, AgentToolSchema } from "./types.js";
 
 export interface ToolDispatchResult {
@@ -73,7 +74,8 @@ export class AgentToolRegistry {
     }
 
     try {
-      const result = await tool.run(args, context);
+      const rawResult = await tool.run(args, context);
+      const result = compactToolResult(rawResult, context, name, args);
       this.recordLog({ tool: name, category: tool.category, args, result, error: null, startedAt, context });
       return { tool: name, result };
     } catch (error) {

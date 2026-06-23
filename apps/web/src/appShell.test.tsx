@@ -23,36 +23,36 @@ beforeEach(() => {
  window.localStorage.clear();
 });
 
-describe("BuildingAgent no-blank HTML shell", () => {
+describe("BuildingGPT no-blank HTML shell", () => {
  it("ships non-empty tracked #root fallback markup with brand, skeleton loading copy, and mock-only safety language", () => {
  const root = getRootFromIndexHtml();
 
  expect(root.innerHTML.trim()).not.toHaveLength(0);
  expect(root.querySelector("[data-static-fallback]")).toBeTruthy();
- expect(root.textContent).toMatch(/BuildingAgent/i);
+ expect(root.textContent).toMatch(/BuildingGPT/i);
  expect(root.textContent).toMatch(/loading|preparing/i);
  expect(root.querySelector(".html-fallback-skeleton")).toBeTruthy();
  expect(root.textContent).toMatch(/safe startup|preparing/i);
  expect(root.querySelector("[data-static-fallback]")?.textContent).toMatch(/safe startup mode/i);
  });
 
- it("mountBuildingAgent removes the static fallback before normal React rendering", async () => {
- const { mountBuildingAgent } = await import("./main");
+ it("mountBuildingGPT removes the static fallback before normal React rendering", async () => {
+ const { mountBuildingGPT } = await import("./main");
  const root = document.createElement("div");
  root.id = "root";
  root.innerHTML = getRootFromIndexHtml().innerHTML;
  document.body.append(root);
  expect(root.querySelector("[data-static-fallback]")).toBeTruthy();
 
- mountBuildingAgent(root);
+ mountBuildingGPT(root);
 
  expect(root.querySelector("[data-static-fallback]")).toBeNull();
- expect(await screen.findByRole("heading", { name: /sign in to buildingagent/i })).toBeInTheDocument();
+ expect(await screen.findByRole("heading", { name: /sign in to buildinggpt/i })).toBeInTheDocument();
  await waitFor(() => expect(screen.queryByText(/safe startup mode/i)).not.toBeInTheDocument());
  });
 });
 
-describe("BuildingAgent reusable UI primitives", () => {
+describe("BuildingGPT reusable UI primitives", () => {
  it("renders compact overlay toasts with optional diagnostics and no secret-like fields", () => {
  const { rerender } = render(<Banner tone="error" title="Could not load session" message="Retry with a valid session." code="auth_invalid" requestId="req_123" />);
 

@@ -90,12 +90,15 @@ export interface ProviderErrorOptions {
   status?: number;
   provider?: ProviderMetadata;
   cause?: unknown;
+  /** Sanitized upstream response snippet (HTTP error bodies, etc.). */
+  responseDetail?: string;
 }
 
 export class ProviderError extends Error {
   readonly code: string;
   readonly status?: number;
   readonly provider?: ProviderMetadata;
+  readonly responseDetail?: string;
 
   constructor(message: string, options: ProviderErrorOptions) {
     super(message);
@@ -109,6 +112,9 @@ export class ProviderError extends Error {
     }
     if (options.cause !== undefined) {
       this.cause = options.cause;
+    }
+    if (options.responseDetail !== undefined) {
+      this.responseDetail = options.responseDetail;
     }
   }
 }
@@ -124,6 +130,103 @@ export interface ResolveChatProviderOptions {
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const MOCK_MODEL = "deterministic-local-mock";
+/** Five total attempts (initial + 4 retries) before surfacing a provider error. */
+const PROVIDER_FETCH_MAX_RETRIES = 4;
+
+export const PROVIDER_UNAVAILABLE_MESSAGE =
+  "I am unable to connect to a real LLM provider right now. Configure the LLM provider credentials and base URL to enable BuildingGPT streaming.";
+
+function sanitizeProviderErrorDetail(value: string): string {
+  return value
+    .replace(/[A-Za-z0-9_./\\-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_./\\-]*/gi, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 400);
+}
+
+async function readProviderErrorDetail(response: Response): Promise<string | undefined> {
+  try {
+    const text = await response.text();
+    if (!text.trim()) {
+      return undefined;
+    }
+    try {
+      const body = JSON.parse(text) as Record<string, unknown>;
+      const nested = body.error;
+      if (typeof nested === "object" && nested !== null) {
+        const nestedMessage = (nested as { message?: unknown }).message;
+        if (typeof nestedMessage === "string" && nestedMessage.trim()) {
+          return sanitizeProviderErrorDetail(nestedMessage);
+        }
+      }
+      if (typeof body.message === "string" && body.message.trim()) {
+        return sanitizeProviderErrorDetail(body.message);
+      }
+    } catch {
+      // fall through to raw text
+    }
+    return sanitizeProviderErrorDetail(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** User-facing message when the real LLM provider fails (fallback or hard error). */
+export function formatProviderFailureMessage(error: unknown): string {
+  if (error instanceof ProviderError) {
+    if (error.code === "provider_not_configured") {
+      return PROVIDER_UNAVAILABLE_MESSAGE;
+    }
+
+    const model = error.provider?.model;
+    const lines = ["BuildingGPT could not finish this turn — the LLM provider returned an error."];
+    if (model) {
+      lines.push(`Model: ${model}.`);
+    }
+    if (error.status !== undefined) {
+      lines.push(`HTTP status: ${error.status}.`);
+    }
+    lines.push(`Error code: ${error.code}.`);
+    if (error.responseDetail) {
+      lines.push(`Provider said: ${error.responseDetail}`);
+    } else if (error.message && !error.message.includes("unsuccessful status") && !error.message.includes("request failed")) {
+      lines.push(sanitizeProviderErrorDetail(error.message));
+    }
+    lines.push("If this keeps happening, check the provider credentials, base URL, and model.");
+    return lines.join(" ");
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return `BuildingGPT could not finish this turn — the LLM provider failed (${sanitizeProviderErrorDetail(error)}).`;
+  }
+
+  return PROVIDER_UNAVAILABLE_MESSAGE;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function isRetriableProviderError(error: unknown): boolean {
+  if (!(error instanceof ProviderError)) {
+    return false;
+  }
+  if (error.code === "provider_request_failed") {
+    return true;
+  }
+  if (error.code === "provider_http_error") {
+    const status = error.status ?? 0;
+    return status === 429 || status >= 500;
+  }
+  return false;
+}
+
+function providerRetryDelayMs(error: unknown, attempt: number): number {
+  if (error instanceof ProviderError && error.status === 429) {
+    return 5000 + Math.floor(Math.random() * 5000);
+  }
+  return Math.min(1000 * 2 ** attempt, 8000);
+}
 
 function nonEmpty(value: string | undefined): string | null {
   if (typeof value !== "string") {
@@ -239,14 +342,15 @@ function mapProgressEvent(eventName: string | null, payload: Record<string, unkn
   return result;
 }
 
-export function createDeterministicMockProvider(reason = "local_default"): ChatProvider {
+export function createDeterministicMockProvider(reason = "local_default", sourceError?: unknown): ChatProvider {
   const metadata = fallbackMetadata(reason);
+  const text = reason === "local_default"
+    ? PROVIDER_UNAVAILABLE_MESSAGE
+    : formatProviderFailureMessage(sourceError);
 
   return {
     metadata,
     async complete(_request) {
-      const text = "I am unable to connect to a real LLM provider right now. Configure `BUILDING_AGENT_LLM_API_KEY` and `BUILDING_AGENT_LLM_BASE_URL` to enable Hermes streaming.";
-
       return {
         text,
         provider: metadata,
@@ -371,7 +475,7 @@ export function createDeterministicMockProviderWithTools(overrides: Partial<Chat
             `1. Searched the knowledge base for relevant files and schemas\n`,
             `2. Read the relevant configuration and data files\n`,
             `3. Analyzed the results to provide actionable insights\n\n`,
-            "I am unable to connect to a real LLM provider right now. Configure BUILDING_AGENT_LLM_API_KEY and BUILDING_AGENT_LLM_BASE_URL to enable Hermes streaming.",
+            PROVIDER_UNAVAILABLE_MESSAGE,
           ].join(""),
           provider: metadata,
           fallbackUsed: false
@@ -390,7 +494,7 @@ export function createDeterministicMockProviderWithTools(overrides: Partial<Chat
         };
       }
 
-      const text = "I am unable to connect to a real LLM provider right now. Configure `BUILDING_AGENT_LLM_API_KEY` and `BUILDING_AGENT_LLM_BASE_URL` to enable Hermes streaming.";
+      const text = PROVIDER_UNAVAILABLE_MESSAGE;
 
       return { text, provider: metadata, fallbackUsed: false };
     },
@@ -520,35 +624,55 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
 
     return deltas;
   }
+
+  async function postChatCompletions(request: ChatCompletionRequest): Promise<Response> {
+    let lastError: unknown = null;
+    const init: RequestInit = {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${options.apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(buildRequestBody(request)),
+      ...(request.signal ? { signal: request.signal } : {})
+    };
+
+    for (let attempt = 0; attempt <= PROVIDER_FETCH_MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetchImpl(`${baseUrl}/chat/completions`, init);
+        if (!response.ok) {
+          const responseDetail = await readProviderErrorDetail(response);
+          throw new ProviderError("Chat provider returned an unsuccessful status.", {
+            code: "provider_http_error",
+            status: response.status,
+            provider: { ...metadata, status: String(response.status) },
+            ...(responseDetail ? { responseDetail } : {})
+          });
+        }
+        return response;
+      } catch (cause) {
+        lastError = cause instanceof ProviderError
+          ? cause
+          : new ProviderError("Chat provider request failed.", {
+              code: "provider_request_failed",
+              provider: metadata,
+              cause
+            });
+        if (attempt < PROVIDER_FETCH_MAX_RETRIES && isRetriableProviderError(lastError)) {
+          await sleep(providerRetryDelayMs(lastError, attempt));
+          continue;
+        }
+        throw lastError;
+      }
+    }
+
+    throw lastError;
+  }
+
   return {
     metadata,
     async complete(request) {
-      let response: Response;
-      try {
-        response = await fetchImpl(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${options.apiKey}`,
-            "content-type": "application/json"
-          },
-          body: JSON.stringify(buildRequestBody(request)),
-          ...(request.signal ? { signal: request.signal } : {})
-        });
-      } catch (cause) {
-        throw new ProviderError("Chat provider request failed.", {
-          code: "provider_request_failed",
-          provider: metadata,
-          cause
-        });
-      }
-
-      if (!response.ok) {
-        throw new ProviderError("Chat provider returned an unsuccessful status.", {
-          code: "provider_http_error",
-          status: response.status,
-          provider: { ...metadata, status: String(response.status) }
-        });
-      }
+      const response = await postChatCompletions(request);
 
       let body: unknown;
       try {
@@ -590,63 +714,66 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     },
 
     async *completeStream(request) {
-      const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${options.apiKey}`,
-          "content-type": "application/json"
-        },
-        body: JSON.stringify(buildRequestBody({ ...request, stream: true })),
-        ...(request.signal ? { signal: request.signal } : {})
-      });
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt <= PROVIDER_FETCH_MAX_RETRIES; attempt++) {
+        let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+        try {
+          const response = await postChatCompletions({ ...request, stream: true });
+          reader = response.body?.getReader() ?? null;
+          if (!reader) {
+            throw new ProviderError("Chat provider streaming response had no body.", {
+              code: "provider_malformed_response",
+              provider: metadata
+            });
+          }
 
-      if (!response.ok) {
-        throw new ProviderError("Chat provider streaming request failed.", {
-          code: "provider_http_error",
-          status: response.status,
-          provider: { ...metadata, status: String(response.status) }
-        });
-      }
+          const decoder = new TextDecoder();
+          let buffer = "";
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new ProviderError("Chat provider streaming response had no body.", {
-          code: "provider_malformed_response",
-          provider: metadata
-        });
-      }
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-      const decoder = new TextDecoder();
-      let buffer = "";
+            buffer += decoder.decode(value, { stream: true });
+            const blocks = buffer.split(/\r?\n\r?\n/u);
+            buffer = blocks.pop() ?? "";
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const blocks = buffer.split(/\r?\n\r?\n/u);
-          buffer = blocks.pop() ?? "";
-
-          for (const block of blocks) {
-            if (block.includes("[DONE]")) {
-              return;
-            }
-            for (const delta of parseStreamingBlock(block)) {
-              yield delta;
+            for (const block of blocks) {
+              if (block.includes("[DONE]")) {
+                return;
+              }
+              for (const delta of parseStreamingBlock(block)) {
+                yield delta;
+              }
             }
           }
-        }
 
-        if (buffer.includes("[DONE]")) {
+          if (buffer.includes("[DONE]")) {
+            return;
+          }
+          for (const delta of parseStreamingBlock(buffer)) {
+            yield delta;
+          }
           return;
+        } catch (cause) {
+          lastError = cause instanceof ProviderError
+            ? cause
+            : new ProviderError("Chat provider streaming request failed.", {
+                code: "provider_request_failed",
+                provider: metadata,
+                cause
+              });
+          if (attempt < PROVIDER_FETCH_MAX_RETRIES && isRetriableProviderError(lastError)) {
+            await sleep(providerRetryDelayMs(lastError, attempt));
+            continue;
+          }
+          throw lastError;
+        } finally {
+          reader?.releaseLock();
         }
-        for (const delta of parseStreamingBlock(buffer)) {
-          yield delta;
-        }
-      } finally {
-        reader.releaseLock();
       }
+
+      throw lastError;
     }
   };
 }
@@ -688,15 +815,15 @@ export function shouldAllowProviderFallback(env: ProviderEnv, explicit?: boolean
   return explicit ?? envFlag(env.BUILDING_AGENT_LLM_ALLOW_FALLBACK ?? env.LLM_ALLOW_FALLBACK ?? env.CHAT_PROVIDER_ALLOW_FALLBACK ?? env.ALLOW_PROVIDER_FALLBACK);
 }
 
-export function redactedProviderError(error: unknown): { code: string; status?: number; provider?: ProviderMetadata } {
+export function redactedProviderError(error: unknown): { code: string; status?: number; provider?: ProviderMetadata; responseDetail?: string } {
   if (error instanceof ProviderError) {
     return {
       code: error.code,
       ...(error.status !== undefined ? { status: error.status } : {}),
-      ...(error.provider ? { provider: error.provider } : {})
+      ...(error.provider ? { provider: error.provider } : {}),
+      ...(error.responseDetail ? { responseDetail: error.responseDetail } : {})
     };
   }
 
   return { code: "provider_unknown_error" };
 }
-

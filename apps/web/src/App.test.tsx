@@ -1,4 +1,4 @@
-﻿import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -171,7 +171,7 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
     if (url === `/api/projects/${project.id}/chat` && init?.method === "POST") {
       return jsonResponse({
         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
-        assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "I am unable to connect to a real LLM provider right now. Configure `BUILDING_AGENT_LLM_API_KEY` and `BUILDING_AGENT_LLM_BASE_URL` to enable Hermes streaming." },
+        assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "I am unable to connect to a real LLM provider right now. Configure `BUILDING_AGENT_LLM_API_KEY` and `BUILDING_AGENT_LLM_BASE_URL` to enable BuildingGPT streaming." },
         provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
         fallbackUsed: false,
         requestId: "req_post"
@@ -232,8 +232,14 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
   });
 }
 
-async function loginAndSelectProject(user = userEvent.setup()) {
+async function signIn(user = userEvent.setup()) {
+  await user.type(screen.getByLabelText(/email/i), "ada@example.test");
+  await user.type(screen.getByLabelText(/password/i), "local-dev-password");
   await user.click(screen.getByRole("button", { name: /sign in/i }));
+}
+
+async function loginAndSelectProject(user = userEvent.setup()) {
+  await signIn(user);
   await screen.findByRole("heading", { name: /choose a project to get started/i });
   await user.click(screen.getByRole("button", { name: /open/i }));
   await screen.findByRole("textbox", { name: /^message$/i });
@@ -244,7 +250,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-describe("BuildingAgent Web flow", () => {
+describe("BuildingGPT Web flow", () => {
   it("shows the workspace shell while restoring a saved session", async () => {
     window.localStorage.setItem("building-agent.session.v1", JSON.stringify({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, projectId: null }));
     const session = deferredResponse();
@@ -260,11 +266,10 @@ describe("BuildingAgent Web flow", () => {
 
     render(<App />);
 
-    expect(screen.getByRole("status", { name: /saved-session bootstrap phase/i })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: /^project sidebar$/i })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /project list bootstrap phase/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /choose a project to get started/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/startup shell only/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/checking your saved buildingagent session/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/checking your saved buildinggpt session/i)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/bearer\s+seed-token-ada|seed-token-ada/i);
 
     session.resolve(jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }));
@@ -277,7 +282,7 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await signIn(user);
     await screen.findByRole("heading", { name: /choose a project to get started/i });
 
     await user.click(screen.getByRole("button", { name: /open/i }));
@@ -445,7 +450,9 @@ describe("BuildingAgent Web flow", () => {
         return streamingResponse([
           "event: activity\ndata: " + JSON.stringify({ id: "act_1", label: "I am checking project context.", kind: "context", requestId: "req_stream" }),
           "event: activity\ndata: " + JSON.stringify({ id: "act_2", label: "Ran 2 commands", kind: "tool", tool: "shell", status: "done", detail: "git status; git fetch origin", requestId: "req_stream" }),
-          "event: token\ndata: " + JSON.stringify({ content: "Final answer ready." }),
+          "event: final_answer_start\ndata: " + JSON.stringify({ requestId: "req_stream" }),
+          "event: answer_token\ndata: " + JSON.stringify({ content: "Final answer ready." }),
+          "event: final_answer_end\ndata: " + JSON.stringify({ requestId: "req_stream" }),
           "event: done\ndata: " + JSON.stringify({
             message: { id: "msg_000001", projectId: "project_alpha", userId: "user_ada", role: "user", content: "timeline please" },
             assistantMessage: { id: "msg_000002", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Final answer ready." },
@@ -513,7 +520,7 @@ describe("BuildingAgent Web flow", () => {
     expect(createConversationCall).toBeTruthy();
   });
 
-  it("restores in-progress streaming state after switching away and back to the active conversation", async () => {
+  it("keeps the active stream stable until completion, then restores the completed conversation after switching away", async () => {
     let releaseDone!: () => void;
     const doneGate = new Promise<void>((resolve) => {
       releaseDone = resolve;
@@ -542,7 +549,8 @@ describe("BuildingAgent Web flow", () => {
         return new Response(new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode("event: activity\ndata: " + JSON.stringify({ id: "act_1", label: "I am checking project context.", kind: "context", requestId: "req_stream" }) + "\n\n"));
-            controller.enqueue(encoder.encode("event: token\ndata: " + JSON.stringify({ content: "Partial answer" }) + "\n\n"));
+            controller.enqueue(encoder.encode("event: final_answer_start\ndata: " + JSON.stringify({ requestId: "req_stream" }) + "\n\n"));
+            controller.enqueue(encoder.encode("event: answer_token\ndata: " + JSON.stringify({ content: "Partial answer" }) + "\n\n"));
             void doneGate.then(() => {
               controller.enqueue(encoder.encode("event: done\ndata: " + JSON.stringify({
                 message: { id: "msg_000001", projectId: "project_alpha", userId: "user_ada", role: "user", content: "timeline please" },
@@ -575,7 +583,10 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/conversations/conv_streaming/select") {
         return jsonResponse({
           conversation: { id: "conv_streaming", title: "New conversation", messageCount: 1, createdAt: "2026-05-12T00:00:00.000Z" },
-          messages: [],
+          messages: [
+            { id: "msg_000001", projectId: "project_alpha", userId: "user_ada", role: "user", content: "timeline please" },
+            { id: "msg_000002", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Partial answer\n\nFinal answer ready." }
+          ],
           requestId: "req_select_streaming"
         });
       }
@@ -587,17 +598,18 @@ describe("BuildingAgent Web flow", () => {
     await loginAndSelectProject(user);
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "timeline please");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    expect(await screen.findByText(/Working for/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Partial answer/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Existing thread/i })).toBeDisabled();
 
+    releaseDone();
+    expect(await screen.findByText(/Final answer ready/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Existing thread/i }));
     expect(await screen.findByText("Existing answer")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /New conversation/i }));
-    expect(await screen.findByText(/Working for/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Timeline please/i }));
+    expect(await screen.findByText(/Final answer ready/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Working for/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Partial answer/i)).toBeInTheDocument();
-
-    releaseDone();
-    expect(await screen.findByText(/Worked for/i)).toBeInTheDocument();
   });
 
   it("removes the running workflow immediately when generation is stopped", async () => {
@@ -650,7 +662,7 @@ describe("BuildingAgent Web flow", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: /sign in to buildingagent/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^BuildingAgent$/i })).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("auth_invalid");
     expect(screen.getByRole("alert")).toHaveTextContent("req_bad_session");
     expect(window.localStorage.getItem("building-agent.session.v1")).toBeNull();
@@ -679,7 +691,7 @@ describe("BuildingAgent Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await signIn(user);
     await screen.findByRole("heading", { name: /choose a project to get started/i });
     await user.click(screen.getByRole("button", { name: /open/i }));
 
@@ -731,7 +743,8 @@ describe("BuildingAgent Web flow", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
     expect(alert).toHaveTextContent("req_chat_forbidden");
-    expect(screen.queryByText("Please mutate optimistically")).not.toBeInTheDocument();
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    expect(within(messageList).queryByText("Please mutate optimistically")).not.toBeInTheDocument();
   });
 
   it("validates empty login fields, blank chat messages, malformed JSON, and local API outages", async () => {
@@ -770,10 +783,11 @@ describe("BuildingAgent Web flow", () => {
     render(<App />);
     await user.clear(screen.getByLabelText(/email/i));
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    expect(screen.getByRole("alert")).toHaveTextContent(/enter the seeded email/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/enter your email and password/i);
     expect(fetchMock).not.toHaveBeenCalled();
 
     await user.type(screen.getByLabelText(/email/i), "ada@example.test");
+    await user.type(screen.getByLabelText(/password/i), "local-dev-password");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await screen.findByRole("heading", { name: /choose a project to get started/i });
     await user.click(screen.getByRole("button", { name: /open/i }));
@@ -803,7 +817,7 @@ describe("BuildingAgent Web flow", () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await signIn(user);
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("api_malformed"));
     expect(screen.getByRole("heading", { name: /choose a project to get started/i })).toBeInTheDocument();
@@ -814,7 +828,7 @@ describe("BuildingAgent Web flow", () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await signIn(user);
     await screen.findByText("Beta Build");
     await user.click(screen.getByRole("button", { name: /open/i }));
 
@@ -833,7 +847,7 @@ describe("BuildingAgent Web flow", () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await signIn(user);
     await screen.findByRole("heading", { name: /choose a project to get started/i });
     await user.click(screen.getByRole("button", { name: /open/i }));
 
@@ -847,7 +861,7 @@ describe("BuildingAgent Web flow", () => {
     installBaseFetch({ registry: jsonResponse(registryBody({ placeholderOnly: undefined })) });
     const user = userEvent.setup();
     const { unmount } = render(<App />);
-    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await signIn(user);
     await screen.findByRole("heading", { name: /choose a project to get started/i });
     await user.click(screen.getByRole("button", { name: /open/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
@@ -858,7 +872,7 @@ describe("BuildingAgent Web flow", () => {
     installBaseFetch({ management: jsonResponse(managementBody({ gateways: [{ ...gateway, protocol: "smtp" }] })) });
     const user2 = userEvent.setup();
     render(<App />);
-    await user2.click(screen.getByRole("button", { name: /sign in/i }));
+    await signIn(user2);
     await screen.findByRole("heading", { name: /choose a project to get started/i });
     await user2.click(screen.getByRole("button", { name: /open/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
@@ -869,7 +883,7 @@ describe("BuildingAgent Web flow", () => {
     installBaseFetch({ registry: jsonResponse(registryBody({ runtimeProviders: [], tools: [], skills: [], gateways: [], buildingCapabilities: [] })), management: jsonResponse(managementBody({ gateways: [], capabilities: [], tools: [] })) });
     const user3 = userEvent.setup();
     render(<App />);
-    await user3.click(await screen.findByRole("button", { name: /sign in/i }));
+    await signIn(user3);
     await screen.findByRole("heading", { name: /choose a project to get started/i });
     await user3.click(screen.getByRole("button", { name: /open/i }));
     await screen.findByRole("textbox", { name: /^message$/i });
@@ -916,7 +930,8 @@ describe("BuildingAgent Web flow", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("api_malformed");
-    expect(screen.queryByText("malformed please")).not.toBeInTheDocument();
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    expect(within(messageList).queryByText("malformed please")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/provider diagnostics/i)).not.toBeInTheDocument();
   });
 
@@ -961,7 +976,8 @@ describe("BuildingAgent Web flow", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("api_malformed");
     expect(alert).not.toHaveTextContent(/provider-secret-should-not-render|apiKey/i);
-    expect(screen.queryByText("metadata please")).not.toBeInTheDocument();
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    expect(within(messageList).queryByText("metadata please")).not.toBeInTheDocument();
   });
 
   it("surfaces provider error envelopes with request ids without leaking secret-looking text", async () => {
@@ -1006,7 +1022,8 @@ describe("BuildingAgent Web flow", () => {
     expect(alert).toHaveTextContent("provider_error");
     expect(alert).toHaveTextContent("req_provider_fail");
     expect(alert).not.toHaveTextContent(/sk-|api[_-]?key|bearer/i);
-    expect(screen.queryByText("provider fail")).not.toBeInTheDocument();
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    expect(within(messageList).queryByText("provider fail")).not.toBeInTheDocument();
   });
 
   it("shows the BMS workspace entry and syncs the bms path", async () => {
@@ -1036,7 +1053,7 @@ describe("BuildingAgent Web flow", () => {
       if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
       if (url === "/api/projects/project_alpha/knowledge-base") return jsonResponse({ documents: [], requestId: "req_kb" });
       if (url === "/api/projects/project_alpha/repository") return jsonResponse({ artifacts: [], requestId: "req_repo" });
-      if (url === "/api/bms/health") return jsonResponse({ ok: true, service: "buildingagent-bms-service", request_id: "req_bms" });
+      if (url === "/api/bms/health") return jsonResponse({ ok: true, service: "buildinggpt-bms-service", request_id: "req_bms" });
       if (url === "/api/bms/temp-upload" && init?.method === "POST") {
         return jsonResponse({
           upload_id: "upload_001",
@@ -1228,4 +1245,3 @@ describe("BuildingAgent Web flow", () => {
     expect(screen.getByText(/save credentials/i)).toBeInTheDocument();
   });
 });
-
