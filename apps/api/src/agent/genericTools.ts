@@ -28,6 +28,7 @@ import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
 import { bmsCollectorBaseUrl } from "../bmsCollectorUrl.js";
 import { fetchTimeseries } from "../bmsTimeseries.js";
+import { dashboardPath, parseDashboardMutationInput } from "../dashboards.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_READ_BYTES = 200_000;
@@ -838,6 +839,49 @@ export function createGenericToolRegistry(
         } catch (error) {
           return { error: error instanceof Error ? error.message : "bms_timeseries_query_failed", base_url: base };
         }
+      }
+    },
+
+    {
+      name: "dashboard_create",
+      category: "building",
+      description:
+        "Create a structured dashboard resource from a validated JSON spec. Use this when the user asks to monitor equipment or generate a dashboard.",
+      schema: {
+        name: "dashboard_create",
+        description:
+          "Create a dashboard with 3-column layout and typed widgets. Provide title, optional description, optional visibility, widgets, and layout. Never generate raw HTML/JS.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "Dashboard title." },
+            description: { type: "string", description: "Optional operator-facing description." },
+            visibility: { type: "string", enum: ["private", "project"], description: "Optional visibility; defaults to private." },
+            sourceConversationId: { type: "string", description: "Optional source conversation id." },
+            widgets: { type: "array", description: "Widget definitions. Supported kinds: live_value_grid, timeseries_chart." },
+            layout: { type: "array", description: "Grid placements in a 3-column layout." }
+          },
+          required: ["title", "widgets", "layout"]
+        }
+      },
+      async run(args, context) {
+        if (!context.dashboardOps) {
+          return { error: "dashboard_create_unavailable" };
+        }
+        const parsed = parseDashboardMutationInput({
+          ...args,
+          sourceConversationId: textArg(args, "sourceConversationId") || context.conversationId
+        });
+        if ("error" in parsed) {
+          return { error: parsed.error };
+        }
+        const dashboard = context.dashboardOps.create(parsed);
+        return {
+          ok: true,
+          dashboard,
+          path: dashboardPath(context.projectId, dashboard.id),
+          message: `Dashboard created: ${dashboard.title}`
+        };
       }
     },
 

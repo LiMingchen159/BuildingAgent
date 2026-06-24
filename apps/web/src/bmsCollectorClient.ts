@@ -26,6 +26,21 @@ export interface BmsCollectorPointsResponse {
   items: BmsCollectorPoint[];
 }
 
+export interface BmsCollectorTimeseriesRow {
+  point_id?: number;
+  name?: string;
+  object_ref?: string;
+  ts: string;
+  value?: string;
+  value_num?: number | null;
+  value_text?: string | null;
+}
+
+export interface BmsCollectorTimeseriesResponse {
+  total: number;
+  items: BmsCollectorTimeseriesRow[];
+}
+
 function collectorUrl(prefix: string, path: string): string {
   const normalized = path.startsWith("/") ? path : `/${path}`;
   return `${prefix}${normalized}`;
@@ -106,4 +121,15 @@ export async function getBmsCollectorLastValue(
 ): Promise<BmsCollectorPoint | null> {
   const { items } = await queryBmsCollectorPoints(token, pointName, 1);
   return items.find((item) => item.name === pointName) ?? items[0] ?? null;
+}
+
+export async function queryBmsCollectorTimeseries(
+  token: string,
+  params: Record<string, string>
+): Promise<BmsCollectorTimeseriesResponse> {
+  const payload = await fetchBmsCollector(token, `/api/v1/timeseries?${new URLSearchParams(params).toString()}`);
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as BmsCollectorTimeseriesResponse).items)) {
+    throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS timeseries response." }, 200);
+  }
+  return payload as BmsCollectorTimeseriesResponse;
 }

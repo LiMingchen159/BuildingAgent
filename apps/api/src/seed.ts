@@ -1,4 +1,5 @@
 import { seedSkillsByProject } from "./projectSkills.js";
+import type { DashboardRecord } from "./dashboards.js";
 
 export type Permission = "chat:read" | "chat:write" | "project:configure";
 export type PlaceholderStatus = "placeholder" | "mock" | "not_configured";
@@ -163,6 +164,7 @@ export interface SeedStore {
   conversationsByProject: Record<string, Conversation[]>;
   knowledgeBaseByProject: Record<string, KnowledgeBaseDocument[]>;
   repositoryByProject: Record<string, RepositoryArtifact[]>;
+  dashboardsByProject: Record<string, DashboardRecord[]>;
   runtimeProviders: PlaceholderRuntimeProvider[];
   tools: PlaceholderTool[];
   skills: PlaceholderSkill[];
@@ -415,6 +417,7 @@ export function createSeedStore(): SeedStore {
     conversationsByProject,
     knowledgeBaseByProject: Object.fromEntries(projects.map((project) => [project.id, [] as KnowledgeBaseDocument[]])),
     repositoryByProject: Object.fromEntries(projects.map((project) => [project.id, [] as RepositoryArtifact[]])),
+    dashboardsByProject: Object.fromEntries(projects.map((project) => [project.id, [] as DashboardRecord[]])),
     runtimeProviders,
     tools,
     skills,
@@ -468,6 +471,19 @@ export function cloneStore(store: SeedStore): SeedStore {
       Object.entries(store.repositoryByProject).map(([projectId, artifacts]) => [
         projectId,
         artifacts.map((artifact) => ({ ...artifact }))
+      ])
+    ),
+    dashboardsByProject: Object.fromEntries(
+      Object.entries(store.dashboardsByProject).map(([projectId, dashboards]) => [
+        projectId,
+        dashboards.map((dashboard) => ({
+          ...dashboard,
+          layout: dashboard.layout.map((item) => ({ ...item })),
+          widgets: dashboard.widgets.map((widget) => ({
+            ...widget,
+            pointBindings: widget.pointBindings.map((binding) => ({ ...binding }))
+          }))
+        }))
       ])
     ),
     runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),

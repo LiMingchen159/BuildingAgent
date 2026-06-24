@@ -36,6 +36,7 @@ type ProviderIterationResult = ChatCompletionResult & {
 };
 import { normalizeRepositoryAssetPath } from "../repositoryDownloadLinks.js";
 import { toolActivityOutput, toolExitCode } from "./toolActivityPreview.js";
+import type { DashboardMutationInput, DashboardRecord } from "../dashboards.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -52,6 +53,9 @@ export interface AgentRuntimeOptions {
     messages: ChatMessage[];
     errorType?: RuleErrorType;
   }) => FeedbackEpisode | null;
+  dashboardOps?: {
+    create: (input: DashboardMutationInput, request: Pick<AgentTurnRequest, "projectId" | "userId" | "conversationId">) => DashboardRecord;
+  };
   maxIterations?: number;
   compressor?: ContextCompressor;
 }
@@ -680,7 +684,19 @@ export class AgentRuntime {
               conversationId: request.conversationId,
               canConfigure: request.canConfigure,
               messages: request.messages,
-              toolCallId: entry.call.id
+              toolCallId: entry.call.id,
+              ...(this.options.dashboardOps
+                ? {
+                    dashboardOps: {
+                      create: (input: DashboardMutationInput) =>
+                        this.options.dashboardOps!.create(input, {
+                          projectId: request.projectId,
+                          userId: request.userId,
+                          conversationId: request.conversationId
+                        })
+                    }
+                  }
+                : {})
             }
           );
           return {

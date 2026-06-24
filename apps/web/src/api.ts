@@ -106,6 +106,48 @@ export interface RepositoryArtifact {
   sizeBytes?: number;
 }
 
+export type DashboardVisibility = "private" | "project";
+export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart";
+
+export interface DashboardPointBinding {
+  id?: string;
+  pointName?: string;
+  objectRef?: string;
+  label?: string;
+  role?: "supply" | "return" | "other";
+  unit?: string;
+}
+
+export interface DashboardLayoutItem {
+  widgetId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface DashboardWidget {
+  id: string;
+  kind: DashboardWidgetKind;
+  title: string;
+  pointBindings: DashboardPointBinding[];
+  defaultTimeRange?: string;
+}
+
+export interface DashboardRecord {
+  id: string;
+  projectId: string;
+  ownerUserId: string;
+  visibility: DashboardVisibility;
+  title: string;
+  description?: string;
+  layout: DashboardLayoutItem[];
+  widgets: DashboardWidget[];
+  createdAt: string;
+  updatedAt: string;
+  sourceConversationId?: string;
+}
+
 export interface ChatProviderDiagnostics {
   id: string;
   mode: "mock" | "real";
@@ -1197,6 +1239,81 @@ function parseRepositoryArtifact(value: unknown): RepositoryArtifact | null {
   };
 }
 
+function parseDashboardPointBinding(value: unknown): DashboardPointBinding | null {
+  if (!isRecord(value)) return null;
+  const pointName = typeof value.pointName === "string" ? value.pointName : undefined;
+  const objectRef = typeof value.objectRef === "string" ? value.objectRef : undefined;
+  if (!pointName && !objectRef) return null;
+  return {
+    ...(typeof value.id === "string" ? { id: value.id } : {}),
+    ...(pointName ? { pointName } : {}),
+    ...(objectRef ? { objectRef } : {}),
+    ...(typeof value.label === "string" ? { label: value.label } : {}),
+    ...(value.role === "supply" || value.role === "return" || value.role === "other" ? { role: value.role } : {}),
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {})
+  };
+}
+
+function parseDashboardLayoutItem(value: unknown): DashboardLayoutItem | null {
+  if (!isRecord(value) || typeof value.widgetId !== "string" || typeof value.x !== "number" || typeof value.y !== "number" || typeof value.w !== "number" || typeof value.h !== "number") {
+    return null;
+  }
+  return { widgetId: value.widgetId, x: value.x, y: value.y, w: value.w, h: value.h };
+}
+
+function parseDashboardWidget(value: unknown): DashboardWidget | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string" || !Array.isArray(value.pointBindings)) {
+    return null;
+  }
+  if (value.kind !== "live_value_grid" && value.kind !== "timeseries_chart") {
+    return null;
+  }
+  const pointBindings = value.pointBindings.map((entry) => parseDashboardPointBinding(entry)).filter((entry): entry is DashboardPointBinding => entry !== null);
+  if (pointBindings.length !== value.pointBindings.length || pointBindings.length === 0) {
+    return null;
+  }
+  return {
+    id: value.id,
+    kind: value.kind,
+    title: value.title,
+    pointBindings,
+    ...(typeof value.defaultTimeRange === "string" ? { defaultTimeRange: value.defaultTimeRange } : {})
+  };
+}
+
+function parseDashboardRecord(value: unknown): DashboardRecord | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || typeof value.projectId !== "string"
+    || typeof value.ownerUserId !== "string"
+    || (value.visibility !== "private" && value.visibility !== "project")
+    || typeof value.title !== "string"
+    || !Array.isArray(value.layout)
+    || !Array.isArray(value.widgets)
+    || typeof value.createdAt !== "string"
+    || typeof value.updatedAt !== "string") {
+    return null;
+  }
+  const layout = value.layout.map((entry) => parseDashboardLayoutItem(entry)).filter((entry): entry is DashboardLayoutItem => entry !== null);
+  const widgets = value.widgets.map((entry) => parseDashboardWidget(entry)).filter((entry): entry is DashboardWidget => entry !== null);
+  if (layout.length !== value.layout.length || widgets.length !== value.widgets.length) {
+    return null;
+  }
+  return {
+    id: value.id,
+    projectId: value.projectId,
+    ownerUserId: value.ownerUserId,
+    visibility: value.visibility,
+    title: value.title,
+    ...(typeof value.description === "string" ? { description: value.description } : {}),
+    layout,
+    widgets,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    ...(typeof value.sourceConversationId === "string" ? { sourceConversationId: value.sourceConversationId } : {})
+  };
+}
+
 function parseChatMessageImages(value: unknown, message: string): ChatMessageImage[] | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -1346,6 +1463,52 @@ export async function getRepository(token: string, projectId: string): Promise<{
     totalCount: typeof payload.totalCount === "number" ? payload.totalCount : payload.artifacts.length,
     requestId: payload.requestId
   };
+}
+
+export async function getDashboards(token: string, projectId: string): Promise<{ dashboards: DashboardRecord[]; totalCount: number; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/dashboards`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || !Array.isArray(payload.dashboards) || typeof payload.requestId !== "string") {
+    throw malformed("Dashboards returned an unexpected response.");
+  }
+  return {
+    dashboards: payload.dashboards.map((entry) => {
+      const parsed = parseDashboardRecord(entry);
+      if (!parsed) {
+        throw malformed("Dashboards returned an unexpected dashboard.");
+      }
+      return parsed;
+    }),
+    totalCount: typeof payload.totalCount === "number" ? payload.totalCount : payload.dashboards.length,
+    requestId: payload.requestId
+  };
+}
+
+export async function getDashboard(token: string, projectId: string, dashboardId: string): Promise<{ dashboard: DashboardRecord; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.requestId !== "string") {
+    throw malformed("Dashboard returned an unexpected response.");
+  }
+  const parsed = parseDashboardRecord(payload.dashboard);
+  if (!parsed) {
+    throw malformed("Dashboard returned an unexpected dashboard.");
+  }
+  return { dashboard: parsed, requestId: payload.requestId };
+}
+
+export async function updateDashboard(token: string, projectId: string, dashboardId: string, payload: Partial<DashboardRecord> & Pick<DashboardRecord, "title" | "layout" | "widgets">): Promise<{ dashboard: DashboardRecord; requestId: string }> {
+  const response = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  });
+  if (!isRecord(response) || typeof response.requestId !== "string") {
+    throw malformed("Dashboard update returned an unexpected response.");
+  }
+  const parsed = parseDashboardRecord(response.dashboard);
+  if (!parsed) {
+    throw malformed("Dashboard update returned an unexpected dashboard.");
+  }
+  return { dashboard: parsed, requestId: response.requestId };
 }
 
 export async function resetChat(token: string, projectId: string, conversationId?: string): Promise<ResetChatResponse> {
@@ -1641,6 +1804,7 @@ export interface ProjectSocket {
   close(): void;
   on(event: "message", handler: WsEventHandler): void;
   on(event: "close", handler: () => void): void;
+  send(data: Record<string, unknown>): void;
 }
 
 /** Create a WebSocket connection for real-time project updates. */
@@ -1715,6 +1879,11 @@ export function createProjectSocket(
         handlers.message.push(handler as WsEventHandler);
       } else {
         handlers.close.push(handler as () => void);
+      }
+    },
+    send(data: Record<string, unknown>) {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(data));
       }
     }
   };

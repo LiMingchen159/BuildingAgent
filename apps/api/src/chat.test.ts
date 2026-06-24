@@ -588,6 +588,123 @@ describe("project-scoped chat contract", () => {
     expect(response.json().assistantMessage.images).toBeUndefined();
   });
 
+  it("allows the agent to query points and create a dashboard for monitoring requests", async () => {
+    const store = createSeedStore();
+    const provider: ChatProvider = {
+      metadata: { id: "dashboard-real", mode: "real", model: "dashboard-model", status: "configured" },
+      async complete(request) {
+        const toolMessages = request.messages.filter((message) => message.role === "tool");
+        if (toolMessages.length === 0) {
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_points",
+              type: "function",
+              function: { name: "bms_points_query", arguments: JSON.stringify({ q: "CH-01", limit: 10 }) }
+            }]
+          };
+        }
+        if (toolMessages.length === 1) {
+          expect(toolMessages[0]?.content).toContain("CH-01_Supply_Water_Temp");
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_dashboard",
+              type: "function",
+              function: {
+                name: "dashboard_create",
+                arguments: JSON.stringify({
+                  title: "Chiller supply/return monitor",
+                  description: "Auto-generated monitoring dashboard for CH-01.",
+                  visibility: "private",
+                  widgets: [
+                    {
+                      id: "live_supply_return",
+                      kind: "live_value_grid",
+                      title: "Live temperatures",
+                      pointBindings: [
+                        { pointName: "CH-01_Supply_Water_Temp", label: "Supply", role: "supply", unit: "degF" },
+                        { pointName: "CH-01_Return_Water_Temp", label: "Return", role: "return", unit: "degF" }
+                      ]
+                    },
+                    {
+                      id: "trend_supply_return",
+                      kind: "timeseries_chart",
+                      title: "Historical trend",
+                      defaultTimeRange: "12h",
+                      pointBindings: [
+                        { pointName: "CH-01_Supply_Water_Temp", label: "Supply", role: "supply", unit: "degF" },
+                        { pointName: "CH-01_Return_Water_Temp", label: "Return", role: "return", unit: "degF" }
+                      ]
+                    }
+                  ],
+                  layout: [
+                    { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 1 },
+                    { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 1 }
+                  ]
+                })
+              }
+            }]
+          };
+        }
+        return {
+          text: "Dashboard created for live chiller monitoring.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/v1/points?")) {
+        return new Response(JSON.stringify({
+          total: 2,
+          items: [
+            { id: 101, name: "CH-01_Supply_Water_Temp", object_ref: "analog-value,101", last_value: "42.1", last_polled_at: "2026-06-24T02:00:00Z" },
+            { id: 102, name: "CH-01_Return_Water_Temp", object_ref: "analog-value,102", last_value: "47.8", last_polled_at: "2026-06-24T02:00:00Z" }
+          ]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const app = buildServer({ store, chatProvider: provider });
+
+      await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/projects/project_alpha/chat",
+        headers: bearer(adaToken),
+        payload: { message: "请实时监控所有 chiller 的送回水温度" }
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.json().assistantMessage.content).toContain("Dashboard created");
+      expect(response.json().assistantMessage.content).not.toMatch(/api[_-]?key|bearer/i);
+      assertNoSecrets(response.json());
+
+      const createdDashboards = store.dashboardsByProject.project_alpha ?? [];
+      expect(createdDashboards).toHaveLength(1);
+      expect(createdDashboards[0]).toMatchObject({
+        title: "Chiller supply/return monitor",
+        visibility: "private",
+        widgets: [
+          expect.objectContaining({ kind: "live_value_grid" }),
+          expect.objectContaining({ kind: "timeseries_chart" })
+        ]
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("serves repository image files when auth is supplied via query token", async () => {
     const app = buildServer();
 

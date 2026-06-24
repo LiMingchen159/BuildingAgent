@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -49,6 +49,45 @@ const capability = {
   status: "mock",
   description: "Synthetic energy baseline capability."
 } as const;
+
+function dashboardRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "dashboard_temp_watch",
+    projectId: "project_alpha",
+    ownerUserId: "user_ada",
+    visibility: "private",
+    title: "Plant temperature dashboard",
+    description: "Supply and return monitoring for active chillers.",
+    layout: [
+      { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 1 },
+      { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 1 }
+    ],
+    widgets: [
+      {
+        id: "live_supply_return",
+        kind: "live_value_grid",
+        title: "Live temperatures",
+        pointBindings: [
+          { pointName: "CH-01_Supply_Water_Temp", label: "CH-01 Supply", role: "supply", unit: "degF" },
+          { pointName: "CH-01_Return_Water_Temp", label: "CH-01 Return", role: "return", unit: "degF" }
+        ]
+      },
+      {
+        id: "trend_supply_return",
+        kind: "timeseries_chart",
+        title: "Temperature history",
+        defaultTimeRange: "12h",
+        pointBindings: [
+          { pointName: "CH-01_Supply_Water_Temp", label: "CH-01 Supply", role: "supply", unit: "degF" },
+          { pointName: "CH-01_Return_Water_Temp", label: "CH-01 Return", role: "return", unit: "degF" }
+        ]
+      }
+    ],
+    createdAt: "2026-06-24T02:00:00.000Z",
+    updatedAt: "2026-06-24T02:00:00.000Z",
+    ...overrides
+  };
+}
 
 function registryBody(overrides: Record<string, unknown> = {}) {
   return {
@@ -1024,6 +1063,144 @@ describe("BuildingGPT Web flow", () => {
     expect(alert).not.toHaveTextContent(/sk-|api[_-]?key|bearer/i);
     const messageList = screen.getByLabelText(/alpha build messages/i);
     expect(within(messageList).queryByText("provider fail")).not.toBeInTheDocument();
+  });
+
+  it("shows dashboards in the right sidebar, opens one, updates live values from websocket, and saves drag reorders", async () => {
+    const dashboard = dashboardRecord();
+    const patchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    class MockWebSocket {
+      static OPEN = 1;
+      static instances: MockWebSocket[] = [];
+      readyState = MockWebSocket.OPEN;
+      url: string;
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      sent: string[] = [];
+
+      constructor(url: string) {
+        this.url = url;
+        MockWebSocket.instances.push(this);
+      }
+
+      send(payload: string) {
+        this.sent.push(payload);
+      }
+
+      close() {
+        this.onclose?.({} as CloseEvent);
+      }
+    }
+
+    vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
+
+    installFetch((url, init) => {
+      if (url === "/api/login") {
+        return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      }
+      if (url === "/api/session") {
+        return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      }
+      if (url === "/api/projects") {
+        return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      }
+      if (url === "/api/projects/project_alpha/select") {
+        return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
+      }
+      if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") {
+        return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      }
+      if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") {
+        return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      }
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
+      if (url === "/api/projects/project_alpha/knowledge-base") return jsonResponse({ documents: [], totalCount: 0, requestId: "req_kb" });
+      if (url === "/api/projects/project_alpha/repository") return jsonResponse({ artifacts: [], totalCount: 0, requestId: "req_repo" });
+      if (url === "/api/projects/project_alpha/dashboards") {
+        return jsonResponse({ projectId: "project_alpha", dashboards: [dashboard], totalCount: 1, requestId: "req_dashboards" });
+      }
+      if (url === "/api/projects/project_alpha/dashboards/dashboard_temp_watch" && (!init?.method || init.method === "GET")) {
+        return jsonResponse({ projectId: "project_alpha", dashboard, requestId: "req_dashboard" });
+      }
+      if (url === "/api/projects/project_alpha/dashboards/dashboard_temp_watch" && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+        patchCalls.push({ url, body });
+        const nextLayout = Array.isArray(body.layout) ? body.layout : dashboard.layout;
+        return jsonResponse({
+          projectId: "project_alpha",
+          dashboard: dashboardRecord({
+            layout: nextLayout,
+            visibility: typeof body.visibility === "string" ? body.visibility : dashboard.visibility,
+            updatedAt: "2026-06-24T03:00:00.000Z"
+          }),
+          requestId: "req_patch_dashboard"
+        });
+      }
+      if (url.startsWith("/api/bms/collector/api/v1/timeseries?")) {
+        return jsonResponse({
+          total: 2,
+          items: [
+            { ts: "2026-06-24T01:00:00.000Z", value_num: 42.0, name: "CH-01_Supply_Water_Temp" },
+            { ts: "2026-06-24T01:00:00.000Z", value_num: 47.4, name: "CH-01_Return_Water_Temp" }
+          ]
+        });
+      }
+      if (url.startsWith("/api/bms/collector/api/v1/points?")) {
+        return jsonResponse({
+          total: 1,
+          items: [{ id: 101, name: "CH-01_Supply_Water_Temp", last_value: "42.0", last_polled_at: "2026-06-24T02:00:00.000Z" }]
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+
+    expect(screen.getByText(/dashboards/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /plant temperature dashboard/i }));
+
+    expect(await screen.findByRole("heading", { name: /plant temperature dashboard/i })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_temp_watch");
+
+    const socket = MockWebSocket.instances.at(-1);
+    expect(socket).toBeTruthy();
+    await act(async () => {
+      socket?.onmessage?.({ data: JSON.stringify({ type: "connected" }) } as MessageEvent);
+    });
+    expect(socket?.sent.some((payload) => payload.includes("dashboard_subscribe"))).toBe(true);
+
+    await act(async () => {
+      socket?.onmessage?.({
+        data: JSON.stringify({
+          type: "dashboard_point_update",
+          updates: [
+            { pointName: "CH-01_Supply_Water_Temp", value: "42.6", polledAt: "2026-06-24T02:05:00.000Z" }
+          ]
+        })
+      } as MessageEvent);
+    });
+    expect(await screen.findByText(/42\.6 degF/i)).toBeInTheDocument();
+
+    const liveCard = screen.getByText("Live temperatures").closest("article");
+    const trendCard = screen.getByText("Temperature history").closest("article");
+    expect(liveCard).not.toBeNull();
+    expect(trendCard).not.toBeNull();
+    fireEvent.dragStart(trendCard!);
+    fireEvent.dragOver(liveCard!);
+    fireEvent.drop(liveCard!);
+
+    await waitFor(() => {
+      expect(patchCalls.length).toBeGreaterThan(0);
+    });
+    expect(patchCalls.at(-1)?.body.layout).toEqual([
+      expect.objectContaining({ widgetId: "trend_supply_return", x: 0, y: 0, w: 2, h: 1 }),
+      expect.objectContaining({ widgetId: "live_supply_return", x: 2, y: 0, w: 1, h: 1 })
+    ]);
   });
 
   it("shows the BMS workspace entry and syncs the bms path", async () => {

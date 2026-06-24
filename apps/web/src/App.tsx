@@ -6,6 +6,7 @@ import { ChatImageGallery } from "./ui/ChatImageGallery";
 import { KnowledgeBase, type KnowledgeBaseDocument } from "./ui/KnowledgeBase";
 import { Repository, type RepositoryItem } from "./ui/Repository";
 import { BmsDataConfigPage } from "./ui/BmsDataConfig";
+import { DashboardView } from "./ui/DashboardView";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
@@ -15,6 +16,8 @@ import { instantConversationTitle, parseActivityLabel, parseAssistantContent, st
 import {
   ApiClientError,
   createProjectSocket,
+  getDashboard,
+  getDashboards,
   getChat,
   getKnowledgeBase,
   getProjectManagement,
@@ -33,7 +36,10 @@ import {
   selectConversation,
   deleteConversation,
   renameConversation,
+  updateDashboard,
   deleteProject,
+  type DashboardRecord,
+  type DashboardVisibility,
   type ChatProviderDiagnostics,
   type ChatLifecycleEvent,
   type ChatMessageImage,
@@ -53,6 +59,7 @@ import {
   type ToolSummary,
   type UserSummary
 } from "./api";
+import type { BmsCollectorPoint } from "./bmsCollectorClient";
 
 const STORAGE_KEY = "building-agent.session.v1";
 /** Set after explicit login so bootstrap shows project picker instead of restoring URL/storage project. */
@@ -69,7 +76,7 @@ function consumeSkipProjectRestore(): boolean {
   return true;
 }
 
-type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "registry" | "gateways" | "building";
+type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "registry" | "gateways" | "building";
 
 type IconName =
   | "activity"
@@ -185,21 +192,29 @@ function visibleRepositoryArtifactCount(artifacts: RepositoryArtifact[]): number
   return artifacts.filter(isVisibleRepositoryArtifact).length;
 }
 
-function workspacePathFromTab(projectId: string, tab: WorkspaceTab): string {
+function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): string {
   const section = tab === "bms" ? "bms-data-config" : tab;
+  if (tab === "dashboards" && dashboardId) {
+    return `/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`;
+  }
   return `/projects/${encodeURIComponent(projectId)}/${section}`;
 }
 
-function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab } | null {
-  const match = pathname.match(/^\/projects\/([^/]+)\/([^/]+)$/);
-  if (!match) {
-    return null;
+function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab; dashboardId?: string } | null {
+  const dashboardMatch = pathname.match(/^\/projects\/([^/]+)\/dashboards\/([^/]+)$/);
+  if (dashboardMatch) {
+    const projectId = decodeURIComponent(dashboardMatch[1] ?? "");
+    const dashboardId = decodeURIComponent(dashboardMatch[2] ?? "");
+    if (!projectId || !dashboardId) return null;
+    return { projectId, tab: "dashboards", dashboardId };
   }
+  const match = pathname.match(/^\/projects\/([^/]+)\/([^/]+)$/);
+  if (!match) return null;
   const projectId = decodeURIComponent(match[1] ?? "");
   const section = match[2];
   if (!projectId) return null;
   const tab = section === "bms-data-config" ? "bms" : section;
-  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "registry" || tab === "gateways" || tab === "building") {
+  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "registry" || tab === "gateways" || tab === "building") {
     return { projectId, tab };
   }
   return null;
@@ -875,6 +890,32 @@ function mergeConversationSummaries(
     });
   }
   return sortConversationsByNewest([...merged.values()]);
+}
+
+function sortDashboardsByUpdatedAt(dashboards: DashboardRecord[]): DashboardRecord[] {
+  return [...dashboards].sort((left, right) => {
+    const rightTime = Date.parse(right.updatedAt);
+    const leftTime = Date.parse(left.updatedAt);
+    if (Number.isFinite(rightTime) && Number.isFinite(leftTime) && rightTime !== leftTime) {
+      return rightTime - leftTime;
+    }
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function upsertDashboardRecord(dashboards: DashboardRecord[], dashboard: DashboardRecord): DashboardRecord[] {
+  const next = dashboards.filter((entry) => entry.id !== dashboard.id);
+  next.unshift(dashboard);
+  return sortDashboardsByUpdatedAt(next);
+}
+
+function dashboardPointNames(dashboard: DashboardRecord | null): string[] {
+  if (!dashboard) return [];
+  return [...new Set(dashboard.widgets.flatMap((widget) =>
+    widget.pointBindings
+      .map((binding) => binding.pointName)
+      .filter((value): value is string => Boolean(value))
+  ))];
 }
 
 function mergeMessagesWithStreamingState(
@@ -1832,10 +1873,25 @@ function WorkspaceSidebarBlock({
   );
 }
 
-function WorkspaceRightPanel({ registry, management, disabled }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null; disabled?: boolean }) {
+function WorkspaceRightPanel({
+  registry,
+  management,
+  dashboards,
+  activeDashboardId,
+  disabled,
+  onOpenDashboard
+}: {
+  registry: RegistryResponse | null;
+  management: ProjectManagementResponse | null;
+  dashboards: DashboardRecord[];
+  activeDashboardId: string | null;
+  disabled?: boolean;
+  onOpenDashboard: (dashboardId: string) => void;
+}) {
   const taskCount = disabled ? 0 : 3;
   const skillCount = disabled ? 0 : (registry?.skills.length ?? 0);
   const toolCount = disabled ? 0 : (management?.tools.length ?? registry?.tools.length ?? 0);
+  const dashboardCount = disabled ? 0 : dashboards.length;
   return (
     <div className={`workspace-right-block${disabled ? " is-disabled" : ""}`}>
       <details className="workspace-right-section" open={!disabled}>
@@ -1859,6 +1915,37 @@ function WorkspaceRightPanel({ registry, management, disabled }: { registry: Reg
         </summary>
         {disabled ? <p className="right-section-empty">Select a project to view tools</p> : <Tools />}
       </details>
+      <details className="workspace-right-section" open={!disabled && dashboards.length > 0}>
+        <summary>
+          <span><Icon name="grid" />Dashboards</span>
+          <span className="right-section-meta">{dashboardCount}</span>
+        </summary>
+        {disabled ? (
+          <p className="right-section-empty">Select a project to view dashboards</p>
+        ) : dashboards.length === 0 ? (
+          <p className="right-section-empty">Ask Hermes to monitor equipment and a dashboard will appear here.</p>
+        ) : (
+          <ul className="workspace-right-dashboard-list" aria-label="Project dashboards">
+            {dashboards.map((dashboard) => (
+              <li key={dashboard.id}>
+                <button
+                  type="button"
+                  className={`workspace-right-dashboard-item${dashboard.id === activeDashboardId ? " is-active" : ""}`}
+                  onClick={() => onOpenDashboard(dashboard.id)}
+                >
+                  <span className="workspace-right-dashboard-copy">
+                    <strong>{dashboard.title}</strong>
+                    <small>{dashboard.description || `${dashboard.widgets.length} widgets`}</small>
+                  </span>
+                  <Badge tone={dashboard.visibility === "project" ? "success" : "neutral"}>
+                    {dashboard.visibility === "project" ? "Shared" : "Private"}
+                  </Badge>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
     </div>
   );
 }
@@ -1873,6 +1960,10 @@ function Workspace({
   activeConversationId,
   kbDocuments,
   repoItems,
+  dashboards,
+  activeDashboard,
+  dashboardLiveValues,
+  dashboardRealtimeStale,
   kbTotalCount,
   repoTotalCount,
   providerDiagnostics,
@@ -1887,6 +1978,7 @@ function Workspace({
   onSwitchProject,
   onSelectProject,
   onSelectConversation,
+  onOpenDashboard,
   onCreateProject,
   onSignOut,
   projectConversationCounts,
@@ -1895,6 +1987,8 @@ function Workspace({
   onDeleteConversation,
   onRenameConversation,
   onDeleteProject,
+  onDashboardLayoutChange,
+  onDashboardVisibilityChange,
   onStop,
   streamingActivity,
   streamOutputStarted,
@@ -1914,6 +2008,10 @@ function Workspace({
   activeConversationId: string | null;
   kbDocuments: KnowledgeBaseDocument[];
   repoItems: RepositoryItem[];
+  dashboards: DashboardRecord[];
+  activeDashboard: DashboardRecord | null;
+  dashboardLiveValues: Record<string, BmsCollectorPoint>;
+  dashboardRealtimeStale: boolean;
   kbTotalCount: number;
   repoTotalCount: number;
   providerDiagnostics: ChatProviderDiagnostics | null;
@@ -1929,6 +2027,7 @@ function Workspace({
   onSwitchProject: () => void;
   onSelectProject: (project: ProjectSummary) => void;
   onSelectConversation: (convId: string) => void;
+  onOpenDashboard: (dashboardId: string) => void;
   onCreateProject: (name: string) => void;
   onSignOut: () => void;
   projectConversationCounts: Record<string, number>;
@@ -1937,6 +2036,8 @@ function Workspace({
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
+  onDashboardLayoutChange: (layout: DashboardRecord["layout"]) => Promise<void>;
+  onDashboardVisibilityChange: (visibility: DashboardVisibility) => Promise<void>;
   streamingActivity?: ChatStreamActivityEvent[];
   streamOutputStarted: boolean;
   streamAnswerPhase?: boolean;
@@ -1951,6 +2052,7 @@ function Workspace({
     { id: "bms", label: "BMS Data Config" },
     { id: "kb", label: "Knowledge Base" },
     { id: "repo", label: "Repository" },
+    { id: "dashboards", label: "Dashboards" },
     { id: "registry", label: "Platform Registry" },
     { id: "gateways", label: "Gateways" },
     { id: "building", label: "Building Domain" }
@@ -1992,6 +2094,22 @@ function Workspace({
       {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
+      {activeTab === "dashboards" ? (
+        activeDashboard ? (
+          <DashboardView
+            token={token}
+            dashboard={activeDashboard}
+            liveValues={dashboardLiveValues}
+            stale={dashboardRealtimeStale}
+            onLayoutChange={onDashboardLayoutChange}
+            onVisibilityChange={onDashboardVisibilityChange}
+          />
+        ) : (
+          <Surface className="dashboard-empty-surface">
+            <EmptyState title="Choose a dashboard">Pick a dashboard from the right sidebar to open it here.</EmptyState>
+          </Surface>
+        )
+      ) : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
       {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
       {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
@@ -2055,7 +2173,16 @@ function Workspace({
           />
         )}
         center={center}
-        right={<WorkspaceRightPanel registry={project ? registry : null} management={project ? management : null} disabled={!project} />}
+        right={(
+          <WorkspaceRightPanel
+            registry={project ? registry : null}
+            management={project ? management : null}
+            dashboards={project ? dashboards : []}
+            activeDashboardId={activeDashboard?.id ?? null}
+            disabled={!project}
+            onOpenDashboard={onOpenDashboard}
+          />
+        )}
         className={shellClass}
       />
     </div>
@@ -2075,6 +2202,10 @@ export default function App() {
   const [pendingNewChat, setPendingNewChat] = useState(false);
   const [knowledgeBaseDocuments, setKnowledgeBaseDocuments] = useState<KnowledgeBaseDocument[]>([]);
   const [repositoryItems, setRepositoryItems] = useState<RepositoryItem[]>([]);
+  const [dashboards, setDashboards] = useState<DashboardRecord[]>([]);
+  const [activeDashboardId, setActiveDashboardId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.dashboardId ?? null);
+  const [dashboardLiveValues, setDashboardLiveValues] = useState<Record<string, BmsCollectorPoint>>({});
+  const [dashboardRealtimeAt, setDashboardRealtimeAt] = useState<number | null>(null);
   const [kbTotalCount, setKbTotalCount] = useState(0);
   const [repoTotalCount, setRepoTotalCount] = useState(0);
   const [projectConversationCounts, setProjectConversationCounts] = useState<Record<string, number>>({});
@@ -2093,6 +2224,7 @@ export default function App() {
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingTurnRef = useRef<StreamingTurnState | null>(null);
+  const projectSocketRef = useRef<ReturnType<typeof createProjectSocket> | null>(null);
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -2102,23 +2234,31 @@ export default function App() {
     if (!selectedProject) {
       return;
     }
-    const targetPath = workspacePathFromTab(selectedProject.id, activeTab);
+    const targetPath = workspacePathFromTab(
+      selectedProject.id,
+      activeTab,
+      activeTab === "dashboards" ? activeDashboardId : null
+    );
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, "", targetPath);
     }
-  }, [activeTab, selectedProject?.id ?? null]);
+  }, [activeDashboardId, activeTab, selectedProject?.id ?? null]);
 
   useEffect(() => {
     const parsed = parseWorkspacePath(window.location.pathname);
     if (parsed) {
       setPathnameProjectId(parsed.projectId);
       setActiveTab(parsed.tab);
+      setActiveDashboardId(parsed.dashboardId ?? null);
     }
     const handlePopState = () => {
       const next = parseWorkspacePath(window.location.pathname);
       setPathnameProjectId(next?.projectId ?? null);
       if (next) {
         setActiveTab(next.tab);
+        setActiveDashboardId(next.dashboardId ?? null);
+      } else {
+        setActiveDashboardId(null);
       }
     };
     window.addEventListener("popstate", handlePopState);
@@ -2126,6 +2266,16 @@ export default function App() {
   }, []);
 
   const visibleStreamState = activeConversationId ? conversationStreams[activeConversationId] : undefined;
+  const activeDashboard = useMemo(
+    () => dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
+    [dashboards, activeDashboardId]
+  );
+  const activeDashboardPointNames = useMemo(
+    () => dashboardPointNames(activeDashboard),
+    [activeDashboard]
+  );
+  const dashboardRealtimeStale = activeDashboardPointNames.length > 0
+    && (dashboardRealtimeAt === null || (Date.now() - dashboardRealtimeAt) > 70_000);
   const visibleMessages = useMemo(
     () => mergeMessagesWithStreamingState(messages, visibleStreamState),
     [messages, visibleStreamState]
@@ -2144,6 +2294,10 @@ export default function App() {
     setPendingNewChat(false);
     setKnowledgeBaseDocuments([]);
     setRepositoryItems([]);
+    setDashboards([]);
+    setActiveDashboardId(null);
+    setDashboardLiveValues({});
+    setDashboardRealtimeAt(null);
     setKbTotalCount(0);
     setRepoTotalCount(0);
     setProjectConversationCounts({});
@@ -2170,29 +2324,32 @@ export default function App() {
       getRegistry(currentToken),
       getProjectManagement(currentToken, projectId)
     ]);
-    const [kbResponse, repoResponse] = await Promise.all([
+    const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
       getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
-      getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
+      getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
+      getDashboards(currentToken, projectId).catch(() => ({ dashboards: [], totalCount: 0, requestId: "" }))
     ]);
     setRegistry(registryResponse);
     setManagement(managementResponse);
     setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+    setDashboards(dashboardResponse.dashboards);
     const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
     const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
     setRepositoryItems(visibleRepoItems);
     setKbTotalCount(kbResponse.totalCount);
     setRepoTotalCount(visibleRepoCount);
     setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + visibleRepoCount }));
-    return { registryResponse, managementResponse, kbResponse, repoResponse };
+    return { registryResponse, managementResponse, kbResponse, repoResponse, dashboardResponse };
   }
 
-  function applyWorkspacePath(projectId: string, tab: WorkspaceTab): void {
-    const nextPath = workspacePathFromTab(projectId, tab);
+  function applyWorkspacePath(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): void {
+    const nextPath = workspacePathFromTab(projectId, tab, dashboardId);
     if (window.location.pathname !== nextPath) {
       window.history.pushState({}, "", nextPath);
     }
     setPathnameProjectId(projectId);
     setActiveTab(tab);
+    setActiveDashboardId(tab === "dashboards" ? (dashboardId ?? null) : null);
   }
 
   useEffect(() => {
@@ -2224,6 +2381,7 @@ export default function App() {
         setBanner(null);
         if (nextProject) {
           setActiveTab(pathState?.tab ?? "chat");
+          setActiveDashboardId(pathState?.dashboardId ?? null);
           setPathnameProjectId(nextProject.id);
           if (sessionResponse.session.projectId !== nextProject.id) {
             const selected = await selectProject(token, nextProject.id);
@@ -2238,9 +2396,10 @@ export default function App() {
             getProjectManagement(token, nextProject.id),
             getConversations(token, nextProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" }))
           ]);
-          const [kbResponse, repoResponse] = await Promise.all([
+          const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
             getKnowledgeBase(token, nextProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
-            getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
+            getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
+            getDashboards(token, nextProject.id).catch(() => ({ dashboards: [], totalCount: 0, requestId: "" }))
           ]);
           if (!cancelled) {
             const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
@@ -2254,6 +2413,7 @@ export default function App() {
             setRegistry(registryResponse);
             setManagement(managementResponse);
             setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+            setDashboards(dashboardResponse.dashboards);
             setRepositoryItems(visibleRepoItems);
             setKbTotalCount(kbResponse.totalCount);
             setRepoTotalCount(visibleRepoCount);
@@ -2269,18 +2429,54 @@ export default function App() {
             setBanner(errorBanner(error, "Could not load session"));
           }
         }
-    } finally {
-      if (!cancelled) {
-        setBootstrapping(false);
+      } finally {
+        if (!cancelled) {
+          setBootstrapping(false);
+        }
       }
     }
-  }
 
     void bootstrap();
     return () => {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!token || !selectedProject || !activeDashboardId) return;
+    if (dashboards.some((dashboard) => dashboard.id === activeDashboardId)) return;
+
+    let cancelled = false;
+    const projectId = selectedProject.id;
+    const dashboardId = activeDashboardId;
+    async function hydrateActiveDashboard() {
+      try {
+        const response = await getDashboard(token, projectId, dashboardId);
+        if (cancelled) return;
+        setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      } catch (error) {
+        if (cancelled) return;
+        if (isAuthFailure(error)) {
+          clearAuth(errorBanner(error, "Session expired"));
+          return;
+        }
+        if (activeTab === "dashboards") {
+          applyWorkspacePath(projectId, "dashboards");
+        }
+        setBanner(errorBanner(error, "Could not load dashboard"));
+      }
+    }
+
+    void hydrateActiveDashboard();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDashboardId, activeTab, dashboards, selectedProject?.id ?? null, token]);
+
+  useEffect(() => {
+    setDashboardLiveValues({});
+    setDashboardRealtimeAt(null);
+  }, [selectedProject?.id ?? null]);
 
   // Poll for proactive messages (scheduler-fired reminders) in the active conversation
   useEffect(() => {
@@ -2343,16 +2539,18 @@ export default function App() {
 
     async function refreshSidebar() {
       try {
-        const [convResponse, kbResponse, repoResponse] = await Promise.all([
+        const [convResponse, kbResponse, repoResponse, dashboardResponse] = await Promise.all([
           getConversations(token, projectId).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
           getKnowledgeBase(token, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
-          getRepository(token, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
+          getRepository(token, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
+          getDashboards(token, projectId).catch(() => ({ dashboards: [], totalCount: 0, requestId: "" }))
         ]);
         if (!active) return;
         const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
         const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
         setConversations((current) => mergeConversationSummaries(convResponse.conversations, current, conversationStreams));
         setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+        setDashboards(dashboardResponse.dashboards);
         setRepositoryItems((current) => {
           const incomingIds = new Set(visibleRepoItems.map((item) => item.id));
           return [...visibleRepoItems, ...current.filter((item) => !incomingIds.has(item.id))];
@@ -2381,8 +2579,12 @@ export default function App() {
     if (!token || !selectedProject) return;
 
     const socket = createProjectSocket(selectedProject.id, token);
+    projectSocketRef.current = socket;
 
     socket.on("message", (data) => {
+      if (data.type === "connected") {
+        socket.send({ type: "dashboard_subscribe", pointNames: activeDashboardPointNames });
+      }
       if (data.type === "reminder_fired" && data.message) {
         const reminderMsg = data.message as ChatMessage;
         setMessages((current) => {
@@ -2408,12 +2610,70 @@ export default function App() {
           ))
         );
       }
+      if (data.type === "dashboard_point_update" && Array.isArray(data.updates)) {
+        type DashboardPointUpdate = {
+          pointName: string;
+          value: string | null | undefined;
+          polledAt: string | undefined;
+          objectRef: string | undefined;
+        };
+        const updates = data.updates
+          .map((entry) => {
+            if (typeof entry !== "object" || entry === null || typeof (entry as Record<string, unknown>).pointName !== "string") {
+              return null;
+            }
+            const payload = entry as Record<string, unknown>;
+            return {
+              pointName: payload.pointName as string,
+              value: typeof payload.value === "string" || payload.value == null ? payload.value : String(payload.value),
+              polledAt: typeof payload.polledAt === "string" ? payload.polledAt : undefined,
+              objectRef: typeof payload.objectRef === "string" ? payload.objectRef : undefined
+            };
+          })
+          .filter((entry): entry is DashboardPointUpdate => entry !== null);
+        if (updates.length > 0) {
+          setDashboardLiveValues((current) => {
+            const next = { ...current };
+            for (const update of updates) {
+              next[update.pointName] = {
+                id: -1,
+                name: update.pointName,
+                last_value: update.value ?? null,
+                ...(update.polledAt ? { last_polled_at: update.polledAt } : {}),
+                ...(update.objectRef ? { object_ref: update.objectRef } : {})
+              };
+            }
+            return next;
+          });
+          setDashboardRealtimeAt(Date.now());
+        }
+      }
+      if (data.type === "dashboard_created" && typeof data.dashboard === "object" && data.dashboard !== null) {
+        setDashboards((current) => upsertDashboardRecord(current, data.dashboard as DashboardRecord));
+      }
+      if (data.type === "dashboard_updated" && typeof data.dashboard === "object" && data.dashboard !== null) {
+        setDashboards((current) => upsertDashboardRecord(current, data.dashboard as DashboardRecord));
+      }
+      if (data.type === "dashboard_deleted" && typeof data.dashboardId === "string") {
+        setDashboards((current) => current.filter((dashboard) => dashboard.id !== data.dashboardId));
+        if (data.dashboardId === activeDashboardId) {
+          applyWorkspacePath(selectedProject.id, "dashboards");
+        }
+      }
     });
 
     return () => {
+      if (projectSocketRef.current === socket) {
+        projectSocketRef.current = null;
+      }
       socket.close();
     };
-  }, [token, selectedProject?.id ?? null]);
+  }, [activeDashboardId, activeDashboardPointNames, selectedProject?.id ?? null, token]);
+
+  useEffect(() => {
+    projectSocketRef.current?.send({ type: "dashboard_subscribe", pointNames: activeDashboardPointNames });
+    setDashboardRealtimeAt(null);
+  }, [activeDashboardPointNames]);
 
   async function handleLogin(email: string, password: string) {
     setBusy(true);
@@ -2461,7 +2721,10 @@ export default function App() {
       setMessages([]);
       setConversations(sortConversationsByNewest(convResponse.conversations));
       setProjectConversationCounts((current) => ({ ...current, [project.id]: convResponse.conversations.length }));
-      setProjectAssetCounts((current) => ({ ...current, [project.id]: surfaces.kbResponse.documents.length + surfaces.repoResponse.artifacts.length }));
+      setProjectAssetCounts((current) => ({
+        ...current,
+        [project.id]: surfaces.kbResponse.totalCount + visibleRepositoryArtifactCount(surfaces.repoResponse.artifacts)
+      }));
       setActiveConversationId(null);
       setPendingNewChat(false);
       setKnowledgeBaseDocuments(surfaces.kbResponse.documents.map(apiDocumentToUi));
@@ -2506,6 +2769,10 @@ export default function App() {
       setPendingNewChat(false);
       setKnowledgeBaseDocuments([]);
       setRepositoryItems([]);
+      setDashboards([]);
+      setActiveDashboardId(null);
+      setDashboardLiveValues({});
+      setDashboardRealtimeAt(null);
       setKbTotalCount(0);
       setRepoTotalCount(0);
       setProjectConversationCounts((current) => ({ ...current, [project.id]: 0 }));
@@ -2523,6 +2790,87 @@ export default function App() {
       setBanner(errorBanner(error, "Project creation failed"));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function handleTabChange(tab: WorkspaceTab) {
+    if (!selectedProject) {
+      setActiveTab(tab);
+      if (tab !== "dashboards") {
+        setActiveDashboardId(null);
+      }
+      return;
+    }
+    applyWorkspacePath(selectedProject.id, tab);
+  }
+
+  async function handleOpenDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    setBusy(true);
+    try {
+      const response = await getDashboard(token, selectedProject.id, dashboardId);
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setDashboardLiveValues({});
+      setDashboardRealtimeAt(null);
+      applyWorkspacePath(selectedProject.id, "dashboards", dashboardId);
+      setBanner(null);
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not open dashboard"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDashboardLayoutChange(layout: DashboardRecord["layout"]) {
+    if (!token || !selectedProject || !activeDashboard) return;
+    try {
+      const response = await updateDashboard(token, selectedProject.id, activeDashboard.id, {
+        title: activeDashboard.title,
+        ...(activeDashboard.description ? { description: activeDashboard.description } : {}),
+        visibility: activeDashboard.visibility,
+        layout,
+        widgets: activeDashboard.widgets
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({ tone: "success", title: "Dashboard updated", message: "Widget layout saved.", requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not save dashboard layout"));
+      }
+      throw error;
+    }
+  }
+
+  async function handleDashboardVisibilityChange(visibility: DashboardVisibility) {
+    if (!token || !selectedProject || !activeDashboard) return;
+    try {
+      const response = await updateDashboard(token, selectedProject.id, activeDashboard.id, {
+        title: activeDashboard.title,
+        ...(activeDashboard.description ? { description: activeDashboard.description } : {}),
+        visibility,
+        layout: activeDashboard.layout,
+        widgets: activeDashboard.widgets
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({
+        tone: "success",
+        title: visibility === "project" ? "Dashboard shared" : "Dashboard made private",
+        message: `${response.dashboard.title} updated.`,
+        requestId: response.requestId
+      });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not update dashboard visibility"));
+      }
+      throw error;
     }
   }
 
@@ -2969,6 +3317,7 @@ export default function App() {
   async function handleNewChat() {
     if (!token || !selectedProject) {
       setActiveTab("chat");
+      setActiveDashboardId(null);
       setMessages([]);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
@@ -2979,7 +3328,7 @@ export default function App() {
     setMessages([]);
     setChatProviderDiagnostics(null);
     setChatProviderRequestId(undefined);
-    setActiveTab("chat");
+    applyWorkspacePath(selectedProject.id, "chat");
     setBanner({
       tone: "info",
       title: "New chat ready",
@@ -2991,7 +3340,6 @@ export default function App() {
     if (!token || !selectedProject) return;
     if (convId === activeConversationId) {
       setPendingNewChat(false);
-      setActiveTab("chat");
       applyWorkspacePath(selectedProject.id, "chat");
       return;
     }
@@ -3075,6 +3423,10 @@ export default function App() {
         setPendingNewChat(false);
         setKnowledgeBaseDocuments([]);
         setRepositoryItems([]);
+        setDashboards([]);
+        setActiveDashboardId(null);
+        setDashboardLiveValues({});
+        setDashboardRealtimeAt(null);
         setKbTotalCount(0);
         setRepoTotalCount(0);
         setChatProviderDiagnostics(null);
@@ -3100,6 +3452,7 @@ export default function App() {
   async function handleResetChat() {
     if (!token || !selectedProject) {
       setActiveTab("chat");
+      setActiveDashboardId(null);
       setMessages([]);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
@@ -3118,7 +3471,7 @@ export default function App() {
       }
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
-      setActiveTab("chat");
+      applyWorkspacePath(selectedProject.id, "chat");
       // Update the conversation message count
       setConversations((current) =>
         current.map((c) =>
@@ -3174,6 +3527,10 @@ export default function App() {
           activeConversationId={activeConversationId}
           kbDocuments={knowledgeBaseDocuments}
           repoItems={repositoryItems}
+          dashboards={dashboards}
+          activeDashboard={activeDashboard}
+          dashboardLiveValues={dashboardLiveValues}
+          dashboardRealtimeStale={dashboardRealtimeStale}
           kbTotalCount={kbTotalCount}
           repoTotalCount={repoTotalCount}
           providerDiagnostics={chatProviderDiagnostics}
@@ -3181,7 +3538,7 @@ export default function App() {
           registry={registry}
           management={management}
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={handleTabChange}
           onSend={handleSend}
           onNewChat={handleNewChat}
           onResetChat={handleResetChat}
@@ -3190,11 +3547,16 @@ export default function App() {
             setMessages([]);
             setConversations([]);
             setActiveConversationId(null);
+            setDashboards([]);
+            setActiveDashboardId(null);
+            setDashboardLiveValues({});
+            setDashboardRealtimeAt(null);
             storeSession({ token, user, projectId: null });
             window.history.pushState({}, "", "/");
           }}
           onSelectProject={(project) => { void handleProjectSelect(project); }}
           onSelectConversation={(convId) => { void handleSelectConversation(convId); }}
+          onOpenDashboard={(dashboardId) => { void handleOpenDashboard(dashboardId); }}
           onCreateProject={(name) => { void handleCreateProject(name); }}
           onSignOut={() => clearAuth()}
           projectConversationCounts={projectConversationCounts}
@@ -3203,6 +3565,8 @@ export default function App() {
           onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }}
           onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }}
           onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }}
+          onDashboardLayoutChange={handleDashboardLayoutChange}
+          onDashboardVisibilityChange={handleDashboardVisibilityChange}
           onStop={handleStop}
           streamingActivity={visibleStreamingActivity}
           streamOutputStarted={streamShowsWorkedFor(visibleStreamState)}
