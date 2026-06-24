@@ -1923,7 +1923,7 @@ function WorkspaceRightPanel({
         {disabled ? (
           <p className="right-section-empty">Select a project to view dashboards</p>
         ) : dashboards.length === 0 ? (
-          <p className="right-section-empty">Ask Hermes to monitor equipment and a dashboard will appear here.</p>
+          <p className="right-section-empty">Ask BuildingGPT to monitor equipment and a dashboard will appear here.</p>
         ) : (
           <ul className="workspace-right-dashboard-list" aria-label="Project dashboards">
             {dashboards.map((dashboard) => (

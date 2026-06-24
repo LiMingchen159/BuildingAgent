@@ -291,7 +291,7 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
 
       {orderedWidgets.length === 0 ? (
         <Surface className="dashboard-empty-surface">
-          <EmptyState title="No widgets yet">Hermes can generate a dashboard spec here when you ask to monitor equipment.</EmptyState>
+          <EmptyState title="No widgets yet">BuildingGPT can generate a dashboard spec here when you ask to monitor equipment.</EmptyState>
         </Surface>
       ) : (
         <div className="dashboard-grid">
