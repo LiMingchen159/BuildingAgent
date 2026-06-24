@@ -623,28 +623,20 @@ describe("project-scoped chat contract", () => {
                   visibility: "private",
                   widgets: [
                     {
-                      id: "live_supply_return",
                       kind: "live_value_grid",
                       title: "Live temperatures",
-                      pointBindings: [
-                        { pointName: "CH-01_Supply_Water_Temp", label: "Supply", role: "supply", unit: "degF" },
-                        { pointName: "CH-01_Return_Water_Temp", label: "Return", role: "return", unit: "degF" }
-                      ]
+                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp"]
                     },
                     {
-                      id: "trend_supply_return",
                       kind: "timeseries_chart",
                       title: "Historical trend",
                       defaultTimeRange: "12h",
-                      pointBindings: [
-                        { pointName: "CH-01_Supply_Water_Temp", label: "Supply", role: "supply", unit: "degF" },
-                        { pointName: "CH-01_Return_Water_Temp", label: "Return", role: "return", unit: "degF" }
-                      ]
+                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp"]
                     }
                   ],
                   layout: [
-                    { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 1 },
-                    { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 1 }
+                    { widgetIndex: 0, row: 1, col: 1, colSpan: 1 },
+                    { widgetIndex: 1, row: 1, col: 2, colSpan: 2 }
                   ]
                 })
               }
@@ -698,6 +690,10 @@ describe("project-scoped chat contract", () => {
         widgets: [
           expect.objectContaining({ kind: "live_value_grid" }),
           expect.objectContaining({ kind: "timeseries_chart" })
+        ],
+        layout: [
+          expect.objectContaining({ x: 0, y: 0, w: 1, h: 1 }),
+          expect.objectContaining({ x: 1, y: 0, w: 2, h: 1 })
         ]
       });
     } finally {

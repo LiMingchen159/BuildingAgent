@@ -62,6 +62,160 @@ function numArg(args: Record<string, unknown>, key: string, fallback: number): n
   return fallback;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+function stringValueFrom(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = stringValue(record[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function normalizeDashboardId(value: string, fallback: string): string {
+  const source = value || fallback;
+  const normalized = source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function normalizeDashboardBinding(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    const pointName = value.trim();
+    return pointName ? { pointName } : null;
+  }
+  if (!isPlainRecord(value)) return null;
+
+  const pointName = stringValueFrom(value, ["pointName", "point_name", "name", "point"]);
+  const objectRef = stringValueFrom(value, ["objectRef", "object_ref", "ref"]);
+  if (!pointName && !objectRef) return null;
+
+  const label = stringValueFrom(value, ["label", "title", "name"]);
+  const role = stringValue(value.role);
+  const unit = stringValue(value.unit);
+  return {
+    ...(pointName ? { pointName } : {}),
+    ...(objectRef ? { objectRef } : {}),
+    ...(label && label !== pointName ? { label } : {}),
+    ...(role ? { role } : {}),
+    ...(unit ? { unit } : {})
+  };
+}
+
+function normalizeDashboardWidget(value: unknown, index: number): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  const kind = stringValue(value.kind);
+  const title = stringValueFrom(value, ["title", "name"]) || (kind === "timeseries_chart" ? "Historical trend" : "Live values");
+  const id = stringValue(value.id) || normalizeDashboardId(title, `widget_${index + 1}`);
+
+  const pointSources: unknown[] = [];
+  const directBindings = value.pointBindings ?? value.point_bindings ?? value.bindings;
+  if (Array.isArray(directBindings)) {
+    pointSources.push(...directBindings);
+  }
+  for (const key of ["points", "pointNames", "point_names", "names"]) {
+    const entries = value[key];
+    if (Array.isArray(entries)) pointSources.push(...entries);
+  }
+  for (const key of ["objectRefs", "object_refs"]) {
+    const entries = value[key];
+    if (Array.isArray(entries)) {
+      pointSources.push(...entries.map((entry) => ({ objectRef: entry })));
+    }
+  }
+  const values = value.values;
+  if (Array.isArray(values)) {
+    pointSources.push(...values);
+  }
+  if (isPlainRecord(value.config) && Array.isArray(value.config.points)) {
+    pointSources.push(...value.config.points);
+  }
+
+  const pointBindings = pointSources
+    .map((entry) => normalizeDashboardBinding(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+
+  return {
+    id,
+    kind,
+    title,
+    pointBindings,
+    ...(stringValueFrom(value, ["defaultTimeRange", "default_time_range", "timeRange", "range"]) ? {
+      defaultTimeRange: stringValueFrom(value, ["defaultTimeRange", "default_time_range", "timeRange", "range"])
+    } : {})
+  };
+}
+
+function normalizeDashboardLayout(
+  value: unknown,
+  widgets: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  const layout = Array.isArray(value) ? value : [];
+  const normalized = layout
+    .map((entry, index) => {
+      if (!isPlainRecord(entry)) return null;
+      const widgetIndex = typeof entry.widgetIndex === "number" && Number.isFinite(entry.widgetIndex)
+        ? Math.trunc(entry.widgetIndex)
+        : index;
+      const widgetId = stringValue(entry.widgetId) || stringValue(widgets[widgetIndex]?.id);
+      if (!widgetId) return null;
+      const x = typeof entry.x === "number" ? Math.trunc(entry.x) : Math.max(0, numArg(entry, "col", 1) - 1);
+      const y = typeof entry.y === "number" ? Math.trunc(entry.y) : Math.max(0, numArg(entry, "row", index + 1) - 1);
+      const w = typeof entry.w === "number" ? Math.trunc(entry.w) : numArg(entry, "colSpan", numArg(entry, "width", 1));
+      const h = typeof entry.h === "number" ? Math.trunc(entry.h) : numArg(entry, "rowSpan", numArg(entry, "height", 1));
+      return { widgetId, x, y, w, h };
+    })
+    .filter((entry): entry is { widgetId: string; x: number; y: number; w: number; h: number } => entry !== null);
+
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  const fallback: Array<Record<string, unknown>> = [];
+  let x = 0;
+  let y = 0;
+  for (const widget of widgets) {
+    const widgetId = stringValue(widget.id);
+    if (!widgetId) continue;
+    const w = stringValue(widget.kind) === "timeseries_chart" ? 2 : 1;
+    if (x + w > 3) {
+      x = 0;
+      y += 1;
+    }
+    fallback.push({ widgetId, x, y, w, h: 1 });
+    x += w;
+    if (x >= 3) {
+      x = 0;
+      y += 1;
+    }
+  }
+  return fallback;
+}
+
+function normalizeDashboardCreateArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const widgets = Array.isArray(args.widgets)
+    ? args.widgets
+      .map((entry, index) => normalizeDashboardWidget(entry, index))
+      .filter((entry): entry is Record<string, unknown> => entry !== null)
+    : [];
+  return {
+    ...args,
+    widgets,
+    layout: normalizeDashboardLayout(args.layout, widgets)
+  };
+}
+
 function resolveSafePath(baseRoot: string, requested: string): string | null {
   const resolved = path.resolve(baseRoot, requested);
   const normalized = path.normalize(resolved);
@@ -850,7 +1004,7 @@ export function createGenericToolRegistry(
       schema: {
         name: "dashboard_create",
         description:
-          "Create a dashboard with 3-column layout and typed widgets. Provide title, optional description, optional visibility, widgets, and layout. Never generate raw HTML/JS.",
+          "Create a dashboard with 3-column layout and typed widgets. Provide title, optional description, optional visibility, widgets, and layout. Never generate raw HTML/JS. Preferred widget fields are id, kind, title, pointBindings; the tool also accepts agent-friendly points/object_refs and row/col/colSpan layout aliases.",
         parameters: {
           type: "object",
           properties: {
@@ -858,8 +1012,16 @@ export function createGenericToolRegistry(
             description: { type: "string", description: "Optional operator-facing description." },
             visibility: { type: "string", enum: ["private", "project"], description: "Optional visibility; defaults to private." },
             sourceConversationId: { type: "string", description: "Optional source conversation id." },
-            widgets: { type: "array", description: "Widget definitions. Supported kinds: live_value_grid, timeseries_chart." },
-            layout: { type: "array", description: "Grid placements in a 3-column layout." }
+            widgets: {
+              type: "array",
+              description:
+                "Widget definitions. Supported kinds: live_value_grid, timeseries_chart. Use pointBindings [{pointName,label,role,unit}] or points [pointName]."
+            },
+            layout: {
+              type: "array",
+              description:
+                "Grid placements in a 3-column layout. Preferred {widgetId,x,y,w,h}; aliases {widgetIndex,row,col,colSpan,rowSpan} are accepted."
+            }
           },
           required: ["title", "widgets", "layout"]
         }
@@ -869,7 +1031,7 @@ export function createGenericToolRegistry(
           return { error: "dashboard_create_unavailable" };
         }
         const parsed = parseDashboardMutationInput({
-          ...args,
+          ...normalizeDashboardCreateArgs(args),
           sourceConversationId: textArg(args, "sourceConversationId") || context.conversationId
         });
         if ("error" in parsed) {
