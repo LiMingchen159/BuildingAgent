@@ -186,4 +186,27 @@ describe("dashboard project APIs", () => {
       message: expect.stringContaining("widgets")
     });
   });
+
+  it("backfills dashboard storage for persisted stores created before dashboards existed", async () => {
+    const baseStore = createSeedStore();
+    const { dashboardsByProject: _unusedDashboards, ...legacyStore } = baseStore as ReturnType<typeof createSeedStore> & {
+      dashboardsByProject?: unknown;
+    };
+    const app = buildServer({ store: legacyStore as ReturnType<typeof createSeedStore> });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken)
+    });
+
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      projectId: "project_element",
+      totalCount: 0,
+      dashboards: []
+    });
+  });
 });

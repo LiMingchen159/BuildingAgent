@@ -16,7 +16,17 @@ import {
   resolveUserIdForToken,
   tokenExpiresAtIso
 } from "./authTokens.js";
-import { createSeedStore, type ChatMessage, type ChatMessageDownload, type ChatMessageImage, type Conversation, type KnowledgeBaseDocument, type RepositoryArtifact, type SeedStore } from "./seed.js";
+import {
+  createSeedStore,
+  ensureStoreDashboardsByProject,
+  type ChatMessage,
+  type ChatMessageDownload,
+  type ChatMessageImage,
+  type Conversation,
+  type KnowledgeBaseDocument,
+  type RepositoryArtifact,
+  type SeedStore
+} from "./seed.js";
 import {
   finalizeAssistantDownloads,
   sanitizeRepositoryDownloadMarkdown,
@@ -1229,6 +1239,7 @@ async function proxyBms(
 
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? (options.persist ? (loadStoreSync() ?? createSeedStore()) : createSeedStore());
+  ensureStoreDashboardsByProject(store);
   ensureStoreSkillsByProject(store);
   ensureStoreProjectGrounding(store);
   restoreGroundingSequence(store);

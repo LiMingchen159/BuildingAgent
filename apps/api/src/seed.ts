@@ -474,7 +474,7 @@ export function cloneStore(store: SeedStore): SeedStore {
       ])
     ),
     dashboardsByProject: Object.fromEntries(
-      Object.entries(store.dashboardsByProject).map(([projectId, dashboards]) => [
+      Object.entries(store.dashboardsByProject ?? {}).map(([projectId, dashboards]) => [
         projectId,
         dashboards.map((dashboard) => ({
           ...dashboard,
@@ -539,4 +539,15 @@ export function cloneStore(store: SeedStore): SeedStore {
 
 export function seedStore(): SeedStore {
   return createSeedStore();
+}
+
+export function ensureStoreDashboardsByProject(store: SeedStore): void {
+  if (!store.dashboardsByProject) {
+    store.dashboardsByProject = {};
+  }
+  for (const project of store.projects) {
+    if (!Array.isArray(store.dashboardsByProject[project.id])) {
+      store.dashboardsByProject[project.id] = [];
+    }
+  }
 }
