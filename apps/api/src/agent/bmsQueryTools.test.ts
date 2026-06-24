@@ -98,4 +98,60 @@ describe("bms query tools", () => {
     expect(calledUrl).toContain("name=WCC_6_SUWT");
     expect(result).toMatchObject({ total: 2 });
   });
+
+  it("bms_timeseries_query falls back to readings when unified timeseries has no alias", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/v1/timeseries?")) {
+        return new Response(JSON.stringify({ error: "not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({
+        total: 2,
+        items: [
+          { ts: "2026-06-24T11:21:43+00:00", value_num: 9.45, name: "WCC-L1-02-CHWST" },
+          { ts: "2026-06-24T11:00:00+00:00", value_num: 9.5, name: "WCC-L1-02-CHWST" }
+        ]
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const registry = createGenericToolRegistry(new AgentMemoryStore("/tmp/ba-test-memory"));
+    const tool = registry.list().find((candidate) => candidate.name === "bms_timeseries_query");
+    const result = await tool!.run(
+      {
+        name: "WCC-L1-02-CHWST",
+        from: "2026-06-24T10:00:00.000Z",
+        to: "2026-06-24T12:00:00.000Z",
+        order: "asc"
+      },
+      {
+        projectId: "project_element",
+        userId: "user_test",
+        requestId: "req_test",
+        conversationId: "conv_test",
+        canConfigure: false,
+        messages: []
+      }
+    );
+
+    vi.unstubAllGlobals();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const fallbackUrl = (fetchImpl.mock.calls as unknown as Array<[string]>)[1]![0];
+    expect(fallbackUrl).toContain("/api/v1/readings?");
+    expect(fallbackUrl).toContain("source=poll");
+    expect(result).toMatchObject({
+      total: 2,
+      items: [
+        expect.objectContaining({ ts: "2026-06-24T11:00:00+00:00" }),
+        expect.objectContaining({ ts: "2026-06-24T11:21:43+00:00" })
+      ]
+    });
+  });
 });

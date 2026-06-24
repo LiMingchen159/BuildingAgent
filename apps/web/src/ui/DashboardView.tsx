@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardLayoutItem, DashboardPointBinding, DashboardRecord, DashboardVisibility } from "../api";
-import { getBmsCollectorLastValue, queryBmsCollectorTimeseries, type BmsCollectorPoint, type BmsCollectorTimeseriesRow } from "../bmsCollectorClient";
+import { getBmsCollectorLastValue, queryBmsCollectorReadings, queryBmsCollectorTimeseries, type BmsCollectorPoint, type BmsCollectorTimeseriesRow } from "../bmsCollectorClient";
 import { Badge, Button, EmptyState, Surface } from "./primitives";
 
 interface DashboardViewProps {
@@ -110,6 +110,31 @@ function toChartPoints(rows: BmsCollectorTimeseriesRow[]): Array<{ ts: string; v
       return Number.isFinite(numeric) ? { ts: row.ts, value: numeric } : null;
     })
     .filter((entry): entry is { ts: string; value: number } => entry !== null);
+}
+
+async function queryDashboardHistory(
+  token: string,
+  pointName: string,
+  from: string,
+  to: string
+): Promise<BmsCollectorTimeseriesRow[]> {
+  const params = {
+    name: pointName,
+    from,
+    to,
+    limit: "720",
+    order: "asc"
+  };
+  try {
+    const response = await queryBmsCollectorTimeseries(token, params);
+    if (response.items.length > 0) {
+      return response.items;
+    }
+  } catch {
+    // Newer L1 poll points are available through /readings even when /timeseries has no alias.
+  }
+  const readings = await queryBmsCollectorReadings(token, params);
+  return [...readings.items].reverse();
 }
 
 function LineChart({ series }: { series: ChartSeries[] }) {
@@ -251,18 +276,12 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
             const series = await Promise.all(
               widget.pointBindings.map(async (binding, index) => {
                 const pointName = pointKey(binding);
-                const response = await queryBmsCollectorTimeseries(token, {
-                  name: pointName,
-                  from: from.toISOString(),
-                  to: to.toISOString(),
-                  limit: "720",
-                  order: "asc"
-                });
+                const rows = await queryDashboardHistory(token, pointName, from.toISOString(), to.toISOString());
                 return {
                   label: pointDisplayName(binding),
                   pointName,
                   color: CHART_COLORS[index % CHART_COLORS.length]!,
-                  points: toChartPoints(response.items)
+                  points: toChartPoints(rows)
                 };
               })
             );
@@ -362,7 +381,6 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
     <section className="dashboard-page" aria-labelledby="dashboard-title">
       <div className="dashboard-page-header">
         <div>
-          <p className="eyebrow">Dashboards</p>
           <h2 id="dashboard-title">{dashboard.title}</h2>
           {dashboard.description ? <p className="dashboard-page-description">{dashboard.description}</p> : null}
         </div>
@@ -403,7 +421,6 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
                     <strong>{widget.title}</strong>
                     <span>{widget.kind === "live_value_grid" ? "Live values" : `${widget.defaultTimeRange ?? "24h"} trend · HKT`}</span>
                   </div>
-                  <Badge tone="neutral">{layout.w}:{layout.h}</Badge>
                 </div>
 
                 {widget.kind === "live_value_grid" ? (

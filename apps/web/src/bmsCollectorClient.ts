@@ -133,3 +133,14 @@ export async function queryBmsCollectorTimeseries(
   }
   return payload as BmsCollectorTimeseriesResponse;
 }
+
+export async function queryBmsCollectorReadings(
+  token: string,
+  params: Record<string, string>
+): Promise<BmsCollectorTimeseriesResponse> {
+  const payload = await fetchBmsCollector(token, `/api/v1/readings?${new URLSearchParams(params).toString()}`);
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as BmsCollectorTimeseriesResponse).items)) {
+    throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS readings response." }, 200);
+  }
+  return payload as BmsCollectorTimeseriesResponse;
+}

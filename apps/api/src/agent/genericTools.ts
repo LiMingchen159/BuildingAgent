@@ -1008,11 +1008,11 @@ export function createGenericToolRegistry(
       name: "bms_timeseries_query",
       category: "building",
       description:
-        "Fast historical BMS series (merged poll+history). Prefer over terminal/curl. Times in UTC; display to users as Asia/Shanghai.",
+        "Fast historical BMS series (merged poll+history/readings). Prefer over terminal/curl. Times in UTC; display to users as HKT / Asia_Hong_Kong.",
       schema: {
         name: "bms_timeseries_query",
         description:
-          "Fetch timeseries from local BMS-database GET /api/v1/timeseries. Provide name OR point_id OR object_ref, plus from (UTC ISO). For yesterday/today use from/to from CURRENT TIME CALENDAR RANGES in the system prompt.",
+          "Fetch historical readings from local BMS-database GET /api/v1/timeseries with /api/v1/readings fallback. Provide name OR point_id OR object_ref, plus from (UTC ISO). For yesterday/today use from/to from CURRENT TIME CALENDAR RANGES in the system prompt.",
         parameters: {
           type: "object",
           properties: {
