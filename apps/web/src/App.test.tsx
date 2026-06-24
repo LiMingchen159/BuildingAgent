@@ -1139,12 +1139,12 @@ describe("BuildingGPT Web flow", () => {
           requestId: "req_patch_dashboard"
         });
       }
-      if (url.startsWith("/api/bms/collector/api/v1/timeseries?")) {
+      if (url.startsWith("/api/bms/collector/api/v1/readings?")) {
         return jsonResponse({
           total: 2,
           items: [
-            { ts: "2026-06-24T01:00:00.000Z", value_num: 42.0, name: "CH-01_Supply_Water_Temp" },
-            { ts: "2026-06-24T01:00:00.000Z", value_num: 47.4, name: "CH-01_Return_Water_Temp" }
+            { ts: "2026-06-24T01:00:00.000Z", value_num: url.includes("CH-01_Return_Water_Temp") ? 47.4 : 42.0, name: url.includes("CH-01_Return_Water_Temp") ? "CH-01_Return_Water_Temp" : "CH-01_Supply_Water_Temp" },
+            { ts: "2026-06-24T02:00:00.000Z", value_num: url.includes("CH-01_Return_Water_Temp") ? 47.1 : 41.8, name: url.includes("CH-01_Return_Water_Temp") ? "CH-01_Return_Water_Temp" : "CH-01_Supply_Water_Temp" }
           ]
         });
       }
@@ -1166,6 +1166,7 @@ describe("BuildingGPT Web flow", () => {
 
     expect(await screen.findByRole("heading", { name: /plant temperature dashboard/i })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_temp_watch");
+    expect(screen.getByRole("button", { name: /expand project sidebar/i })).toBeInTheDocument();
 
     const socket = MockWebSocket.instances.at(-1);
     expect(socket).toBeTruthy();

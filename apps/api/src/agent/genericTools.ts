@@ -1071,13 +1071,13 @@ export function createGenericToolRegistry(
       schema: {
         name: "dashboard_create",
         description:
-          "Create a dashboard with 6-column layout and typed widgets. Provide title, optional description, optional visibility, widgets, and layout. Never generate raw HTML/JS. For all-chiller monitoring, create one live_value_grid per chiller and one timeseries_chart per chiller; the tool can also split mixed all-chiller widgets automatically. Preferred widget fields are id, kind, title, pointBindings; the tool also accepts agent-friendly points/object_refs and row/col/colSpan layout aliases.",
+          "Create a dashboard with 6-column layout and typed widgets. Provide title, optional description, optional visibility, widgets, and layout. Never generate raw HTML/JS. For multi-equipment monitoring, create one live_value_grid and one timeseries_chart per equipment or asset; the tool can also split mixed aggregate widgets automatically. Preferred widget fields are id, kind, title, pointBindings; the tool also accepts agent-friendly points/object_refs and row/col/colSpan layout aliases.",
         parameters: {
           type: "object",
           properties: {
             title: { type: "string", description: "Dashboard title." },
             description: { type: "string", description: "Optional operator-facing description." },
-            visibility: { type: "string", enum: ["private", "project"], description: "Optional visibility; defaults to private." },
+            visibility: { type: "string", enum: ["private", "project"], description: "Optional visibility; monitoring dashboards should usually default to project unless the user asks for private." },
             sourceConversationId: { type: "string", description: "Optional source conversation id." },
             widgets: {
               type: "array",
@@ -1099,6 +1099,7 @@ export function createGenericToolRegistry(
         }
         const parsed = parseDashboardMutationInput({
           ...normalizeDashboardCreateArgs(args),
+          ...(textArg(args, "visibility") ? {} : { visibility: "project" }),
           sourceConversationId: textArg(args, "sourceConversationId") || context.conversationId
         });
         if ("error" in parsed) {

@@ -2071,6 +2071,13 @@ function Workspace({
     }
   }, [project?.id ?? null]);
 
+  useEffect(() => {
+    if (!project) return;
+    if (activeTab === "dashboards" && activeDashboard) {
+      setLeftOpen(false);
+    }
+  }, [activeDashboard?.id ?? null, activeTab, project?.id ?? null]);
+
   // Determine shell class name for sidebar visibility
   const shellClass = [
     "cgpt-workspace-shell",
@@ -2327,12 +2334,14 @@ export default function App() {
     const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
       getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
       getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
-      getDashboards(currentToken, projectId).catch(() => ({ dashboards: [], totalCount: 0, requestId: "" }))
+      getDashboards(currentToken, projectId).catch(() => null)
     ]);
     setRegistry(registryResponse);
     setManagement(managementResponse);
     setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
-    setDashboards(dashboardResponse.dashboards);
+    if (dashboardResponse) {
+      setDashboards(dashboardResponse.dashboards);
+    }
     const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
     const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
     setRepositoryItems(visibleRepoItems);
@@ -2399,7 +2408,7 @@ export default function App() {
           const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
             getKnowledgeBase(token, nextProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
             getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
-            getDashboards(token, nextProject.id).catch(() => ({ dashboards: [], totalCount: 0, requestId: "" }))
+            getDashboards(token, nextProject.id).catch(() => null)
           ]);
           if (!cancelled) {
             const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
@@ -2413,7 +2422,9 @@ export default function App() {
             setRegistry(registryResponse);
             setManagement(managementResponse);
             setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
-            setDashboards(dashboardResponse.dashboards);
+            if (dashboardResponse) {
+              setDashboards(dashboardResponse.dashboards);
+            }
             setRepositoryItems(visibleRepoItems);
             setKbTotalCount(kbResponse.totalCount);
             setRepoTotalCount(visibleRepoCount);
@@ -2543,14 +2554,16 @@ export default function App() {
           getConversations(token, projectId).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
           getKnowledgeBase(token, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
           getRepository(token, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
-          getDashboards(token, projectId).catch(() => ({ dashboards: [], totalCount: 0, requestId: "" }))
+          getDashboards(token, projectId).catch(() => null)
         ]);
         if (!active) return;
         const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
         const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
         setConversations((current) => mergeConversationSummaries(convResponse.conversations, current, conversationStreams));
         setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
-        setDashboards(dashboardResponse.dashboards);
+        if (dashboardResponse) {
+          setDashboards(dashboardResponse.dashboards);
+        }
         setRepositoryItems((current) => {
           const incomingIds = new Set(visibleRepoItems.map((item) => item.id));
           return [...visibleRepoItems, ...current.filter((item) => !incomingIds.has(item.id))];

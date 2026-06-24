@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardLayoutItem, DashboardPointBinding, DashboardRecord, DashboardVisibility } from "../api";
-import { getBmsCollectorLastValue, queryBmsCollectorReadings, queryBmsCollectorTimeseries, type BmsCollectorPoint, type BmsCollectorTimeseriesRow } from "../bmsCollectorClient";
+import { getBmsCollectorLastValue, queryBmsCollectorReadings, type BmsCollectorPoint, type BmsCollectorTimeseriesRow } from "../bmsCollectorClient";
 import { Badge, Button, EmptyState, Surface } from "./primitives";
 
 interface DashboardViewProps {
@@ -118,23 +118,14 @@ async function queryDashboardHistory(
   from: string,
   to: string
 ): Promise<BmsCollectorTimeseriesRow[]> {
-  const params = {
+  const readings = await queryBmsCollectorReadings(token, {
     name: pointName,
     from,
     to,
     limit: "720",
     order: "asc"
-  };
-  try {
-    const response = await queryBmsCollectorTimeseries(token, params);
-    if (response.items.length > 0) {
-      return response.items;
-    }
-  } catch {
-    // Newer L1 poll points are available through /readings even when /timeseries has no alias.
-  }
-  const readings = await queryBmsCollectorReadings(token, params);
-  return [...readings.items].reverse();
+  });
+  return [...readings.items].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts));
 }
 
 function LineChart({ series }: { series: ChartSeries[] }) {
@@ -230,6 +221,7 @@ function LineChart({ series }: { series: ChartSeries[] }) {
     <div className="dashboard-chart-shell">
       <div ref={chartRef} className="dashboard-chart" role="img" aria-label="Historical trend chart">
         {series.length === 0 ? <span className="dashboard-chart-empty">Loading trend</span> : null}
+        {series.length > 0 && series.every((entry) => entry.points.length === 0) ? <span className="dashboard-chart-empty">No local history yet</span> : null}
         {plotlyUnavailable ? <span className="dashboard-chart-empty">Trend unavailable</span> : null}
       </div>
       <div className="dashboard-chart-meta">
@@ -276,7 +268,20 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
             const series = await Promise.all(
               widget.pointBindings.map(async (binding, index) => {
                 const pointName = pointKey(binding);
-                const rows = await queryDashboardHistory(token, pointName, from.toISOString(), to.toISOString());
+                if (!pointName) {
+                  return {
+                    label: pointDisplayName(binding),
+                    pointName: `missing-${widget.id}-${index}`,
+                    color: CHART_COLORS[index % CHART_COLORS.length]!,
+                    points: []
+                  };
+                }
+                let rows: BmsCollectorTimeseriesRow[] = [];
+                try {
+                  rows = await queryDashboardHistory(token, pointName, from.toISOString(), to.toISOString());
+                } catch {
+                  rows = [];
+                }
                 return {
                   label: pointDisplayName(binding),
                   pointName,

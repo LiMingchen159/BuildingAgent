@@ -620,7 +620,6 @@ describe("project-scoped chat contract", () => {
                 arguments: JSON.stringify({
                   title: "Chiller supply/return monitor",
                   description: "Auto-generated monitoring dashboard for all chillers.",
-                  visibility: "private",
                   widgets: [
                     {
                       kind: "live_value_grid",
@@ -688,7 +687,7 @@ describe("project-scoped chat contract", () => {
       expect(createdDashboards).toHaveLength(1);
       expect(createdDashboards[0]).toMatchObject({
         title: "Chiller supply/return monitor",
-        visibility: "private",
+        visibility: "project",
         widgets: [
           expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-01") }),
           expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-02") }),
