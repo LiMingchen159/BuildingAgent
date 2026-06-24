@@ -13,7 +13,9 @@ describe("projectSkills", () => {
     const mortarHints = skills.promptHintsForProject(bindings.getSkillIds("project_mortar"));
 
     expect(elementHints).toContain("BMS DATA ROUTING");
+    expect(elementHints).toContain("DASHBOARD GENERATION");
     expect(mortarHints).not.toContain("BMS DATA ROUTING");
+    expect(mortarHints).toContain("DASHBOARD GENERATION");
     expect(mortarHints).toContain("assumptions");
   });
 
@@ -26,7 +28,8 @@ describe("projectSkills", () => {
         "skill_project_readiness",
         "skill_feedback_workflow",
         "skill_tool_data_bridge",
-        "skill_chart_quality"
+        "skill_chart_quality",
+        "skill_dashboard_generation"
       ])
     );
   });

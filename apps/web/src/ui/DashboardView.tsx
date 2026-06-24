@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardLayoutItem, DashboardPointBinding, DashboardRecord, DashboardVisibility } from "../api";
 import { getBmsCollectorLastValue, queryBmsCollectorTimeseries, type BmsCollectorPoint, type BmsCollectorTimeseriesRow } from "../bmsCollectorClient";
 import { Badge, Button, EmptyState, Surface } from "./primitives";
@@ -20,6 +20,37 @@ interface ChartSeries {
 }
 
 const CHART_COLORS = ["#0f766e", "#b45309", "#1d4ed8", "#b91c1c", "#4d7c0f", "#7c3aed"];
+const DASHBOARD_GRID_COLUMNS = 6;
+const HKT_TIME_ZONE = "Asia/Hong_Kong";
+
+interface PlotlyModule {
+  newPlot: (element: HTMLElement, data: unknown[], layout: Record<string, unknown>, config: Record<string, unknown>) => Promise<unknown>;
+  react: (element: HTMLElement, data: unknown[], layout: Record<string, unknown>, config: Record<string, unknown>) => Promise<unknown>;
+  purge: (element: HTMLElement) => void;
+}
+
+function formatHktDateTime(value: string | number): string {
+  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: HKT_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date).replace(",", "");
+}
+
+function formatHktHour(value: number): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: HKT_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(new Date(value));
+}
 
 function pointDisplayName(binding: DashboardPointBinding): string {
   return binding.label || binding.pointName || binding.objectRef || "Point";
@@ -52,7 +83,7 @@ function reflowLayout(order: string[], currentLayout: DashboardLayoutItem[]): Da
   for (const widgetId of order) {
     const source = layoutById.get(widgetId);
     if (!source) continue;
-    if (x + source.w > 3) {
+    if (x + source.w > DASHBOARD_GRID_COLUMNS) {
       y += rowHeight;
       x = 0;
       rowHeight = 1;
@@ -60,7 +91,7 @@ function reflowLayout(order: string[], currentLayout: DashboardLayoutItem[]): Da
     next.push({ widgetId, x, y, w: source.w, h: source.h });
     x += source.w;
     rowHeight = Math.max(rowHeight, source.h);
-    if (x === 3) {
+    if (x === DASHBOARD_GRID_COLUMNS) {
       y += rowHeight;
       x = 0;
       rowHeight = 1;
@@ -81,48 +112,105 @@ function toChartPoints(rows: BmsCollectorTimeseriesRow[]): Array<{ ts: string; v
     .filter((entry): entry is { ts: string; value: number } => entry !== null);
 }
 
-function buildPolyline(points: Array<{ ts: string; value: number }>, width: number, height: number): string {
-  if (points.length === 0) return "";
-  const xs = points.map((point) => Date.parse(point.ts));
-  const ys = points.map((point) => point.value);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const xSpan = Math.max(1, maxX - minX);
-  const ySpan = Math.max(1, maxY - minY);
-  return points.map((point) => {
-    const x = ((Date.parse(point.ts) - minX) / xSpan) * width;
-    const y = height - ((point.value - minY) / ySpan) * height;
-    return `${x},${y}`;
-  }).join(" ");
-}
-
 function LineChart({ series }: { series: ChartSeries[] }) {
-  const width = 520;
-  const height = 180;
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const [plotlyUnavailable, setPlotlyUnavailable] = useState(false);
   const allValues = series.flatMap((entry) => entry.points.map((point) => point.value));
   const min = allValues.length > 0 ? Math.min(...allValues) : 0;
   const max = allValues.length > 0 ? Math.max(...allValues) : 0;
+  const allTimestamps = series.flatMap((entry) => entry.points.map((point) => Date.parse(point.ts))).filter(Number.isFinite);
+  const tickStart = allTimestamps.length > 0 ? Math.ceil(Math.min(...allTimestamps) / 3_600_000) * 3_600_000 : 0;
+  const tickEnd = allTimestamps.length > 0 ? Math.floor(Math.max(...allTimestamps) / 3_600_000) * 3_600_000 : 0;
+  const hourlyTicks: number[] = [];
+  for (let ts = tickStart; ts <= tickEnd; ts += 3_600_000) {
+    hourlyTicks.push(ts);
+  }
+  const dataRevision = useMemo(
+    () => series.map((entry) => `${entry.pointName}:${entry.points.at(-1)?.ts ?? "empty"}:${entry.points.length}`).join("|"),
+    [series]
+  );
+
+  useEffect(() => {
+    const element = chartRef.current;
+    if (!element || series.length === 0) return undefined;
+    if (typeof window !== "undefined" && /jsdom/i.test(window.navigator.userAgent)) {
+      setPlotlyUnavailable(true);
+      return undefined;
+    }
+    let disposed = false;
+    let plotly: PlotlyModule | null = null;
+
+    async function renderChart() {
+      try {
+        const imported = await import("plotly.js-dist-min") as unknown as { default?: PlotlyModule } & PlotlyModule;
+        plotly = imported.default ?? imported;
+        if (disposed || !element) return;
+        const traces = series.map((entry) => ({
+          type: "scatter",
+          mode: "lines+markers",
+          name: entry.label,
+          x: entry.points.map((point) => Date.parse(point.ts)),
+          y: entry.points.map((point) => point.value),
+          customdata: entry.points.map((point) => formatHktDateTime(point.ts)),
+          line: { color: entry.color, width: 2.2, shape: "spline" },
+          marker: { color: entry.color, size: 4 },
+          hovertemplate: "%{fullData.name}<br>%{customdata} HKT<br>%{y:.2f}<extra></extra>"
+        }));
+        const layout = {
+          autosize: true,
+          margin: { l: 42, r: 18, t: 8, b: 36 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(0,0,0,0)",
+          font: { family: "Inter, ui-sans-serif, system-ui, sans-serif", color: "#334155", size: 11 },
+          hovermode: "x unified",
+          showlegend: false,
+          xaxis: {
+            type: "date",
+            tickmode: "array",
+            tickvals: hourlyTicks,
+            ticktext: hourlyTicks.map(formatHktHour),
+            showgrid: true,
+            gridcolor: "rgba(148, 163, 184, 0.18)",
+            zeroline: false,
+            title: ""
+          },
+          yaxis: {
+            showgrid: true,
+            gridcolor: "rgba(148, 163, 184, 0.18)",
+            zeroline: false,
+            title: ""
+          },
+          uirevision: "dashboard-chart"
+        };
+        const config = { displayModeBar: false, responsive: true, scrollZoom: false };
+        await (element.dataset.plotlyReady === "true"
+          ? plotly.react(element, traces, layout, config)
+          : plotly.newPlot(element, traces, layout, config));
+        element.dataset.plotlyReady = "true";
+      } catch {
+        if (!disposed) setPlotlyUnavailable(true);
+      }
+    }
+
+    void renderChart();
+    return () => {
+      disposed = true;
+      if (plotly && element) {
+        plotly.purge(element);
+      }
+    };
+  }, [dataRevision, hourlyTicks, series]);
 
   return (
     <div className="dashboard-chart-shell">
-      <svg viewBox={`0 0 ${width} ${height}`} className="dashboard-chart" role="img" aria-label="Historical trend chart">
-        <line x1="0" y1={height - 1} x2={width} y2={height - 1} className="dashboard-chart-axis" />
-        <line x1="0" y1="1" x2="0" y2={height} className="dashboard-chart-axis" />
-        {series.map((entry) => (
-          <polyline
-            key={entry.pointName}
-            fill="none"
-            stroke={entry.color}
-            strokeWidth="2.5"
-            points={buildPolyline(entry.points, width, height)}
-          />
-        ))}
-      </svg>
+      <div ref={chartRef} className="dashboard-chart" role="img" aria-label="Historical trend chart">
+        {series.length === 0 ? <span className="dashboard-chart-empty">Loading trend</span> : null}
+        {plotlyUnavailable ? <span className="dashboard-chart-empty">Trend unavailable</span> : null}
+      </div>
       <div className="dashboard-chart-meta">
         <span>Min {Number.isFinite(min) ? min.toFixed(1) : "--"}</span>
         <span>Max {Number.isFinite(max) ? max.toFixed(1) : "--"}</span>
+        <span>HKT hourly ticks</span>
       </div>
       <div className="dashboard-chart-legend">
         {series.map((entry) => (
@@ -158,7 +246,7 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
           .filter((widget) => widget.kind === "timeseries_chart")
           .map(async (widget) => {
             const to = new Date();
-            const hours = Number((widget.defaultTimeRange ?? "12h").replace(/h$/u, "")) || 12;
+            const hours = Number((widget.defaultTimeRange ?? "24h").replace(/h$/u, "")) || 24;
             const from = new Date(to.getTime() - hours * 60 * 60 * 1000);
             const series = await Promise.all(
               widget.pointBindings.map(async (binding, index) => {
@@ -167,7 +255,7 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
                   name: pointName,
                   from: from.toISOString(),
                   to: to.toISOString(),
-                  limit: "240",
+                  limit: "720",
                   order: "asc"
                 });
                 return {
@@ -313,7 +401,7 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
                 <div className="dashboard-card-header">
                   <div>
                     <strong>{widget.title}</strong>
-                    <span>{widget.kind === "live_value_grid" ? "Real-time values" : (widget.defaultTimeRange ?? "12h")} trend</span>
+                    <span>{widget.kind === "live_value_grid" ? "Live values" : `${widget.defaultTimeRange ?? "24h"} trend · HKT`}</span>
                   </div>
                   <Badge tone="neutral">{layout.w}:{layout.h}</Badge>
                 </div>
@@ -325,7 +413,10 @@ export function DashboardView({ token, dashboard, liveValues, stale, onLayoutCha
                       const point = liveValues[key] ?? fallbackLiveValues[key];
                       return (
                         <div className="dashboard-live-row" key={key}>
-                          <span>{pointDisplayName(binding)}</span>
+                          <span>
+                            <span>{pointDisplayName(binding)}</span>
+                            {point?.last_polled_at ? <small>{formatHktDateTime(point.last_polled_at)} HKT</small> : null}
+                          </span>
                           <strong>{pointNumericValue(point)}{binding.unit ? ` ${binding.unit}` : ""}</strong>
                         </div>
                       );

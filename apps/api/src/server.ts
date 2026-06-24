@@ -542,6 +542,18 @@ function readableDashboardsForProject(store: SeedStore, projectId: string, userI
   return sortedDashboards((store.dashboardsByProject[projectId] ?? []).filter((dashboard) => canReadDashboard(dashboard, userId)));
 }
 
+function restoreDashboardSequence(store: SeedStore): void {
+  let maxSeen = dashboardSequence;
+  for (const dashboards of Object.values(store.dashboardsByProject ?? {})) {
+    for (const dashboard of dashboards) {
+      const match = dashboard.id.match(/^dash_(\d+)$/u);
+      if (!match) continue;
+      maxSeen = Math.max(maxSeen, Number(match[1]));
+    }
+  }
+  dashboardSequence = maxSeen;
+}
+
 function createDashboardRecord(input: DashboardMutationInput, projectId: string, userId: string): DashboardRecord {
   const now = new Date().toISOString();
   return {
@@ -1240,6 +1252,7 @@ async function proxyBms(
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const store = options.store ?? (options.persist ? (loadStoreSync() ?? createSeedStore()) : createSeedStore());
   ensureStoreDashboardsByProject(store);
+  restoreDashboardSequence(store);
   ensureStoreSkillsByProject(store);
   ensureStoreProjectGrounding(store);
   restoreGroundingSequence(store);

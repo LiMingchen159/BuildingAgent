@@ -209,4 +209,32 @@ describe("dashboard project APIs", () => {
       dashboards: []
     });
   });
+
+  it("continues dashboard ids after persisted records when the API restarts", async () => {
+    const store = createSeedStore();
+    store.dashboardsByProject.project_element = [{
+      id: "dash_000009",
+      projectId: "project_element",
+      ownerUserId: "user_ada",
+      visibility: "private",
+      title: "Existing dashboard",
+      description: "Persisted before restart.",
+      layout: dashboardPayload().layout as never,
+      widgets: dashboardPayload().widgets as never,
+      createdAt: "2026-06-24T00:00:00.000Z",
+      updatedAt: "2026-06-24T00:00:00.000Z"
+    }];
+    const app = buildServer({ store });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({ title: "Next dashboard" })
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().dashboard.id).toBe("dash_000010");
+  });
 });

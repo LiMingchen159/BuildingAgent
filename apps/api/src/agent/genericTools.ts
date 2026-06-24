@@ -28,7 +28,7 @@ import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
 import { bmsCollectorBaseUrl } from "../bmsCollectorUrl.js";
 import { fetchTimeseries } from "../bmsTimeseries.js";
-import { dashboardPath, parseDashboardMutationInput } from "../dashboards.js";
+import { DASHBOARD_GRID_COLUMNS, dashboardPath, parseDashboardMutationInput } from "../dashboards.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_READ_BYTES = 200_000;
@@ -157,6 +157,90 @@ function normalizeDashboardWidget(value: unknown, index: number): Record<string,
   };
 }
 
+function equipmentLabelFromBinding(binding: Record<string, unknown>): string | null {
+  const source = [
+    stringValue(binding.pointName),
+    stringValue(binding.objectRef),
+    stringValue(binding.label)
+  ].find(Boolean) ?? "";
+  const match = source.match(/\b(WCC|CH)(?:[-_]?L1)?[-_]?0?(\d{1,2})(?=\D|$)/i);
+  if (!match) return null;
+  const prefix = match[1]?.toUpperCase() === "CH" ? "CH" : "WCC";
+  const number = String(Number(match[2])).padStart(2, "0");
+  return `${prefix}-${number}`;
+}
+
+function groupedDashboardWidgets(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const next: Array<Record<string, unknown>> = [];
+  let splitAny = false;
+
+  for (const widget of widgets) {
+    const bindings = Array.isArray(widget.pointBindings)
+      ? widget.pointBindings.filter((entry): entry is Record<string, unknown> => isPlainRecord(entry))
+      : [];
+    const groups = new Map<string, Array<Record<string, unknown>>>();
+    const ungrouped: Array<Record<string, unknown>> = [];
+
+    for (const binding of bindings) {
+      const equipment = equipmentLabelFromBinding(binding);
+      if (!equipment) {
+        ungrouped.push(binding);
+        continue;
+      }
+      groups.set(equipment, [...(groups.get(equipment) ?? []), binding]);
+    }
+
+    if (groups.size <= 1) {
+      next.push(widget);
+      continue;
+    }
+
+    splitAny = true;
+    const baseTitle = stringValue(widget.title) || (stringValue(widget.kind) === "timeseries_chart" ? "Trend" : "Live");
+    for (const [equipment, equipmentBindings] of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const titlePrefix = baseTitle.replace(/\ball\s+chillers?\b/iu, "").replace(/所有\s*(chiller|冷机|机组)/iu, "").trim();
+      next.push({
+        ...widget,
+        id: normalizeDashboardId(`${stringValue(widget.id)}_${equipment}`, `widget_${next.length + 1}`),
+        title: `${equipment} ${titlePrefix || (stringValue(widget.kind) === "timeseries_chart" ? "Trend" : "Live")}`,
+        pointBindings: equipmentBindings
+      });
+    }
+    if (ungrouped.length > 0) {
+      next.push({
+        ...widget,
+        id: normalizeDashboardId(`${stringValue(widget.id)}_other`, `widget_${next.length + 1}`),
+        title: `${baseTitle} Other`,
+        pointBindings: ungrouped
+      });
+    }
+  }
+
+  return splitAny ? next : widgets;
+}
+
+function fallbackDashboardLayout(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const fallback: Array<Record<string, unknown>> = [];
+  let x = 0;
+  let y = 0;
+  for (const widget of widgets) {
+    const widgetId = stringValue(widget.id);
+    if (!widgetId) continue;
+    const w = Math.min(DASHBOARD_GRID_COLUMNS, stringValue(widget.kind) === "timeseries_chart" ? 2 : 1);
+    if (x + w > DASHBOARD_GRID_COLUMNS) {
+      x = 0;
+      y += 1;
+    }
+    fallback.push({ widgetId, x, y, w, h: 1 });
+    x += w;
+    if (x >= DASHBOARD_GRID_COLUMNS) {
+      x = 0;
+      y += 1;
+    }
+  }
+  return fallback;
+}
+
 function normalizeDashboardLayout(
   value: unknown,
   widgets: Array<Record<string, unknown>>
@@ -178,37 +262,20 @@ function normalizeDashboardLayout(
     })
     .filter((entry): entry is { widgetId: string; x: number; y: number; w: number; h: number } => entry !== null);
 
-  if (normalized.length > 0) {
+  if (normalized.length === widgets.length) {
     return normalized;
   }
 
-  const fallback: Array<Record<string, unknown>> = [];
-  let x = 0;
-  let y = 0;
-  for (const widget of widgets) {
-    const widgetId = stringValue(widget.id);
-    if (!widgetId) continue;
-    const w = stringValue(widget.kind) === "timeseries_chart" ? 2 : 1;
-    if (x + w > 3) {
-      x = 0;
-      y += 1;
-    }
-    fallback.push({ widgetId, x, y, w, h: 1 });
-    x += w;
-    if (x >= 3) {
-      x = 0;
-      y += 1;
-    }
-  }
-  return fallback;
+  return fallbackDashboardLayout(widgets);
 }
 
 function normalizeDashboardCreateArgs(args: Record<string, unknown>): Record<string, unknown> {
-  const widgets = Array.isArray(args.widgets)
+  const normalizedWidgets = Array.isArray(args.widgets)
     ? args.widgets
       .map((entry, index) => normalizeDashboardWidget(entry, index))
       .filter((entry): entry is Record<string, unknown> => entry !== null)
     : [];
+  const widgets = groupedDashboardWidgets(normalizedWidgets);
   return {
     ...args,
     widgets,
@@ -1004,7 +1071,7 @@ export function createGenericToolRegistry(
       schema: {
         name: "dashboard_create",
         description:
-          "Create a dashboard with 3-column layout and typed widgets. Provide title, optional description, optional visibility, widgets, and layout. Never generate raw HTML/JS. Preferred widget fields are id, kind, title, pointBindings; the tool also accepts agent-friendly points/object_refs and row/col/colSpan layout aliases.",
+          "Create a dashboard with 6-column layout and typed widgets. Provide title, optional description, optional visibility, widgets, and layout. Never generate raw HTML/JS. For all-chiller monitoring, create one live_value_grid per chiller and one timeseries_chart per chiller; the tool can also split mixed all-chiller widgets automatically. Preferred widget fields are id, kind, title, pointBindings; the tool also accepts agent-friendly points/object_refs and row/col/colSpan layout aliases.",
         parameters: {
           type: "object",
           properties: {
@@ -1020,7 +1087,7 @@ export function createGenericToolRegistry(
             layout: {
               type: "array",
               description:
-                "Grid placements in a 3-column layout. Preferred {widgetId,x,y,w,h}; aliases {widgetIndex,row,col,colSpan,rowSpan} are accepted."
+                "Grid placements in a 6-column layout. Preferred {widgetId,x,y,w,h}; aliases {widgetIndex,row,col,colSpan,rowSpan} are accepted. Use w=1 for live_value_grid and w=2 for timeseries_chart."
             }
           },
           required: ["title", "widgets", "layout"]

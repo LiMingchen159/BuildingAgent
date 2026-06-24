@@ -48,6 +48,7 @@ export function projectInputsPrompt(): string {
 export function executionDisciplineBlock(): string {
   return [
     "# Execution discipline",
+    "All building operations time must be Hong Kong time: HKT / Asia_Hong_Kong. Treat UTC ISO values as transport/query boundaries only; user-facing dates, chart labels, and dashboard time ranges must be resolved back to HKT.",
     "NEVER answer these from memory or prior-turn context alone — use tools when applicable:",
     "- Current time, date, timezone → use CURRENT TIME in the system prompt; run terminal `date` only if exact clock is needed",
     "- Relative ranges (yesterday, today, last week, 昨天, 今天) → copy from/to from CALENDAR RANGES in CURRENT TIME into bms_timeseries_query",

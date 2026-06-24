@@ -5,7 +5,8 @@ export const RUNTIME_SKILL_IDS = [
   "skill_runtime_health",
   "environment-setup",
   "skill_tool_data_bridge",
-  "skill_chart_quality"
+  "skill_chart_quality",
+  "skill_dashboard_generation"
 ] as const;
 
 export const BUILTIN_SKILL_IDS = [

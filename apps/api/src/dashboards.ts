@@ -59,6 +59,8 @@ export interface DashboardMutationInput {
   sourceConversationId?: string;
 }
 
+export const DASHBOARD_GRID_COLUMNS = 6;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -117,7 +119,7 @@ function sanitizeLayoutItem(value: unknown): DashboardLayoutItem | null {
   const w = typeof value.w === "number" ? Math.trunc(value.w) : NaN;
   const h = typeof value.h === "number" ? Math.trunc(value.h) : NaN;
   if (!widgetId || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null;
-  if (x < 0 || y < 0 || w < 1 || h < 1 || w > 3 || h > 3 || x + w > 3) return null;
+  if (x < 0 || y < 0 || w < 1 || h < 1 || w > DASHBOARD_GRID_COLUMNS || h > 3 || x + w > DASHBOARD_GRID_COLUMNS) return null;
   return { widgetId, x, y, w, h };
 }
 

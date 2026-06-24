@@ -10,6 +10,8 @@ describe("platform prompt rules (L0)", () => {
     expect(block).toContain(">20 hand-written data points");
     expect(block).toContain("parallel");
     expect(block).toContain("never pip install");
+    expect(block).toContain("Hong Kong time");
+    expect(block).toContain("Asia_Hong_Kong");
   });
 
   it("chart guidelines require injected scientific helpers", () => {

@@ -260,5 +260,13 @@ export function createGenericSkillRegistry(): AgentSkillRegistry {
     promptHint:
       "BMS DATA ROUTING (always on): NAMES → KB_CATALOG_SUMMARY.md §1.1–§2 only (COP §2.3.1, Plant `WCC-L1-0n_COP` not `WCC_n_COP`); never bms_points_query×8 to build inventories. POINT PICK: match the question — running → Run_Status+TLKW; leaving CHW temp → Chilled_Water_Temp or SUWT; COP → Plant layer (e.g. WCC-L1-04_COP), not HL `WCC_n_COP`. TOOLS: history/trend/batch/>3 points or last_value → bms_timeseries_query / bms_points_query; ≤3 live/alarm → bms_live_read; unknown name → bms_points_query(q=, limit=20). Relative time → copy from/to from CURRENT TIME CALENDAR RANGES; re-fetch every turn. Local DB = one readings timeline (backfill + 15-min poll, no source param); last_value ~15 min lag unless live read. Parallel tool calls. Do not read_file API docs unless tools fail."
   });
+  registry.register({
+    id: "skill_dashboard_generation",
+    name: "Dashboard generation",
+    domain: "building",
+    description: "Turn monitoring requests into validated dashboard_create specs with per-equipment widgets.",
+    promptHint:
+      "DASHBOARD GENERATION (strong rule): If the user asks to monitor/watch/track/show real-time equipment data or says 创建 dashboard / dashboard, do not stop at a text/table answer. First identify exact BMS point names with bms_points_query or catalog grounding, then call dashboard_create in the same turn. Never output raw HTML/JS. Use a 6-column grid: for each chiller/equipment create one compact live_value_grid card (w=1,h=1) and one timeseries_chart card (w=2,h=1), ordered live+trend by equipment so two chillers fill one row. For all chillers, do not put all equipment into one live card or one trend chart; split per chiller. Default trend range is 24h and chart times must be Hong Kong time (HKT / Asia_Hong_Kong). For ΔT/温差 prefer exact DeltaT points if available; otherwise bind supply+return points with roles supply/return. Final answer: say the dashboard was created and where it appears; do not expose tokens, API keys, or raw config."
+  });
   return registry;
 }

@@ -167,6 +167,7 @@ export function wallClockContextBlock(now: Date = new Date(), timeZone: string =
     `UTC now: ${now.toISOString()}`,
     `Local now: ${localDisplay} (${timeZone})`,
     resolvedRangesReferenceBlock(now, timeZone),
+    "Strict display rule: write user-facing times in HKT / Asia_Hong_Kong; use UTC ISO only inside tool from/to parameters.",
     "Relative terms (yesterday / today / 昨天 / 今天) map to CALENDAR RANGES above — never to BMS backfill dates or earlier-turn ranges.",
     "For BMS history: pass the matching from/to into bms_timeseries_query and re-fetch; do not replay a prior answer."
   ].join("\n");
@@ -187,6 +188,7 @@ export function temporalQueryHintBlock(userMessage: string): string {
   return [
     "TEMPORAL QUERY: The user used a relative time word.",
     "Pick the matching line from CALENDAR RANGES in CURRENT TIME and pass those exact from/to values to bms_timeseries_query.",
+    "Keep all user-facing labels in HKT / Asia_Hong_Kong even though tool parameters are UTC ISO.",
     "Re-fetch with tools — never reuse a prior answer or dates from earlier turns.",
     "State the resolved calendar date in the reply (e.g. Yesterday = 2026-06-06 HKT)."
   ].join(" ");

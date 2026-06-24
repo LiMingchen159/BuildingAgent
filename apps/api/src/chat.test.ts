@@ -619,19 +619,19 @@ describe("project-scoped chat contract", () => {
                 name: "dashboard_create",
                 arguments: JSON.stringify({
                   title: "Chiller supply/return monitor",
-                  description: "Auto-generated monitoring dashboard for CH-01.",
+                  description: "Auto-generated monitoring dashboard for all chillers.",
                   visibility: "private",
                   widgets: [
                     {
                       kind: "live_value_grid",
-                      title: "Live temperatures",
-                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp"]
+                      title: "All chillers live temperatures",
+                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp", "CH-02_Supply_Water_Temp", "CH-02_Return_Water_Temp"]
                     },
                     {
                       kind: "timeseries_chart",
-                      title: "Historical trend",
-                      defaultTimeRange: "12h",
-                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp"]
+                      title: "All chillers historical trend",
+                      defaultTimeRange: "24h",
+                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp", "CH-02_Supply_Water_Temp", "CH-02_Return_Water_Temp"]
                     }
                   ],
                   layout: [
@@ -658,7 +658,9 @@ describe("project-scoped chat contract", () => {
           total: 2,
           items: [
             { id: 101, name: "CH-01_Supply_Water_Temp", object_ref: "analog-value,101", last_value: "42.1", last_polled_at: "2026-06-24T02:00:00Z" },
-            { id: 102, name: "CH-01_Return_Water_Temp", object_ref: "analog-value,102", last_value: "47.8", last_polled_at: "2026-06-24T02:00:00Z" }
+            { id: 102, name: "CH-01_Return_Water_Temp", object_ref: "analog-value,102", last_value: "47.8", last_polled_at: "2026-06-24T02:00:00Z" },
+            { id: 201, name: "CH-02_Supply_Water_Temp", object_ref: "analog-value,201", last_value: "43.0", last_polled_at: "2026-06-24T02:00:00Z" },
+            { id: 202, name: "CH-02_Return_Water_Temp", object_ref: "analog-value,202", last_value: "48.4", last_polled_at: "2026-06-24T02:00:00Z" }
           ]
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
@@ -688,14 +690,19 @@ describe("project-scoped chat contract", () => {
         title: "Chiller supply/return monitor",
         visibility: "private",
         widgets: [
-          expect.objectContaining({ kind: "live_value_grid" }),
-          expect.objectContaining({ kind: "timeseries_chart" })
-        ],
-        layout: [
-          expect.objectContaining({ x: 0, y: 0, w: 1, h: 1 }),
-          expect.objectContaining({ x: 1, y: 0, w: 2, h: 1 })
+          expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-01") }),
+          expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-02") }),
+          expect.objectContaining({ kind: "timeseries_chart", title: expect.stringContaining("CH-01") }),
+          expect.objectContaining({ kind: "timeseries_chart", title: expect.stringContaining("CH-02") })
         ]
       });
+      expect(createdDashboards[0]?.widgets).toHaveLength(4);
+      expect(createdDashboards[0]?.layout).toEqual([
+        expect.objectContaining({ x: 0, y: 0, w: 1, h: 1 }),
+        expect.objectContaining({ x: 1, y: 0, w: 1, h: 1 }),
+        expect.objectContaining({ x: 2, y: 0, w: 2, h: 1 }),
+        expect.objectContaining({ x: 4, y: 0, w: 2, h: 1 })
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }
