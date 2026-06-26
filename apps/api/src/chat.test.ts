@@ -588,6 +588,189 @@ describe("project-scoped chat contract", () => {
     expect(response.json().assistantMessage.images).toBeUndefined();
   });
 
+  it("allows the agent to query points and create a dashboard for monitoring requests", async () => {
+    const store = createSeedStore();
+    const provider: ChatProvider = {
+      metadata: { id: "dashboard-real", mode: "real", model: "dashboard-model", status: "configured" },
+      async complete(request) {
+        const toolMessages = request.messages.filter((message) => message.role === "tool");
+        if (toolMessages.length === 0) {
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_points",
+              type: "function",
+              function: { name: "bms_points_query", arguments: JSON.stringify({ q: "CH-01", limit: 10 }) }
+            }]
+          };
+        }
+        if (toolMessages.length === 1) {
+          expect(toolMessages[0]?.content).toContain("CH-01_Supply_Water_Temp");
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_dashboard",
+              type: "function",
+              function: {
+                name: "dashboard_create",
+                arguments: JSON.stringify({
+                  title: "Chiller supply/return monitor",
+                  description: "Auto-generated monitoring dashboard for all chillers.",
+                  widgets: [
+                    {
+                      kind: "live_value_grid",
+                      title: "All chillers live temperatures",
+                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp", "CH-02_Supply_Water_Temp", "CH-02_Return_Water_Temp"]
+                    }
+                  ]
+                })
+              }
+            }]
+          };
+        }
+        return {
+          text: "Dashboard created for live chiller monitoring.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/v1/points?")) {
+        return new Response(JSON.stringify({
+          total: 2,
+          items: [
+            { id: 101, name: "CH-01_Supply_Water_Temp", object_ref: "analog-value,101", last_value: "42.1", last_polled_at: "2026-06-24T02:00:00Z" },
+            { id: 102, name: "CH-01_Return_Water_Temp", object_ref: "analog-value,102", last_value: "47.8", last_polled_at: "2026-06-24T02:00:00Z" },
+            { id: 201, name: "CH-02_Supply_Water_Temp", object_ref: "analog-value,201", last_value: "43.0", last_polled_at: "2026-06-24T02:00:00Z" },
+            { id: 202, name: "CH-02_Return_Water_Temp", object_ref: "analog-value,202", last_value: "48.4", last_polled_at: "2026-06-24T02:00:00Z" }
+          ]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const app = buildServer({ store, chatProvider: provider });
+
+      await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/projects/project_alpha/chat",
+        headers: bearer(adaToken),
+        payload: { message: "请实时监控所有 chiller 的送回水温度" }
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.json().assistantMessage.content).toContain("Dashboard created");
+      expect(response.json().assistantMessage.content).not.toMatch(/api[_-]?key|bearer/i);
+      assertNoSecrets(response.json());
+
+      const createdDashboards = store.dashboardsByProject.project_alpha ?? [];
+      expect(createdDashboards).toHaveLength(1);
+      expect(createdDashboards[0]).toMatchObject({
+        title: "Chiller supply/return monitor",
+          visibility: "project",
+          layoutVersion: 2,
+          widgets: [
+            expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-01") }),
+            expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-02") }),
+          expect.objectContaining({ kind: "timeseries_chart", title: expect.stringContaining("CH-01") }),
+          expect.objectContaining({ kind: "timeseries_chart", title: expect.stringContaining("CH-02") })
+        ]
+        });
+      expect(createdDashboards[0]?.widgets).toHaveLength(4);
+      expect(createdDashboards[0]?.widgets.some((widget) => widget.kind === "note")).toBe(false);
+      expect(createdDashboards[0]?.sections).toEqual([
+        expect.objectContaining({ id: "overview", title: "Overview", kind: "overview", widgetIds: [expect.stringContaining("ch_01"), expect.stringContaining("ch_02")] }),
+        expect.objectContaining({ id: "trends", title: "Trends", kind: "trends", widgetIds: [expect.stringContaining("ch_01"), expect.stringContaining("ch_02")] })
+      ]);
+      expect(createdDashboards[0]?.layout).toEqual([
+        expect.objectContaining({ x: 0, y: 0, w: 3, h: 2 }),
+        expect.objectContaining({ x: 3, y: 0, w: 3, h: 2 }),
+        expect.objectContaining({ x: 0, y: 2, w: 6, h: 4 }),
+        expect.objectContaining({ x: 6, y: 2, w: 6, h: 4 })
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("places conditional dashboard notes in a Notes section without requiring layout input", async () => {
+    const store = createSeedStore();
+    const provider: ChatProvider = {
+      metadata: { id: "dashboard-note-real", mode: "real", model: "dashboard-model", status: "configured" },
+      async complete(request) {
+        const toolMessages = request.messages.filter((message) => message.role === "tool");
+        if (toolMessages.length === 0) {
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_dashboard_note",
+              type: "function",
+              function: {
+                name: "dashboard_create",
+                arguments: JSON.stringify({
+                  title: "Chiller watch with note",
+                  widgets: [
+                    {
+                      kind: "live_value_grid",
+                      title: "CH-01 live temperatures",
+                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp"]
+                    },
+                    {
+                      kind: "note",
+                      title: "Operator note",
+                      content: "Return temperature sensor coverage should be verified before handover.",
+                      tone: "yellow"
+                    }
+                  ]
+                })
+              }
+            }]
+          };
+        }
+        return {
+          text: "Dashboard created with an operator note.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+
+    const app = buildServer({ store, chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Create a dashboard and add a note about incomplete sensor coverage" }
+    });
+
+    expect(response.statusCode).toBe(201);
+    const dashboard = store.dashboardsByProject.project_alpha?.[0];
+    expect(dashboard?.widgets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "live_value_grid" }),
+      expect.objectContaining({ kind: "timeseries_chart" }),
+      expect.objectContaining({ kind: "note", content: expect.stringContaining("sensor coverage") })
+    ]));
+    expect(dashboard?.sections).toEqual([
+      expect.objectContaining({ id: "overview" }),
+      expect.objectContaining({ id: "trends" }),
+      expect.objectContaining({ id: "notes", kind: "custom", widgetIds: [expect.stringContaining("operator_note")] })
+    ]);
+  });
+
   it("serves repository image files when auth is supplied via query token", async () => {
     const app = buildServer();
 

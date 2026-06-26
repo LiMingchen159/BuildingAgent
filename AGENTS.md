@@ -61,3 +61,11 @@ Commit with:
 chore(workflow): add lightweight GitHub workflow
 
 Push after commit.
+
+Reference source checkout:
+- For large public GitHub reference repositories, prefer an archive snapshot instead of a Git clone when history is not needed.
+- If the server has slow or broken proxy environment variables, bypass them explicitly with `--noproxy '*'`.
+- Fast tested pattern for Grafana:
+  `curl --noproxy '*' -L --retry 3 --connect-timeout 10 --speed-time 30 --speed-limit 10240 -o /tmp/grafana-ref-download/grafana-main.tar.gz 'https://gh-proxy.com/https://github.com/grafana/grafana/archive/refs/heads/main.tar.gz'`
+- Extract into a temporary directory first, verify expected files, then move the extracted folder into `.ref_Grafana`.
+- This creates a complete source snapshot without `.git` history, suitable for learning frontend architecture and widget implementation.

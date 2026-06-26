@@ -28,6 +28,7 @@ import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
 import { bmsCollectorBaseUrl } from "../bmsCollectorUrl.js";
 import { fetchTimeseries } from "../bmsTimeseries.js";
+import { DASHBOARD_GRID_COLUMNS, DASHBOARD_LAYOUT_VERSION, dashboardPath, parseDashboardMutationInput } from "../dashboards.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const MAX_READ_BYTES = 200_000;
@@ -59,6 +60,464 @@ function numArg(args: Record<string, unknown>, key: string, fallback: number): n
     return Math.floor(value);
   }
   return fallback;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+function stringValueFrom(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = stringValue(record[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function normalizeDashboardId(value: string, fallback: string): string {
+  const source = value || fallback;
+  const normalized = source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function normalizeDashboardBinding(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    const pointName = value.trim();
+    return pointName ? { pointName } : null;
+  }
+  if (!isPlainRecord(value)) return null;
+
+  const pointName = stringValueFrom(value, ["pointName", "point_name", "name", "point"]);
+  const objectRef = stringValueFrom(value, ["objectRef", "object_ref", "ref"]);
+  if (!pointName && !objectRef) return null;
+
+  const label = stringValueFrom(value, ["label", "title", "name"]);
+  const role = stringValue(value.role);
+  const unit = stringValue(value.unit);
+  return {
+    ...(pointName ? { pointName } : {}),
+    ...(objectRef ? { objectRef } : {}),
+    ...(label && label !== pointName ? { label } : {}),
+    ...(role ? { role } : {}),
+    ...(unit ? { unit } : {})
+  };
+}
+
+function normalizeDashboardWidget(value: unknown, index: number): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  const kind = stringValue(value.kind);
+  const title = stringValueFrom(value, ["title", "name"])
+    || (kind === "timeseries_chart"
+      ? "Historical trend"
+      : kind === "stat_value"
+        ? "Current value"
+        : kind === "bar_comparison"
+          ? "Current comparison"
+          : kind === "note"
+            ? "Note"
+            : "Live values");
+  const id = stringValue(value.id) || normalizeDashboardId(title, `widget_${index + 1}`);
+
+  const pointSources: unknown[] = [];
+  const directBindings = value.pointBindings ?? value.point_bindings ?? value.bindings;
+  if (Array.isArray(directBindings)) {
+    pointSources.push(...directBindings);
+  }
+  for (const key of ["points", "pointNames", "point_names", "names"]) {
+    const entries = value[key];
+    if (Array.isArray(entries)) pointSources.push(...entries);
+  }
+  for (const key of ["objectRefs", "object_refs"]) {
+    const entries = value[key];
+    if (Array.isArray(entries)) {
+      pointSources.push(...entries.map((entry) => ({ objectRef: entry })));
+    }
+  }
+  const values = value.values;
+  if (Array.isArray(values)) {
+    pointSources.push(...values);
+  }
+  if (isPlainRecord(value.config) && Array.isArray(value.config.points)) {
+    pointSources.push(...value.config.points);
+  }
+
+  const pointBindings = pointSources
+    .map((entry) => normalizeDashboardBinding(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+
+  const defaultTimeRange = stringValueFrom(value, ["defaultTimeRange", "default_time_range", "timeRange", "range"]);
+  const tone = stringValue(value.tone);
+
+  return {
+    id,
+    kind,
+    title,
+    pointBindings,
+    ...(defaultTimeRange ? { defaultTimeRange } : {}),
+    ...(kind === "note" ? { content: stringValue(value.content), ...(tone ? { tone } : {}) } : {})
+  };
+}
+
+function equipmentLabelFromBinding(binding: Record<string, unknown>): string | null {
+  const source = [
+    stringValue(binding.pointName),
+    stringValue(binding.objectRef),
+    stringValue(binding.label)
+  ].find(Boolean) ?? "";
+  const match = source.match(/\b(WCC|CH)(?:[-_]?L1)?[-_]?0?(\d{1,2})(?=\D|$)/i);
+  if (!match) return null;
+  const prefix = match[1]?.toUpperCase() === "CH" ? "CH" : "WCC";
+  const number = String(Number(match[2])).padStart(2, "0");
+  return `${prefix}-${number}`;
+}
+
+function equipmentLabelFromWidget(widget: Record<string, unknown>): string {
+  const bindings = Array.isArray(widget.pointBindings)
+    ? widget.pointBindings.filter((entry): entry is Record<string, unknown> => isPlainRecord(entry))
+    : [];
+  for (const binding of bindings) {
+    const equipment = equipmentLabelFromBinding(binding);
+    if (equipment) return equipment;
+  }
+  return stringValue(widget.title) || stringValue(widget.id);
+}
+
+function dashboardWidgetKindRank(widget: Record<string, unknown>): number {
+  const kind = stringValue(widget.kind);
+  if (kind === "live_value_grid" || kind === "stat_value") return 0;
+  if (kind === "bar_comparison") return 1;
+  if (kind === "timeseries_chart") return 2;
+  return 3;
+}
+
+function dashboardWidgetSectionInfo(widget: Record<string, unknown>): Record<string, unknown> {
+  const kind = stringValue(widget.kind);
+  if (kind === "timeseries_chart") return { id: "trends", title: "Trends", kind: "trends" };
+  if (kind === "bar_comparison") return { id: "comparison", title: "Comparison", kind: "comparison" };
+  if (kind === "note") return { id: "notes", title: "Notes", kind: "custom" };
+  return { id: "overview", title: "Overview", kind: "overview" };
+}
+
+function dashboardWidgetBindings(widget: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(widget.pointBindings)
+    ? widget.pointBindings.filter((entry): entry is Record<string, unknown> => isPlainRecord(entry))
+    : [];
+}
+
+function cloneDashboardBindings(bindings: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return bindings.map((binding) => ({ ...binding }));
+}
+
+function uniqueDashboardWidgetId(value: string, fallback: string, existingIds: Set<string>): string {
+  const base = normalizeDashboardId(value, fallback);
+  let candidate = base;
+  let index = 2;
+  while (existingIds.has(candidate)) {
+    candidate = normalizeDashboardId(`${base}_${index}`, `${fallback}_${index}`);
+    index += 1;
+  }
+  existingIds.add(candidate);
+  return candidate;
+}
+
+function ensureUniqueDashboardWidgetIds(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const existingIds = new Set<string>();
+  return widgets.map((widget, index) => {
+    const id = uniqueDashboardWidgetId(stringValue(widget.id), `widget_${index + 1}`, existingIds);
+    return { ...widget, id };
+  });
+}
+
+function sortDashboardWidgets(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return [...widgets].sort((left, right) => {
+    const rankDelta = dashboardWidgetKindRank(left) - dashboardWidgetKindRank(right);
+    if (rankDelta !== 0) return rankDelta;
+    return equipmentLabelFromWidget(left).localeCompare(equipmentLabelFromWidget(right), undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
+function groupedDashboardWidgets(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const next: Array<Record<string, unknown>> = [];
+  let splitAny = false;
+
+  for (const widget of widgets) {
+    const kind = stringValue(widget.kind);
+    if (kind !== "live_value_grid" && kind !== "stat_value" && kind !== "timeseries_chart") {
+      next.push(widget);
+      continue;
+    }
+
+    const bindings = dashboardWidgetBindings(widget);
+    const groups = new Map<string, Array<Record<string, unknown>>>();
+    const ungrouped: Array<Record<string, unknown>> = [];
+
+    for (const binding of bindings) {
+      const equipment = equipmentLabelFromBinding(binding);
+      if (!equipment) {
+        ungrouped.push(binding);
+        continue;
+      }
+      groups.set(equipment, [...(groups.get(equipment) ?? []), binding]);
+    }
+
+    if (groups.size <= 1) {
+      next.push(widget);
+      continue;
+    }
+
+    splitAny = true;
+    const baseTitle = stringValue(widget.title) || (stringValue(widget.kind) === "timeseries_chart" ? "Trend" : "Live");
+    for (const [equipment, equipmentBindings] of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const titlePrefix = baseTitle.replace(/\ball\s+chillers?\b/iu, "").replace(/所有\s*(chiller|冷机|机组)/iu, "").trim();
+      next.push({
+        ...widget,
+        id: normalizeDashboardId(`${stringValue(widget.id)}_${equipment}`, `widget_${next.length + 1}`),
+        title: `${equipment} ${titlePrefix || (stringValue(widget.kind) === "timeseries_chart" ? "Trend" : "Live")}`,
+        pointBindings: equipmentBindings
+      });
+    }
+    if (ungrouped.length > 0) {
+      next.push({
+        ...widget,
+        id: normalizeDashboardId(`${stringValue(widget.id)}_other`, `widget_${next.length + 1}`),
+        title: `${baseTitle} Other`,
+        pointBindings: ungrouped
+      });
+    }
+  }
+
+  return splitAny ? next : widgets;
+}
+
+function widgetsByEquipment(widgets: Array<Record<string, unknown>>): Map<string, Array<Record<string, unknown>>> {
+  const groups = new Map<string, Array<Record<string, unknown>>>();
+  for (const widget of widgets) {
+    const kind = stringValue(widget.kind);
+    if (kind === "note") continue;
+    const equipment = equipmentLabelFromWidget(widget);
+    groups.set(equipment, [...(groups.get(equipment) ?? []), widget]);
+  }
+  return groups;
+}
+
+function synthesizeDashboardWidget(
+  kind: "live_value_grid" | "timeseries_chart",
+  equipment: string,
+  sourceWidget: Record<string, unknown>,
+  existingIds: Set<string>
+): Record<string, unknown> | null {
+  const bindings = dashboardWidgetBindings(sourceWidget);
+  if (bindings.length === 0) return null;
+  const titleBase = equipment || stringValue(sourceWidget.title) || "Equipment";
+  if (kind === "timeseries_chart") {
+    return {
+      id: uniqueDashboardWidgetId(`${titleBase}_trend`, `trend_${existingIds.size + 1}`, existingIds),
+      kind,
+      title: `${titleBase} Trends`,
+      pointBindings: cloneDashboardBindings(bindings),
+      defaultTimeRange: "24h"
+    };
+  }
+  return {
+    id: uniqueDashboardWidgetId(`${titleBase}_overview`, `overview_${existingIds.size + 1}`, existingIds),
+    kind,
+    title: `${titleBase} Overview`,
+    pointBindings: cloneDashboardBindings(bindings)
+  };
+}
+
+function ensureDefaultDashboardWidgets(
+  widgets: Array<Record<string, unknown>>,
+  args: Record<string, unknown>
+): Array<Record<string, unknown>> {
+  const includeOverview = args.includeOverview !== false;
+  const includeTrends = args.includeTrends !== false;
+  const next = widgets.map((widget) => ({ ...widget }));
+  const existingIds = new Set(next.map((widget) => stringValue(widget.id)).filter(Boolean));
+
+  if (includeOverview) {
+    const equipmentGroups = widgetsByEquipment(next);
+    for (const [equipment, equipmentWidgets] of equipmentGroups) {
+      const hasOverview = equipmentWidgets.some((widget) => {
+        const kind = stringValue(widget.kind);
+        return kind === "live_value_grid" || kind === "stat_value";
+      });
+      if (hasOverview) continue;
+      const source = equipmentWidgets.find((widget) => stringValue(widget.kind) === "timeseries_chart")
+        ?? equipmentWidgets.find((widget) => stringValue(widget.kind) === "bar_comparison");
+      if (!source) continue;
+      const overviewWidget = synthesizeDashboardWidget("live_value_grid", equipment, source, existingIds);
+      if (overviewWidget) next.push(overviewWidget);
+    }
+  }
+
+  if (includeTrends) {
+    const equipmentGroups = widgetsByEquipment(next);
+    for (const [equipment, equipmentWidgets] of equipmentGroups) {
+      const hasTrend = equipmentWidgets.some((widget) => stringValue(widget.kind) === "timeseries_chart");
+      if (hasTrend) continue;
+      const source = equipmentWidgets.find((widget) => {
+        const kind = stringValue(widget.kind);
+        return kind === "live_value_grid" || kind === "stat_value";
+      }) ?? equipmentWidgets.find((widget) => stringValue(widget.kind) === "bar_comparison");
+      if (!source) continue;
+      const trendWidget = synthesizeDashboardWidget("timeseries_chart", equipment, source, existingIds);
+      if (trendWidget) next.push(trendWidget);
+    }
+  }
+
+  return next;
+}
+
+function preferredDashboardLayoutSize(widget: Record<string, unknown>): { w: number; h: number } {
+  const kind = stringValue(widget.kind);
+  const bindingCount = Array.isArray(widget.pointBindings) ? widget.pointBindings.length : 0;
+  if (kind === "timeseries_chart") return { w: 6, h: 4 };
+  if (kind === "bar_comparison") return { w: 6, h: 3 };
+  if (kind === "live_value_grid") return { w: 3, h: bindingCount > 2 ? 3 : 2 };
+  return { w: 3, h: 2 };
+}
+
+function fallbackDashboardLayout(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const fallback: Array<Record<string, unknown>> = [];
+  let x = 0;
+  let y = 0;
+  let rowHeight = 1;
+  let currentRank: number | null = null;
+
+  for (const widget of widgets) {
+    const widgetId = stringValue(widget.id);
+    if (!widgetId) continue;
+    const rank = dashboardWidgetKindRank(widget);
+    if (currentRank !== null && rank !== currentRank && x > 0) {
+      y += rowHeight;
+      x = 0;
+      rowHeight = 1;
+    }
+    currentRank = rank;
+
+    const preferred = preferredDashboardLayoutSize(widget);
+    const w = Math.min(DASHBOARD_GRID_COLUMNS, preferred.w);
+    const h = preferred.h;
+    if (x + w > DASHBOARD_GRID_COLUMNS) {
+      y += rowHeight;
+      x = 0;
+      rowHeight = 1;
+    }
+    fallback.push({ widgetId, x, y, w, h });
+    x += w;
+    rowHeight = Math.max(rowHeight, h);
+    if (x >= DASHBOARD_GRID_COLUMNS) {
+      x = 0;
+      y += rowHeight;
+      rowHeight = 1;
+    }
+  }
+  return fallback;
+}
+
+function normalizedDashboardSectionKind(id: string, value: string): string {
+  if (value === "overview" || value === "comparison" || value === "trends" || value === "custom") return value;
+  if (id === "overview") return "overview";
+  if (id === "comparison") return "comparison";
+  if (id === "trends") return "trends";
+  return "custom";
+}
+
+function normalizeDashboardSections(
+  widgets: Array<Record<string, unknown>>,
+  args: Record<string, unknown>
+): Array<Record<string, unknown>> {
+  const widgetIds = new Set(widgets.map((widget) => stringValue(widget.id)).filter(Boolean));
+  const usedWidgetIds = new Set<string>();
+  const sections: Array<Record<string, unknown>> = [];
+
+  if (Array.isArray(args.sections)) {
+    const usedSectionIds = new Set<string>();
+    for (const sectionValue of args.sections) {
+      if (!isPlainRecord(sectionValue)) continue;
+      const rawId = stringValue(sectionValue.id) || stringValue(sectionValue.title);
+      const id = normalizeDashboardId(rawId, `section_${sections.length + 1}`);
+      if (!id || usedSectionIds.has(id)) continue;
+      const title = stringValue(sectionValue.title) || (id === "overview"
+        ? "Overview"
+        : id === "comparison"
+          ? "Comparison"
+          : id === "trends"
+            ? "Trends"
+            : "Notes");
+      const kind = normalizedDashboardSectionKind(id, stringValue(sectionValue.kind));
+      const widgetIdsForSection = Array.isArray(sectionValue.widgetIds)
+        ? sectionValue.widgetIds
+          .map((entry) => stringValue(entry))
+          .filter((entry) => entry && widgetIds.has(entry) && !usedWidgetIds.has(entry))
+        : [];
+      if (widgetIdsForSection.length === 0) continue;
+      for (const widgetId of widgetIdsForSection) usedWidgetIds.add(widgetId);
+      usedSectionIds.add(id);
+      sections.push({
+        id,
+        title,
+        kind,
+        widgetIds: widgetIdsForSection,
+        ...(typeof sectionValue.collapsed === "boolean" ? { collapsed: sectionValue.collapsed } : {})
+      });
+    }
+  }
+
+  for (const widget of widgets) {
+    const widgetId = stringValue(widget.id);
+    if (!widgetId || usedWidgetIds.has(widgetId)) continue;
+    const info = dashboardWidgetSectionInfo(widget);
+    const sectionId = stringValue(info.id);
+    let section = sections.find((candidate) => stringValue(candidate.id) === sectionId);
+    if (!section) {
+      section = { ...info, widgetIds: [] };
+      sections.push(section);
+    }
+    (section.widgetIds as string[]).push(widgetId);
+    usedWidgetIds.add(widgetId);
+  }
+
+  const sectionRank = (section: Record<string, unknown>) => {
+    const id = stringValue(section.id);
+    if (id === "overview") return 0;
+    if (id === "comparison") return 1;
+    if (id === "trends") return 2;
+    if (id === "notes") return 3;
+    return 4;
+  };
+
+  return sections
+    .filter((section) => Array.isArray(section.widgetIds) && section.widgetIds.length > 0)
+    .sort((left, right) => sectionRank(left) - sectionRank(right) || stringValue(left.title).localeCompare(stringValue(right.title)));
+}
+
+function normalizeDashboardCreateArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const normalizedWidgets = Array.isArray(args.widgets)
+    ? args.widgets
+      .map((entry, index) => normalizeDashboardWidget(entry, index))
+      .filter((entry): entry is Record<string, unknown> => entry !== null)
+    : [];
+  const groupedWidgets = ensureUniqueDashboardWidgetIds(groupedDashboardWidgets(ensureUniqueDashboardWidgetIds(normalizedWidgets)));
+  const widgets = sortDashboardWidgets(ensureDefaultDashboardWidgets(groupedWidgets, args));
+  return {
+    ...args,
+    layoutVersion: DASHBOARD_LAYOUT_VERSION,
+    widgets,
+    layout: fallbackDashboardLayout(widgets),
+    sections: normalizeDashboardSections(widgets, args)
+  };
 }
 
 function resolveSafePath(baseRoot: string, requested: string): string | null {
@@ -786,11 +1245,11 @@ export function createGenericToolRegistry(
       name: "bms_timeseries_query",
       category: "building",
       description:
-        "Fast historical BMS series (merged poll+history). Prefer over terminal/curl. Times in UTC; display to users as Asia/Shanghai.",
+        "Fast historical BMS series (merged poll+history/readings). Prefer over terminal/curl. Times in UTC; display to users as HKT / Asia_Hong_Kong.",
       schema: {
         name: "bms_timeseries_query",
         description:
-          "Fetch timeseries from local BMS-database GET /api/v1/timeseries. Provide name OR point_id OR object_ref, plus from (UTC ISO). For yesterday/today use from/to from CURRENT TIME CALENDAR RANGES in the system prompt.",
+          "Fetch historical readings from local BMS-database GET /api/v1/timeseries with /api/v1/readings fallback. Provide name OR point_id OR object_ref, plus from (UTC ISO). For yesterday/today use from/to from CURRENT TIME CALENDAR RANGES in the system prompt.",
         parameters: {
           type: "object",
           properties: {
@@ -838,6 +1297,71 @@ export function createGenericToolRegistry(
         } catch (error) {
           return { error: error instanceof Error ? error.message : "bms_timeseries_query_failed", base_url: base };
         }
+      }
+    },
+
+    {
+      name: "dashboard_create",
+      category: "building",
+      description:
+        "Create a structured dashboard resource from a validated JSON spec. Use this when the user asks to monitor equipment or generate a dashboard.",
+      schema: {
+        name: "dashboard_create",
+        description:
+          "Create a dashboard with typed widgets. Provide title and widgets; layout and sections are optional because this tool normalizes them into a canonical 12-column layout. Never generate raw HTML/JS. Supported widgets: live_value_grid for compact live tables, stat_value for one prominent current/latest value, timeseries_chart for history, bar_comparison for comparing latest numeric values across equipment or points, and note for operator annotations without point bindings. For multi-equipment monitoring, group live/stat widgets by equipment; one focused trend per equipment/asset is added when trends are not explicitly disabled. This tool repairs missing/invalid sections into Overview, Comparison, Trends, and conditional Notes. Preferred widget fields are id, kind, title, pointBindings; note widgets should use content and optional tone. The tool also accepts agent-friendly points/object_refs.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "Dashboard title." },
+            description: { type: "string", description: "Optional operator-facing description." },
+            visibility: { type: "string", enum: ["private", "project"], description: "Optional visibility; monitoring dashboards should usually default to project unless the user asks for private." },
+            sourceConversationId: { type: "string", description: "Optional source conversation id." },
+            widgets: {
+              type: "array",
+              description:
+                "Widget definitions. Supported kinds: live_value_grid, stat_value, timeseries_chart, bar_comparison, note. Use pointBindings [{pointName,label,role,unit}] or points [pointName] for data widgets. Use stat_value for one key current value; use bar_comparison for latest-value comparisons; use note with content/tone for board annotations."
+            },
+            layout: {
+              type: "array",
+              description:
+                "Optional placements in the canonical 12-column layout. If omitted or invalid, the tool generates stable type-based placements."
+            },
+            sections: {
+              type: "array",
+              description:
+                "Optional section hints. If omitted or invalid, the tool generates Overview, Trends, Comparison when needed, and Notes only when note widgets exist."
+            },
+            includeOverview: {
+              type: "boolean",
+              description: "Optional. Leave true/default unless the user explicitly asks for no overview/current-value section."
+            },
+            includeTrends: {
+              type: "boolean",
+              description: "Optional. Leave true/default unless the user explicitly asks for no trends."
+            }
+          },
+          required: ["title", "widgets"]
+        }
+      },
+      async run(args, context) {
+        if (!context.dashboardOps) {
+          return { error: "dashboard_create_unavailable" };
+        }
+        const parsed = parseDashboardMutationInput({
+          ...normalizeDashboardCreateArgs(args),
+          ...(textArg(args, "visibility") ? {} : { visibility: "project" }),
+          sourceConversationId: textArg(args, "sourceConversationId") || context.conversationId
+        });
+        if ("error" in parsed) {
+          return { error: parsed.error };
+        }
+        const dashboard = context.dashboardOps.create(parsed);
+        return {
+          ok: true,
+          dashboard,
+          path: dashboardPath(context.projectId, dashboard.id),
+          message: `Dashboard created: ${dashboard.title}`
+        };
       }
     },
 

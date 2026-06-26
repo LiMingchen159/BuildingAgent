@@ -6,6 +6,7 @@ import { ChatImageGallery } from "./ui/ChatImageGallery";
 import { KnowledgeBase, type KnowledgeBaseDocument } from "./ui/KnowledgeBase";
 import { Repository, type RepositoryItem } from "./ui/Repository";
 import { BmsDataConfigPage } from "./ui/BmsDataConfig";
+import { DashboardView } from "./ui/DashboardView";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
@@ -15,6 +16,8 @@ import { instantConversationTitle, parseActivityLabel, parseAssistantContent, st
 import {
   ApiClientError,
   createProjectSocket,
+  getDashboard,
+  getDashboards,
   getChat,
   getKnowledgeBase,
   getProjectManagement,
@@ -27,13 +30,18 @@ import {
   selectProject,
   sendChatMessage,
   sendChatMessageStream,
+  createDashboard,
   createProject,
   createConversation,
   getConversations,
   selectConversation,
   deleteConversation,
   renameConversation,
+  updateDashboard,
+  deleteDashboard,
   deleteProject,
+  type DashboardRecord,
+  type DashboardVisibility,
   type ChatProviderDiagnostics,
   type ChatLifecycleEvent,
   type ChatMessageImage,
@@ -53,10 +61,12 @@ import {
   type ToolSummary,
   type UserSummary
 } from "./api";
+import type { BmsCollectorPoint } from "./bmsCollectorClient";
 
 const STORAGE_KEY = "building-agent.session.v1";
 /** Set after explicit login so bootstrap shows project picker instead of restoring URL/storage project. */
 const SKIP_PROJECT_RESTORE_KEY = "building-agent.skip-project-restore";
+const STARTUP_BURST_SEGMENTS = Array.from({ length: 12 }, (_, index) => index);
 
 function consumeSkipProjectRestore(): boolean {
   if (typeof window === "undefined") {
@@ -69,7 +79,7 @@ function consumeSkipProjectRestore(): boolean {
   return true;
 }
 
-type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "registry" | "gateways" | "building";
+type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "registry" | "gateways" | "building";
 
 type IconName =
   | "activity"
@@ -185,21 +195,29 @@ function visibleRepositoryArtifactCount(artifacts: RepositoryArtifact[]): number
   return artifacts.filter(isVisibleRepositoryArtifact).length;
 }
 
-function workspacePathFromTab(projectId: string, tab: WorkspaceTab): string {
+function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): string {
   const section = tab === "bms" ? "bms-data-config" : tab;
+  if (tab === "dashboards" && dashboardId) {
+    return `/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`;
+  }
   return `/projects/${encodeURIComponent(projectId)}/${section}`;
 }
 
-function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab } | null {
-  const match = pathname.match(/^\/projects\/([^/]+)\/([^/]+)$/);
-  if (!match) {
-    return null;
+function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab; dashboardId?: string } | null {
+  const dashboardMatch = pathname.match(/^\/projects\/([^/]+)\/dashboards\/([^/]+)$/);
+  if (dashboardMatch) {
+    const projectId = decodeURIComponent(dashboardMatch[1] ?? "");
+    const dashboardId = decodeURIComponent(dashboardMatch[2] ?? "");
+    if (!projectId || !dashboardId) return null;
+    return { projectId, tab: "dashboards", dashboardId };
   }
+  const match = pathname.match(/^\/projects\/([^/]+)\/([^/]+)$/);
+  if (!match) return null;
   const projectId = decodeURIComponent(match[1] ?? "");
   const section = match[2];
   if (!projectId) return null;
   const tab = section === "bms-data-config" ? "bms" : section;
-  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "registry" || tab === "gateways" || tab === "building") {
+  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "registry" || tab === "gateways" || tab === "building") {
     return { projectId, tab };
   }
   return null;
@@ -521,7 +539,7 @@ function ProjectPickerCard({ project, conversationCount, assetCount, busy, onSel
       </div>
       <dl className="project-picker-metrics" aria-label={`${project.name} project metrics`}>
         <div><dt><Icon name="message" />Conversations</dt><dd>{conversationCount}</dd></div>
-        <div><dt><Icon name="folder" />Assets</dt><dd>{assetCount.toLocaleString()}</dd></div>
+        <div><dt><Icon name="folder" />Assets</dt><dd>{assetCount.toLocaleString("en-US")}</dd></div>
       </dl>
       <div className="project-picker-card-footer">
         <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
@@ -545,7 +563,7 @@ function ProjectPickerListRow({ project, conversationCount, assetCount, busy, on
       </span>
       <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
       <span>{conversationCount} conversations</span>
-      <span>{assetCount.toLocaleString()} assets</span>
+      <span>{assetCount.toLocaleString("en-US")} assets</span>
       <Icon name="arrow-up" />
     </button>
   );
@@ -725,27 +743,25 @@ function ProjectScreen({ projects, onSelect, onSignOut, onCreate, user, busy }: 
     </main>
   );
 }
-function ProjectScreenSkeleton() {
+
+function StartupBurstLoader({ className }: { className?: string }) {
   return (
-    <main className="workspace-card project-screen project-screen-skeleton minimal-project-shell" aria-labelledby="projects-skeleton-title" aria-busy="true">
-      <ParticleField className="minimal-particle-field" density={36} connectionDistance={145} opacity={0.1} />
-      <div className="project-screen-header minimal-project-header">
-        <div>
-          <CubeLogo size={34} className="minimal-project-logo" />
-          <p className="eyebrow">Project boundary</p>
-          <h1 id="projects-skeleton-title">Loading authorized projects...</h1>
-          <p className="muted">Fetching your authorized projects.</p>
+    <div className={["workspace-restoring-surface", className].filter(Boolean).join(" ")} role="status" aria-live="polite" aria-label="Preparing BuildingGPT workspace">
+      <div className="workspace-restoring-card">
+        <div className="workspace-restoring-burst" aria-hidden="true">
+          {STARTUP_BURST_SEGMENTS.map((segment) => (
+            <span key={segment} style={{ "--i": segment } as CSSProperties} />
+          ))}
         </div>
       </div>
-      <p className="minimal-loading-status project-status" role="status" aria-label="Project list bootstrap phase">
-        <span className="spinner" aria-hidden="true" />
-        Loading projects...
-      </p>
-      <div className="project-grid" aria-hidden="true">
-        <ProjectCardSkeleton />
-        <ProjectCardSkeleton />
-        <ProjectCardSkeleton />
-      </div>
+    </div>
+  );
+}
+
+function ProjectScreenSkeleton() {
+  return (
+    <main className="workspace-card project-screen project-screen-skeleton project-screen-startup minimal-project-shell" aria-busy="true">
+      <StartupBurstLoader />
     </main>
   );
 }
@@ -875,6 +891,393 @@ function mergeConversationSummaries(
     });
   }
   return sortConversationsByNewest([...merged.values()]);
+}
+
+function sortDashboardsByUpdatedAt(dashboards: DashboardRecord[]): DashboardRecord[] {
+  return [...dashboards].sort((left, right) => {
+    const rightTime = Date.parse(right.updatedAt);
+    const leftTime = Date.parse(left.updatedAt);
+    if (Number.isFinite(rightTime) && Number.isFinite(leftTime) && rightTime !== leftTime) {
+      return rightTime - leftTime;
+    }
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function dashboardLayoutSignature(layout: DashboardRecord["layout"]): string {
+  return [...layout]
+    .sort((left, right) => (left.y - right.y) || (left.x - right.x) || left.widgetId.localeCompare(right.widgetId))
+    .map((item) => `${item.widgetId}:${item.x}:${item.y}:${item.w}:${item.h}`)
+    .join("|");
+}
+
+function dashboardWidgetSignature(widget: DashboardRecord["widgets"][number]): string {
+  const bindings = widget.pointBindings
+    .map((binding) => [
+      binding.id ?? "",
+      binding.pointName ?? "",
+      binding.objectRef ?? "",
+      binding.label ?? "",
+      binding.role ?? "",
+      binding.unit ?? ""
+    ].join(","))
+    .join(";");
+  return [
+    widget.id,
+    widget.kind,
+    widget.title,
+    widget.defaultTimeRange ?? "",
+    widget.content ?? "",
+    widget.tone ?? "",
+    bindings
+  ].join(":");
+}
+
+function dashboardSectionSignature(sections: DashboardRecord["sections"] | undefined): string {
+  return (sections ?? [])
+    .map((section) => `${section.id}:${section.title}:${section.kind}:${section.collapsed ? "1" : "0"}:${section.widgetIds.join(",")}`)
+    .join("|");
+}
+
+function dashboardRecordSignature(dashboard: DashboardRecord): string {
+  return [
+    dashboard.id,
+    dashboard.projectId,
+    dashboard.ownerUserId,
+    dashboard.visibility,
+    dashboard.title,
+    dashboard.description ?? "",
+    String(dashboard.layoutVersion ?? ""),
+    dashboard.createdAt,
+    dashboard.updatedAt,
+    dashboard.sourceConversationId ?? "",
+    dashboardLayoutSignature(dashboard.layout),
+    dashboard.widgets.map(dashboardWidgetSignature).join("|"),
+    dashboardSectionSignature(dashboard.sections)
+  ].join("||");
+}
+
+function sameDashboardRecord(left: DashboardRecord, right: DashboardRecord): boolean {
+  return dashboardRecordSignature(left) === dashboardRecordSignature(right);
+}
+
+function sameDashboardList(left: DashboardRecord[], right: DashboardRecord[]): boolean {
+  return left.length === right.length && left.every((dashboard, index) => dashboard === right[index]);
+}
+
+function upsertDashboardRecord(dashboards: DashboardRecord[], dashboard: DashboardRecord): DashboardRecord[] {
+  let found = false;
+  const next = dashboards.map((entry) => {
+    if (entry.id !== dashboard.id) return entry;
+    found = true;
+    return sameDashboardRecord(entry, dashboard) ? entry : dashboard;
+  });
+  if (!found) {
+    next.unshift(dashboard);
+  }
+  const sorted = sortDashboardsByUpdatedAt(next);
+  return sameDashboardList(dashboards, sorted) ? dashboards : sorted;
+}
+
+function mergeDashboardList(current: DashboardRecord[], incoming: DashboardRecord[]): DashboardRecord[] {
+  const currentById = new Map(current.map((dashboard) => [dashboard.id, dashboard]));
+  const merged = incoming.map((dashboard) => {
+    const existing = currentById.get(dashboard.id);
+    return existing && sameDashboardRecord(existing, dashboard) ? existing : dashboard;
+  });
+  const sorted = sortDashboardsByUpdatedAt(merged);
+  return sameDashboardList(current, sorted) ? current : sorted;
+}
+
+function dashboardPointNames(dashboard: DashboardRecord | null): string[] {
+  if (!dashboard) return [];
+  return [...new Set(dashboard.widgets.flatMap((widget) =>
+    widget.pointBindings
+      .map((binding) => binding.pointName)
+      .filter((value): value is string => Boolean(value))
+  ))].sort((left, right) => left.localeCompare(right));
+}
+
+type AppDashboardWidget = DashboardRecord["widgets"][number];
+type AppDashboardSection = NonNullable<DashboardRecord["sections"]>[number];
+const DASHBOARD_LAYOUT_VERSION = 2;
+
+function dashboardWidgetSectionInfo(widget: AppDashboardWidget): Pick<AppDashboardSection, "id" | "title" | "kind"> {
+  if (widget.kind === "timeseries_chart") return { id: "trends", title: "Trends", kind: "trends" };
+  if (widget.kind === "bar_comparison") return { id: "comparison", title: "Comparison", kind: "comparison" };
+  if (widget.kind === "note") return { id: "notes", title: "Notes", kind: "custom" };
+  return { id: "overview", title: "Overview", kind: "overview" };
+}
+
+function sectionsForDashboardSpec(dashboard: DashboardRecord): AppDashboardSection[] {
+  const widgetIds = new Set(dashboard.widgets.map((widget) => widget.id));
+  const usedWidgetIds = new Set<string>();
+  const explicitSections = (dashboard.sections ?? [])
+    .map((section) => ({ ...section, widgetIds: section.widgetIds.filter((widgetId) => widgetIds.has(widgetId)) }))
+    .filter((section) => section.widgetIds.length > 0);
+  for (const section of explicitSections) {
+    for (const widgetId of section.widgetIds) usedWidgetIds.add(widgetId);
+  }
+  const fallbackById = new Map<string, AppDashboardSection>();
+  for (const widget of dashboard.widgets) {
+    if (usedWidgetIds.has(widget.id)) continue;
+    const info = dashboardWidgetSectionInfo(widget);
+    const section = fallbackById.get(info.id) ?? { ...info, widgetIds: [] };
+    section.widgetIds.push(widget.id);
+    fallbackById.set(info.id, section);
+  }
+  return [
+    ...explicitSections,
+    ...["overview", "comparison", "trends", "notes"].map((id) => fallbackById.get(id)).filter((section): section is AppDashboardSection => Boolean(section))
+  ];
+}
+
+function widgetSlug(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "widget";
+}
+
+function uniqueDashboardWidgetId(baseId: string, existingIds: Set<string>): string {
+  const base = widgetSlug(baseId);
+  let candidate = `${base}-copy`;
+  let index = 2;
+  while (existingIds.has(candidate)) {
+    candidate = `${base}-copy-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function cloneWidgetIntoDashboard(widget: AppDashboardWidget, existingIds: Set<string>, titleSuffix = " Copy"): AppDashboardWidget {
+  const id = uniqueDashboardWidgetId(widget.id, existingIds);
+  existingIds.add(id);
+  return {
+    ...widget,
+    id,
+    title: `${widget.title}${titleSuffix}`,
+    pointBindings: widget.pointBindings.map((binding, index) => ({
+      ...binding,
+      ...(binding.id ? { id: `${binding.id}-copy-${index}` } : {})
+    }))
+  };
+}
+
+function defaultLayoutForDashboardWidget(widget: AppDashboardWidget, y: number): DashboardRecord["layout"][number] {
+  if (widget.kind === "timeseries_chart") return { widgetId: widget.id, x: 0, y, w: 6, h: 4 };
+  if (widget.kind === "bar_comparison") return { widgetId: widget.id, x: 0, y, w: 6, h: 3 };
+  if (widget.kind === "live_value_grid") return { widgetId: widget.id, x: 0, y, w: 3, h: widget.pointBindings.length > 2 ? 3 : 2 };
+  if (widget.kind === "note") return { widgetId: widget.id, x: 0, y, w: 3, h: 2 };
+  return { widgetId: widget.id, x: 0, y, w: 3, h: 2 };
+}
+
+function layoutMaxY(layout: DashboardRecord["layout"], widgetIds: string[]): number {
+  const ids = new Set(widgetIds);
+  return layout
+    .filter((item) => ids.has(item.widgetId))
+    .reduce((max, item) => Math.max(max, item.y + item.h), 0);
+}
+
+function normalizeLayoutForDashboardSections(layout: DashboardRecord["layout"], sections: AppDashboardSection[]): DashboardRecord["layout"] {
+  const layoutByWidgetId = new Map(layout.map((item) => [item.widgetId, item]));
+  return sections.flatMap((section) => {
+    const items = section.widgetIds
+      .map((widgetId) => layoutByWidgetId.get(widgetId))
+      .filter((item): item is DashboardRecord["layout"][number] => Boolean(item));
+    const minY = items.length > 0 ? Math.min(...items.map((item) => item.y)) : 0;
+    return items.map((item) => ({ ...item, y: Math.max(0, item.y - minY) }));
+  });
+}
+
+function sectionMatchKey(section: AppDashboardSection): string {
+  return section.kind === "custom" ? `custom:${section.id}` : section.kind;
+}
+
+function uniqueSectionId(baseId: string, sections: AppDashboardSection[]): string {
+  const existing = new Set(sections.map((section) => section.id));
+  const base = widgetSlug(baseId);
+  let candidate = base;
+  let index = 2;
+  while (existing.has(candidate)) {
+    candidate = `${base}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function mergeDashboardIntoTarget(source: DashboardRecord, target: DashboardRecord): {
+  layout: DashboardRecord["layout"];
+  widgets: DashboardRecord["widgets"];
+  sections: AppDashboardSection[];
+} {
+  const nextWidgets = [...target.widgets];
+  const nextSections = sectionsForDashboardSpec(target).map((section) => ({ ...section, widgetIds: [...section.widgetIds] }));
+  const nextLayout = normalizeLayoutForDashboardSections(target.layout, nextSections);
+  const sourceSections = sectionsForDashboardSpec(source);
+  const sourceLayoutByWidgetId = new Map(source.layout.map((item) => [item.widgetId, item]));
+  const existingWidgetIds = new Set(nextWidgets.map((widget) => widget.id));
+
+  for (const sourceSection of sourceSections) {
+    let targetSection = nextSections.find((section) => sectionMatchKey(section) === sectionMatchKey(sourceSection));
+    if (!targetSection) {
+      targetSection = {
+        id: uniqueSectionId(sourceSection.id, nextSections),
+        title: sourceSection.title,
+        kind: sourceSection.kind,
+        widgetIds: []
+      };
+      nextSections.push(targetSection);
+    }
+
+    const sourceLayoutItems = sourceSection.widgetIds
+      .map((widgetId) => sourceLayoutByWidgetId.get(widgetId))
+      .filter((item): item is DashboardRecord["layout"][number] => Boolean(item));
+    const minSourceY = sourceLayoutItems.length > 0 ? Math.min(...sourceLayoutItems.map((item) => item.y)) : 0;
+    const targetBaseY = layoutMaxY(nextLayout, targetSection.widgetIds);
+
+    for (const sourceWidgetId of sourceSection.widgetIds) {
+      const sourceWidget = source.widgets.find((widget) => widget.id === sourceWidgetId);
+      if (!sourceWidget) continue;
+      const clonedWidget = cloneWidgetIntoDashboard(sourceWidget, existingWidgetIds);
+      const sourceItem = sourceLayoutByWidgetId.get(sourceWidgetId) ?? defaultLayoutForDashboardWidget(sourceWidget, 0);
+      nextWidgets.push(clonedWidget);
+      targetSection.widgetIds.push(clonedWidget.id);
+      nextLayout.push({
+        widgetId: clonedWidget.id,
+        x: sourceItem.x,
+        y: targetBaseY + Math.max(0, sourceItem.y - minSourceY),
+        w: sourceItem.w,
+        h: sourceItem.h
+      });
+    }
+  }
+
+  const validIds = new Set(nextWidgets.map((widget) => widget.id));
+  return {
+    widgets: nextWidgets,
+    layout: nextLayout.filter((item) => validIds.has(item.widgetId)),
+    sections: nextSections
+      .map((section) => ({ ...section, widgetIds: section.widgetIds.filter((widgetId) => validIds.has(widgetId)) }))
+      .filter((section) => section.widgetIds.length > 0)
+  };
+}
+
+function dashboardChoiceLines(dashboards: DashboardRecord[]): string {
+  return dashboards.map((dashboard, index) => {
+    const visibility = dashboard.visibility === "project" ? "Shared" : "Private";
+    return `${index + 1}. ${dashboard.title} - ${dashboard.widgets.length} widgets - ${visibility}`;
+  }).join("\n");
+}
+
+function findDashboardChoice(dashboards: DashboardRecord[], requested: string): DashboardRecord | undefined {
+  const trimmed = requested.trim();
+  const index = Number(trimmed);
+  if (Number.isInteger(index) && index >= 1 && index <= dashboards.length) {
+    return dashboards[index - 1];
+  }
+  const normalized = trimmed.toLowerCase();
+  return dashboards.find((dashboard) => (
+    dashboard.title.toLowerCase() === normalized
+    || dashboard.id === trimmed
+  ));
+}
+
+const AUTO_FLIP_DETAILS_MENU_SELECTOR = [
+  "details.dashboard-panel-menu",
+  "details.workspace-right-dashboard-menu",
+  "details.workspace-project-menu",
+  "details.workspace-sidebar-account-menu"
+].join(", ");
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/gu, "\\$&");
+}
+
+function shouldOpenMenuUp(triggerRect: DOMRect, menuHeight: number): boolean {
+  const viewportGap = 12;
+  const spaceBelow = window.innerHeight - triggerRect.bottom;
+  const spaceAbove = triggerRect.top;
+  return spaceBelow < menuHeight + viewportGap && spaceAbove > spaceBelow;
+}
+
+function isPopoverOpen(menu: HTMLElement): boolean {
+  try {
+    return menu.matches(":popover-open");
+  } catch {
+    return false;
+  }
+}
+
+function updateDetailsMenuDirection(details: HTMLDetailsElement): void {
+  if (!details.open) {
+    details.classList.remove("is-menu-up");
+    return;
+  }
+  const trigger = details.querySelector<HTMLElement>("summary");
+  const menu = details.querySelector<HTMLElement>(":scope > ul");
+  if (!trigger || !menu) {
+    details.classList.remove("is-menu-up");
+    return;
+  }
+  details.classList.toggle("is-menu-up", shouldOpenMenuUp(trigger.getBoundingClientRect(), menu.getBoundingClientRect().height));
+}
+
+function updatePopoverMenuPosition(menu: HTMLElement): void {
+  if (!menu.id || !isPopoverOpen(menu)) return;
+  const trigger = document.querySelector<HTMLElement>(`[popovertarget="${cssEscape(menu.id)}"]`);
+  if (!trigger) return;
+
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const gap = 6;
+  const viewportPadding = 8;
+  const menuHeight = menuRect.height;
+  const openUp = shouldOpenMenuUp(triggerRect, menuHeight);
+  const top = openUp
+    ? Math.max(viewportPadding, triggerRect.top - menuHeight - gap)
+    : Math.min(triggerRect.bottom + gap, window.innerHeight - menuHeight - viewportPadding);
+
+  menu.classList.toggle("is-menu-up", openUp);
+  menu.style.top = `${top}px`;
+  menu.style.right = `${Math.max(viewportPadding, window.innerWidth - triggerRect.right)}px`;
+  menu.style.bottom = "auto";
+  menu.style.left = "auto";
+}
+
+function updateOpenMenus(): void {
+  document.querySelectorAll<HTMLDetailsElement>(AUTO_FLIP_DETAILS_MENU_SELECTOR).forEach((details) => {
+    updateDetailsMenuDirection(details);
+  });
+  document.querySelectorAll<HTMLElement>(".conversation-menu-list[popover]").forEach((menu) => {
+    updatePopoverMenuPosition(menu);
+  });
+}
+
+function useAutoFlipMenus(): void {
+  useEffect(() => {
+    const scheduleUpdate = () => {
+      window.requestAnimationFrame(updateOpenMenus);
+    };
+    const handleToggle = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.matches(AUTO_FLIP_DETAILS_MENU_SELECTOR) || target.matches(".conversation-menu-list[popover]")) {
+        scheduleUpdate();
+      }
+    };
+
+    document.addEventListener("toggle", handleToggle, true);
+    document.addEventListener("click", scheduleUpdate, true);
+    document.addEventListener("scroll", scheduleUpdate, true);
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      document.removeEventListener("toggle", handleToggle, true);
+      document.removeEventListener("click", scheduleUpdate, true);
+      document.removeEventListener("scroll", scheduleUpdate, true);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, []);
 }
 
 function mergeMessagesWithStreamingState(
@@ -1832,13 +2235,37 @@ function WorkspaceSidebarBlock({
   );
 }
 
-function WorkspaceRightPanel({ registry, management, disabled }: { registry: RegistryResponse | null; management: ProjectManagementResponse | null; disabled?: boolean }) {
+function WorkspaceRightPanel({
+  registry,
+  management,
+  dashboards,
+  activeDashboardId,
+  disabled,
+  onOpenDashboard,
+  onRenameDashboard,
+  onDuplicateDashboard,
+  onDeleteDashboard,
+  onMergeDashboard
+}: {
+  registry: RegistryResponse | null;
+  management: ProjectManagementResponse | null;
+  dashboards: DashboardRecord[];
+  activeDashboardId: string | null;
+  disabled?: boolean;
+  onOpenDashboard: (dashboardId: string) => void;
+  onRenameDashboard: (dashboardId: string) => void;
+  onDuplicateDashboard: (dashboardId: string) => void;
+  onDeleteDashboard: (dashboardId: string) => void;
+  onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => void;
+}) {
   const taskCount = disabled ? 0 : 3;
   const skillCount = disabled ? 0 : (registry?.skills.length ?? 0);
   const toolCount = disabled ? 0 : (management?.tools.length ?? registry?.tools.length ?? 0);
+  const dashboardCount = disabled ? 0 : dashboards.length;
+  const [dashboardsSectionOpen, setDashboardsSectionOpen] = useState(true);
   return (
     <div className={`workspace-right-block${disabled ? " is-disabled" : ""}`}>
-      <details className="workspace-right-section" open={!disabled}>
+      <details className="workspace-right-section">
         <summary>
           <span><Icon name="clock" />Scheduled &amp; rule-based tasks</span>
           <span className="right-section-meta">{taskCount}</span>
@@ -1859,6 +2286,50 @@ function WorkspaceRightPanel({ registry, management, disabled }: { registry: Reg
         </summary>
         {disabled ? <p className="right-section-empty">Select a project to view tools</p> : <Tools />}
       </details>
+      <details className="workspace-right-section" open={dashboardsSectionOpen} onToggle={(event) => setDashboardsSectionOpen(event.currentTarget.open)}>
+        <summary>
+          <span><Icon name="grid" />Dashboards</span>
+          <span className="right-section-meta">{dashboardCount}</span>
+        </summary>
+        {disabled ? (
+          <p className="right-section-empty">Select a project to view dashboards</p>
+        ) : dashboards.length === 0 ? (
+          <p className="right-section-empty">Ask BuildingGPT to monitor equipment and a dashboard will appear here.</p>
+        ) : (
+          <ul className="workspace-right-dashboard-list" aria-label="Project dashboards">
+            {dashboards.map((dashboard) => (
+              <li key={dashboard.id}>
+                <div className={`workspace-right-dashboard-row${dashboard.id === activeDashboardId ? " is-active" : ""}`}>
+                  <button
+                    type="button"
+                    className="workspace-right-dashboard-item"
+                    onClick={() => onOpenDashboard(dashboard.id)}
+                  >
+                    <span className="workspace-right-dashboard-copy">
+                      <strong>{dashboard.title}</strong>
+                      <small>{dashboard.widgets.length} widgets</small>
+                    </span>
+                    <Badge tone={dashboard.visibility === "project" ? "success" : "neutral"}>
+                      {dashboard.visibility === "project" ? "Shared" : "Private"}
+                    </Badge>
+                  </button>
+                  <details className="workspace-right-dashboard-menu">
+                    <summary aria-label="Dashboard actions">
+                      <Icon name="more" />
+                    </summary>
+                    <ul>
+                      <li><button type="button" onClick={() => onRenameDashboard(dashboard.id)}>Rename</button></li>
+                      <li><button type="button" onClick={() => onDuplicateDashboard(dashboard.id)}>Duplicate</button></li>
+                      <li><button type="button" onClick={() => onMergeDashboard(dashboard.id)}>Merge into...</button></li>
+                      <li><button type="button" className="is-danger" onClick={() => onDeleteDashboard(dashboard.id)}>Delete</button></li>
+                    </ul>
+                  </details>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
     </div>
   );
 }
@@ -1873,6 +2344,10 @@ function Workspace({
   activeConversationId,
   kbDocuments,
   repoItems,
+  dashboards,
+  activeDashboard,
+  dashboardLiveValues,
+  dashboardRealtimeStale,
   kbTotalCount,
   repoTotalCount,
   providerDiagnostics,
@@ -1887,6 +2362,7 @@ function Workspace({
   onSwitchProject,
   onSelectProject,
   onSelectConversation,
+  onOpenDashboard,
   onCreateProject,
   onSignOut,
   projectConversationCounts,
@@ -1895,6 +2371,14 @@ function Workspace({
   onDeleteConversation,
   onRenameConversation,
   onDeleteProject,
+  onDashboardSpecChange,
+  onDashboardLayoutChange,
+  onDashboardVisibilityChange,
+  onRenameDashboard,
+  onDuplicateDashboard,
+  onDeleteDashboard,
+  onMergeDashboard,
+  onCopyWidgetToDashboard,
   onStop,
   streamingActivity,
   streamOutputStarted,
@@ -1914,6 +2398,10 @@ function Workspace({
   activeConversationId: string | null;
   kbDocuments: KnowledgeBaseDocument[];
   repoItems: RepositoryItem[];
+  dashboards: DashboardRecord[];
+  activeDashboard: DashboardRecord | null;
+  dashboardLiveValues: Record<string, BmsCollectorPoint>;
+  dashboardRealtimeStale: boolean;
   kbTotalCount: number;
   repoTotalCount: number;
   providerDiagnostics: ChatProviderDiagnostics | null;
@@ -1929,6 +2417,7 @@ function Workspace({
   onSwitchProject: () => void;
   onSelectProject: (project: ProjectSummary) => void;
   onSelectConversation: (convId: string) => void;
+  onOpenDashboard: (dashboardId: string) => void;
   onCreateProject: (name: string) => void;
   onSignOut: () => void;
   projectConversationCounts: Record<string, number>;
@@ -1937,6 +2426,14 @@ function Workspace({
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
+  onDashboardSpecChange: (next: Pick<DashboardRecord, "title" | "visibility" | "layout" | "widgets"> & Partial<DashboardRecord>) => Promise<void>;
+  onDashboardLayoutChange: (layout: DashboardRecord["layout"], sections?: DashboardRecord["sections"]) => Promise<void>;
+  onDashboardVisibilityChange: (visibility: DashboardVisibility) => Promise<void>;
+  onRenameDashboard: (dashboardId: string) => Promise<void>;
+  onDuplicateDashboard: (dashboardId: string) => Promise<void>;
+  onDeleteDashboard: (dashboardId: string) => Promise<void>;
+  onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => Promise<void>;
+  onCopyWidgetToDashboard: (widgetId: string, targetDashboardId: string) => Promise<void>;
   streamingActivity?: ChatStreamActivityEvent[];
   streamOutputStarted: boolean;
   streamAnswerPhase?: boolean;
@@ -1951,6 +2448,7 @@ function Workspace({
     { id: "bms", label: "BMS Data Config" },
     { id: "kb", label: "Knowledge Base" },
     { id: "repo", label: "Repository" },
+    { id: "dashboards", label: "Dashboards" },
     { id: "registry", label: "Platform Registry" },
     { id: "gateways", label: "Gateways" },
     { id: "building", label: "Building Domain" }
@@ -1968,6 +2466,13 @@ function Workspace({
       setRightOpen(false);
     }
   }, [project?.id ?? null]);
+
+  useEffect(() => {
+    if (!project) return;
+    if (activeTab === "dashboards" && activeDashboard) {
+      setLeftOpen(false);
+    }
+  }, [activeDashboard?.id ?? null, activeTab, project?.id ?? null]);
 
   // Determine shell class name for sidebar visibility
   const shellClass = [
@@ -1992,6 +2497,31 @@ function Workspace({
       {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
+      {activeTab === "dashboards" ? (
+        activeDashboard ? (
+          <DashboardView
+            key={activeDashboard.id}
+            token={token}
+            dashboard={activeDashboard}
+            dashboards={dashboards}
+            liveValues={dashboardLiveValues}
+            stale={dashboardRealtimeStale}
+            forceCompactLayout={leftOpen || rightOpen}
+            onDashboardChange={onDashboardSpecChange}
+            onDashboardRename={() => { void onRenameDashboard(activeDashboard.id); }}
+            onDashboardDuplicate={() => { void onDuplicateDashboard(activeDashboard.id); }}
+            onDashboardDelete={() => { void onDeleteDashboard(activeDashboard.id); }}
+            onDashboardMerge={() => { void onMergeDashboard(activeDashboard.id); }}
+            onCopyWidgetToDashboard={onCopyWidgetToDashboard}
+            onLayoutChange={onDashboardLayoutChange}
+            onVisibilityChange={onDashboardVisibilityChange}
+          />
+        ) : (
+          <Surface className="dashboard-empty-surface">
+            <EmptyState title="Choose a dashboard">Pick a dashboard from the right sidebar to open it here.</EmptyState>
+          </Surface>
+        )
+      ) : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
       {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
       {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
@@ -2007,9 +2537,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">Workspace</h1>
-      <div className="workspace-restoring-surface" role="status" aria-live="polite" aria-label="Saved-session bootstrap phase">
-        <span className="spinner" aria-hidden="true" />
-      </div>
+      <StartupBurstLoader />
     </div>
   ) : (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
@@ -2055,7 +2583,20 @@ function Workspace({
           />
         )}
         center={center}
-        right={<WorkspaceRightPanel registry={project ? registry : null} management={project ? management : null} disabled={!project} />}
+        right={(
+          <WorkspaceRightPanel
+            registry={project ? registry : null}
+            management={project ? management : null}
+            dashboards={project ? dashboards : []}
+            activeDashboardId={activeDashboard?.id ?? null}
+            disabled={!project}
+            onOpenDashboard={onOpenDashboard}
+            onRenameDashboard={(dashboardId) => { void onRenameDashboard(dashboardId); }}
+            onDuplicateDashboard={(dashboardId) => { void onDuplicateDashboard(dashboardId); }}
+            onDeleteDashboard={(dashboardId) => { void onDeleteDashboard(dashboardId); }}
+            onMergeDashboard={(sourceDashboardId, targetDashboardId) => { void onMergeDashboard(sourceDashboardId, targetDashboardId); }}
+          />
+        )}
         className={shellClass}
       />
     </div>
@@ -2063,6 +2604,7 @@ function Workspace({
 }
 
 export default function App() {
+  useAutoFlipMenus();
   const initial = useMemo(readStoredSession, []);
   const [token, setToken] = useState(initial.token);
   const [user, setUser] = useState<UserSummary | null>(initial.user);
@@ -2075,6 +2617,10 @@ export default function App() {
   const [pendingNewChat, setPendingNewChat] = useState(false);
   const [knowledgeBaseDocuments, setKnowledgeBaseDocuments] = useState<KnowledgeBaseDocument[]>([]);
   const [repositoryItems, setRepositoryItems] = useState<RepositoryItem[]>([]);
+  const [dashboards, setDashboards] = useState<DashboardRecord[]>([]);
+  const [activeDashboardId, setActiveDashboardId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.dashboardId ?? null);
+  const [dashboardLiveValues, setDashboardLiveValues] = useState<Record<string, BmsCollectorPoint>>({});
+  const [dashboardRealtimeAt, setDashboardRealtimeAt] = useState<number | null>(null);
   const [kbTotalCount, setKbTotalCount] = useState(0);
   const [repoTotalCount, setRepoTotalCount] = useState(0);
   const [projectConversationCounts, setProjectConversationCounts] = useState<Record<string, number>>({});
@@ -2093,32 +2639,45 @@ export default function App() {
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingTurnRef = useRef<StreamingTurnState | null>(null);
+  const projectSocketRef = useRef<ReturnType<typeof createProjectSocket> | null>(null);
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
+  const conversationStreamsRef = useRef<Record<string, ConversationStreamState>>({});
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+  useEffect(() => {
+    conversationStreamsRef.current = conversationStreams;
+  }, [conversationStreams]);
 
   useEffect(() => {
     if (!selectedProject) {
       return;
     }
-    const targetPath = workspacePathFromTab(selectedProject.id, activeTab);
+    const targetPath = workspacePathFromTab(
+      selectedProject.id,
+      activeTab,
+      activeTab === "dashboards" ? activeDashboardId : null
+    );
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, "", targetPath);
     }
-  }, [activeTab, selectedProject?.id ?? null]);
+  }, [activeDashboardId, activeTab, selectedProject?.id ?? null]);
 
   useEffect(() => {
     const parsed = parseWorkspacePath(window.location.pathname);
     if (parsed) {
       setPathnameProjectId(parsed.projectId);
       setActiveTab(parsed.tab);
+      setActiveDashboardId(parsed.dashboardId ?? null);
     }
     const handlePopState = () => {
       const next = parseWorkspacePath(window.location.pathname);
       setPathnameProjectId(next?.projectId ?? null);
       if (next) {
         setActiveTab(next.tab);
+        setActiveDashboardId(next.dashboardId ?? null);
+      } else {
+        setActiveDashboardId(null);
       }
     };
     window.addEventListener("popstate", handlePopState);
@@ -2126,6 +2685,17 @@ export default function App() {
   }, []);
 
   const visibleStreamState = activeConversationId ? conversationStreams[activeConversationId] : undefined;
+  const activeDashboard = useMemo(
+    () => dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
+    [dashboards, activeDashboardId]
+  );
+  const activeDashboardPointNames = useMemo(
+    () => dashboardPointNames(activeDashboard),
+    [activeDashboard]
+  );
+  const activeDashboardPointNamesSignature = activeDashboardPointNames.join("|");
+  const dashboardRealtimeStale = activeDashboardPointNames.length > 0
+    && (dashboardRealtimeAt === null || (Date.now() - dashboardRealtimeAt) > 70_000);
   const visibleMessages = useMemo(
     () => mergeMessagesWithStreamingState(messages, visibleStreamState),
     [messages, visibleStreamState]
@@ -2144,6 +2714,10 @@ export default function App() {
     setPendingNewChat(false);
     setKnowledgeBaseDocuments([]);
     setRepositoryItems([]);
+    setDashboards([]);
+    setActiveDashboardId(null);
+    setDashboardLiveValues({});
+    setDashboardRealtimeAt(null);
     setKbTotalCount(0);
     setRepoTotalCount(0);
     setProjectConversationCounts({});
@@ -2170,29 +2744,34 @@ export default function App() {
       getRegistry(currentToken),
       getProjectManagement(currentToken, projectId)
     ]);
-    const [kbResponse, repoResponse] = await Promise.all([
+    const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
       getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
-      getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
+      getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
+      getDashboards(currentToken, projectId).catch(() => null)
     ]);
     setRegistry(registryResponse);
     setManagement(managementResponse);
     setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+    if (dashboardResponse) {
+      setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
+    }
     const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
     const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
     setRepositoryItems(visibleRepoItems);
     setKbTotalCount(kbResponse.totalCount);
     setRepoTotalCount(visibleRepoCount);
     setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + visibleRepoCount }));
-    return { registryResponse, managementResponse, kbResponse, repoResponse };
+    return { registryResponse, managementResponse, kbResponse, repoResponse, dashboardResponse };
   }
 
-  function applyWorkspacePath(projectId: string, tab: WorkspaceTab): void {
-    const nextPath = workspacePathFromTab(projectId, tab);
+  function applyWorkspacePath(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): void {
+    const nextPath = workspacePathFromTab(projectId, tab, dashboardId);
     if (window.location.pathname !== nextPath) {
       window.history.pushState({}, "", nextPath);
     }
     setPathnameProjectId(projectId);
     setActiveTab(tab);
+    setActiveDashboardId(tab === "dashboards" ? (dashboardId ?? null) : null);
   }
 
   useEffect(() => {
@@ -2224,6 +2803,7 @@ export default function App() {
         setBanner(null);
         if (nextProject) {
           setActiveTab(pathState?.tab ?? "chat");
+          setActiveDashboardId(pathState?.dashboardId ?? null);
           setPathnameProjectId(nextProject.id);
           if (sessionResponse.session.projectId !== nextProject.id) {
             const selected = await selectProject(token, nextProject.id);
@@ -2238,9 +2818,10 @@ export default function App() {
             getProjectManagement(token, nextProject.id),
             getConversations(token, nextProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" }))
           ]);
-          const [kbResponse, repoResponse] = await Promise.all([
+          const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
             getKnowledgeBase(token, nextProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
-            getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
+            getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
+            getDashboards(token, nextProject.id).catch(() => null)
           ]);
           if (!cancelled) {
             const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
@@ -2254,6 +2835,9 @@ export default function App() {
             setRegistry(registryResponse);
             setManagement(managementResponse);
             setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+            if (dashboardResponse) {
+              setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
+            }
             setRepositoryItems(visibleRepoItems);
             setKbTotalCount(kbResponse.totalCount);
             setRepoTotalCount(visibleRepoCount);
@@ -2269,12 +2853,12 @@ export default function App() {
             setBanner(errorBanner(error, "Could not load session"));
           }
         }
-    } finally {
-      if (!cancelled) {
-        setBootstrapping(false);
+      } finally {
+        if (!cancelled) {
+          setBootstrapping(false);
+        }
       }
     }
-  }
 
     void bootstrap();
     return () => {
@@ -2282,9 +2866,45 @@ export default function App() {
     };
   }, [token]);
 
+  useEffect(() => {
+    if (!token || !selectedProject || !activeDashboardId) return;
+    if (dashboards.some((dashboard) => dashboard.id === activeDashboardId)) return;
+
+    let cancelled = false;
+    const projectId = selectedProject.id;
+    const dashboardId = activeDashboardId;
+    async function hydrateActiveDashboard() {
+      try {
+        const response = await getDashboard(token, projectId, dashboardId);
+        if (cancelled) return;
+        setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      } catch (error) {
+        if (cancelled) return;
+        if (isAuthFailure(error)) {
+          clearAuth(errorBanner(error, "Session expired"));
+          return;
+        }
+        if (activeTab === "dashboards") {
+          applyWorkspacePath(projectId, "dashboards");
+        }
+        setBanner(errorBanner(error, "Could not load dashboard"));
+      }
+    }
+
+    void hydrateActiveDashboard();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDashboardId, activeTab, dashboards, selectedProject?.id ?? null, token]);
+
+  useEffect(() => {
+    setDashboardLiveValues({});
+    setDashboardRealtimeAt(null);
+  }, [selectedProject?.id ?? null]);
+
   // Poll for proactive messages (scheduler-fired reminders) in the active conversation
   useEffect(() => {
-    if (!token || !selectedProject || !activeConversationId) return;
+    if (!token || !selectedProject || !activeConversationId || activeTab !== "chat") return;
 
     const POLL_INTERVAL_MS = 5000;
     let active = true;
@@ -2317,7 +2937,7 @@ export default function App() {
       active = false;
       clearInterval(interval);
     };
-  }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
+  }, [token, selectedProject?.id ?? null, activeConversationId, activeTab, busy]);
 
   // Re-render once per second only while a Working-for segment is active
   useEffect(() => {
@@ -2335,24 +2955,31 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!token || !selectedProject) return;
+    if (!token || !selectedProject || activeTab === "dashboards") return;
 
-    const POLL_INTERVAL_MS = 5000;
+    const POLL_INTERVAL_MS = 15_000;
     const projectId = selectedProject.id;
     let active = true;
+    let inFlight = false;
 
     async function refreshSidebar() {
+      if (inFlight || busy) return;
+      inFlight = true;
       try {
-        const [convResponse, kbResponse, repoResponse] = await Promise.all([
+        const [convResponse, kbResponse, repoResponse, dashboardResponse] = await Promise.all([
           getConversations(token, projectId).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
           getKnowledgeBase(token, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
-          getRepository(token, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" }))
+          getRepository(token, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
+          getDashboards(token, projectId).catch(() => null)
         ]);
         if (!active) return;
         const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
         const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
-        setConversations((current) => mergeConversationSummaries(convResponse.conversations, current, conversationStreams));
+        setConversations((current) => mergeConversationSummaries(convResponse.conversations, current, conversationStreamsRef.current));
         setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
+        if (dashboardResponse) {
+          setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
+        }
         setRepositoryItems((current) => {
           const incomingIds = new Set(visibleRepoItems.map((item) => item.id));
           return [...visibleRepoItems, ...current.filter((item) => !incomingIds.has(item.id))];
@@ -2363,10 +2990,11 @@ export default function App() {
         setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + visibleRepoCount }));
       } catch {
         // Sidebar refresh is best-effort.
+      } finally {
+        inFlight = false;
       }
     }
 
-    void refreshSidebar();
     const interval = setInterval(() => {
       void refreshSidebar();
     }, POLL_INTERVAL_MS);
@@ -2374,15 +3002,19 @@ export default function App() {
       active = false;
       clearInterval(interval);
     };
-  }, [token, selectedProject?.id ?? null, conversationStreams]);
+  }, [token, selectedProject?.id ?? null, activeTab, busy]);
 
   // WebSocket connection for real-time reminder/message delivery
   useEffect(() => {
     if (!token || !selectedProject) return;
 
     const socket = createProjectSocket(selectedProject.id, token);
+    projectSocketRef.current = socket;
 
     socket.on("message", (data) => {
+      if (data.type === "connected") {
+        socket.send({ type: "dashboard_subscribe", pointNames: activeDashboardPointNames });
+      }
       if (data.type === "reminder_fired" && data.message) {
         const reminderMsg = data.message as ChatMessage;
         setMessages((current) => {
@@ -2408,12 +3040,77 @@ export default function App() {
           ))
         );
       }
+      if (data.type === "dashboard_point_update" && Array.isArray(data.updates)) {
+        type DashboardPointUpdate = {
+          pointName: string;
+          value: string | null | undefined;
+          polledAt: string | undefined;
+          objectRef: string | undefined;
+        };
+        const updates = data.updates
+          .map((entry) => {
+            if (typeof entry !== "object" || entry === null || typeof (entry as Record<string, unknown>).pointName !== "string") {
+              return null;
+            }
+            const payload = entry as Record<string, unknown>;
+            return {
+              pointName: payload.pointName as string,
+              value: typeof payload.value === "string" || payload.value == null ? payload.value : String(payload.value),
+              polledAt: typeof payload.polledAt === "string" ? payload.polledAt : undefined,
+              objectRef: typeof payload.objectRef === "string" ? payload.objectRef : undefined
+            };
+          })
+          .filter((entry): entry is DashboardPointUpdate => entry !== null);
+        if (updates.length > 0) {
+          setDashboardLiveValues((current) => {
+            const next = { ...current };
+            for (const update of updates) {
+              next[update.pointName] = {
+                id: -1,
+                name: update.pointName,
+                last_value: update.value ?? null,
+                ...(update.polledAt ? { last_polled_at: update.polledAt } : {}),
+                ...(update.objectRef ? { object_ref: update.objectRef } : {})
+              };
+            }
+            return next;
+          });
+          setDashboardRealtimeAt(Date.now());
+        }
+      }
+      if (data.type === "dashboard_created" && typeof data.dashboard === "object" && data.dashboard !== null) {
+        const dashboard = data.dashboard as DashboardRecord;
+        setDashboards((current) => upsertDashboardRecord(current, dashboard));
+        if (dashboard.sourceConversationId && dashboard.sourceConversationId === activeConversationIdRef.current) {
+          setDashboardLiveValues({});
+          setDashboardRealtimeAt(null);
+          applyWorkspacePath(selectedProject.id, "dashboards", dashboard.id);
+          setBanner({ tone: "success", title: "Dashboard created", message: dashboard.title });
+        }
+      }
+      if (data.type === "dashboard_updated" && typeof data.dashboard === "object" && data.dashboard !== null) {
+        setDashboards((current) => upsertDashboardRecord(current, data.dashboard as DashboardRecord));
+      }
+      if (data.type === "dashboard_deleted" && typeof data.dashboardId === "string") {
+        setDashboards((current) => current.filter((dashboard) => dashboard.id !== data.dashboardId));
+        if (data.dashboardId === activeDashboardId) {
+          applyWorkspacePath(selectedProject.id, "dashboards");
+        }
+      }
     });
 
     return () => {
+      if (projectSocketRef.current === socket) {
+        projectSocketRef.current = null;
+      }
       socket.close();
     };
-  }, [token, selectedProject?.id ?? null]);
+  }, [activeDashboardId, activeDashboardPointNamesSignature, selectedProject?.id ?? null, token]);
+
+  useEffect(() => {
+    projectSocketRef.current?.send({ type: "dashboard_subscribe", pointNames: activeDashboardPointNames });
+    setDashboardRealtimeAt(null);
+  }, [activeDashboardPointNamesSignature]);
 
   async function handleLogin(email: string, password: string) {
     setBusy(true);
@@ -2461,7 +3158,10 @@ export default function App() {
       setMessages([]);
       setConversations(sortConversationsByNewest(convResponse.conversations));
       setProjectConversationCounts((current) => ({ ...current, [project.id]: convResponse.conversations.length }));
-      setProjectAssetCounts((current) => ({ ...current, [project.id]: surfaces.kbResponse.documents.length + surfaces.repoResponse.artifacts.length }));
+      setProjectAssetCounts((current) => ({
+        ...current,
+        [project.id]: surfaces.kbResponse.totalCount + visibleRepositoryArtifactCount(surfaces.repoResponse.artifacts)
+      }));
       setActiveConversationId(null);
       setPendingNewChat(false);
       setKnowledgeBaseDocuments(surfaces.kbResponse.documents.map(apiDocumentToUi));
@@ -2506,6 +3206,10 @@ export default function App() {
       setPendingNewChat(false);
       setKnowledgeBaseDocuments([]);
       setRepositoryItems([]);
+      setDashboards([]);
+      setActiveDashboardId(null);
+      setDashboardLiveValues({});
+      setDashboardRealtimeAt(null);
       setKbTotalCount(0);
       setRepoTotalCount(0);
       setProjectConversationCounts((current) => ({ ...current, [project.id]: 0 }));
@@ -2523,6 +3227,256 @@ export default function App() {
       setBanner(errorBanner(error, "Project creation failed"));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function handleTabChange(tab: WorkspaceTab) {
+    if (!selectedProject) {
+      setActiveTab(tab);
+      if (tab !== "dashboards") {
+        setActiveDashboardId(null);
+      }
+      return;
+    }
+    applyWorkspacePath(selectedProject.id, tab);
+  }
+
+  async function handleOpenDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    const cachedDashboard = dashboards.find((dashboard) => dashboard.id === dashboardId);
+    setDashboardLiveValues({});
+    setDashboardRealtimeAt(null);
+    applyWorkspacePath(selectedProject.id, "dashboards", dashboardId);
+    setBanner(null);
+    setBusy(!cachedDashboard);
+    try {
+      const response = await getDashboard(token, selectedProject.id, dashboardId);
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else if (!cachedDashboard) {
+        setBanner(errorBanner(error, "Could not open dashboard"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDashboardSpecChange(next: Pick<DashboardRecord, "title" | "visibility" | "layout" | "widgets"> & Partial<DashboardRecord>) {
+    if (!token || !selectedProject || !activeDashboard) return;
+    try {
+      const response = await updateDashboard(token, selectedProject.id, activeDashboard.id, {
+        ...next,
+        layoutVersion: next.layoutVersion ?? activeDashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({ tone: "success", title: "Dashboard updated", message: `${response.dashboard.title} saved.`, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not save dashboard"));
+      }
+      throw error;
+    }
+  }
+
+  async function handleDashboardLayoutChange(layout: DashboardRecord["layout"], sections?: DashboardRecord["sections"]) {
+    if (!activeDashboard) return;
+    await handleDashboardSpecChange({
+      title: activeDashboard.title,
+      ...(activeDashboard.description ? { description: activeDashboard.description } : {}),
+      visibility: activeDashboard.visibility,
+      layout,
+      widgets: activeDashboard.widgets,
+      ...(sections ? { sections } : activeDashboard.sections ? { sections: activeDashboard.sections } : {})
+    });
+  }
+
+  async function handleDashboardVisibilityChange(visibility: DashboardVisibility) {
+    if (!token || !selectedProject || !activeDashboard) return;
+    try {
+      const response = await updateDashboard(token, selectedProject.id, activeDashboard.id, {
+        title: activeDashboard.title,
+        ...(activeDashboard.description ? { description: activeDashboard.description } : {}),
+        visibility,
+        layoutVersion: activeDashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: activeDashboard.layout,
+        widgets: activeDashboard.widgets,
+        ...(activeDashboard.sections ? { sections: activeDashboard.sections } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({
+        tone: "success",
+        title: visibility === "project" ? "Dashboard shared" : "Dashboard made private",
+        message: `${response.dashboard.title} updated.`,
+        requestId: response.requestId
+      });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not update dashboard visibility"));
+      }
+      throw error;
+    }
+  }
+
+  async function handleRenameDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    const dashboard = dashboards.find((entry) => entry.id === dashboardId);
+    if (!dashboard) return;
+    const title = window.prompt("Dashboard name", dashboard.title)?.trim();
+    if (!title || title === dashboard.title) return;
+    const description = window.prompt("Dashboard description", dashboard.description ?? "")?.trim();
+    try {
+      const response = await updateDashboard(token, selectedProject.id, dashboard.id, {
+        title,
+        ...(description ? { description } : dashboard.description ? { description: dashboard.description } : {}),
+        visibility: dashboard.visibility,
+        layoutVersion: dashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: dashboard.layout,
+        widgets: dashboard.widgets,
+        ...(dashboard.sections ? { sections: dashboard.sections } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({ tone: "success", title: "Dashboard renamed", message: response.dashboard.title, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not rename dashboard"));
+      }
+    }
+  }
+
+  async function handleDuplicateDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    const dashboard = dashboards.find((entry) => entry.id === dashboardId);
+    if (!dashboard) return;
+    try {
+      const response = await createDashboard(token, selectedProject.id, {
+        title: `${dashboard.title} Copy`,
+        ...(dashboard.description ? { description: dashboard.description } : {}),
+        visibility: dashboard.visibility,
+        layoutVersion: dashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: dashboard.layout,
+        widgets: dashboard.widgets,
+        ...(dashboard.sections ? { sections: dashboard.sections } : {}),
+        ...(dashboard.sourceConversationId ? { sourceConversationId: dashboard.sourceConversationId } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      applyWorkspacePath(selectedProject.id, "dashboards", response.dashboard.id);
+      setBanner({ tone: "success", title: "Dashboard duplicated", message: response.dashboard.title, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not duplicate dashboard"));
+      }
+    }
+  }
+
+  async function handleDeleteDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    const dashboard = dashboards.find((entry) => entry.id === dashboardId);
+    if (!dashboard || !window.confirm(`Delete "${dashboard.title}"? This removes the dashboard only, not BMS data.`)) return;
+    try {
+      const response = await deleteDashboard(token, selectedProject.id, dashboard.id);
+      setDashboards((current) => current.filter((entry) => entry.id !== dashboard.id));
+      if (dashboard.id === activeDashboardId) {
+        applyWorkspacePath(selectedProject.id, "dashboards");
+      }
+      setBanner({ tone: "success", title: "Dashboard deleted", message: dashboard.title, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not delete dashboard"));
+      }
+    }
+  }
+
+  async function handleMergeDashboard(sourceDashboardId: string, targetDashboardId?: string) {
+    if (!token || !selectedProject) return;
+    const source = dashboards.find((entry) => entry.id === sourceDashboardId);
+    if (!source) return;
+    const candidates = dashboards.filter((entry) => entry.id !== sourceDashboardId);
+    if (candidates.length === 0) {
+      setBanner({ tone: "warning", title: "No target dashboard", message: "Create another dashboard before merging." });
+      return;
+    }
+    const requested = targetDashboardId ?? window.prompt(
+      `Merge "${source.title}" into dashboard:\n${dashboardChoiceLines(candidates)}\n\nType a dashboard name or number.`,
+      candidates[0]?.title
+    )?.trim();
+    if (!requested) return;
+    const target = targetDashboardId
+      ? candidates.find((entry) => entry.id === targetDashboardId)
+      : findDashboardChoice(candidates, requested);
+    if (!target) {
+      setBanner({ tone: "error", title: "Dashboard not found", message: "Choose an existing target dashboard." });
+      return;
+    }
+    const merged = mergeDashboardIntoTarget(source, target);
+    try {
+      const response = await updateDashboard(token, selectedProject.id, target.id, {
+        title: target.title,
+        ...(target.description ? { description: target.description } : {}),
+        visibility: target.visibility,
+        layoutVersion: target.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: merged.layout,
+        widgets: merged.widgets,
+        sections: merged.sections,
+        ...(target.sourceConversationId ? { sourceConversationId: target.sourceConversationId } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      applyWorkspacePath(selectedProject.id, "dashboards", response.dashboard.id);
+      setBanner({ tone: "success", title: "Dashboard merged", message: `${source.title} copied into ${response.dashboard.title}.`, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not merge dashboards"));
+      }
+    }
+  }
+
+  async function handleCopyWidgetToDashboard(widgetId: string, targetDashboardId: string) {
+    if (!token || !selectedProject || !activeDashboard) return;
+    const sourceWidget = activeDashboard.widgets.find((widget) => widget.id === widgetId);
+    const target = dashboards.find((dashboard) => dashboard.id === targetDashboardId);
+    if (!sourceWidget || !target) return;
+    const sourceSection = sectionsForDashboardSpec(activeDashboard).find((section) => section.widgetIds.includes(widgetId));
+    const sourceLayout = activeDashboard.layout.find((item) => item.widgetId === widgetId) ?? defaultLayoutForDashboardWidget(sourceWidget, 0);
+    const miniSource: DashboardRecord = {
+      ...activeDashboard,
+      layoutVersion: activeDashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+      widgets: [sourceWidget],
+      layout: [sourceLayout],
+      sections: [{ ...(sourceSection ?? { ...dashboardWidgetSectionInfo(sourceWidget), widgetIds: [widgetId] }), widgetIds: [widgetId] }]
+    };
+    const merged = mergeDashboardIntoTarget(miniSource, target);
+    try {
+      const response = await updateDashboard(token, selectedProject.id, target.id, {
+        title: target.title,
+        ...(target.description ? { description: target.description } : {}),
+        visibility: target.visibility,
+        layoutVersion: target.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: merged.layout,
+        widgets: merged.widgets,
+        sections: merged.sections,
+        ...(target.sourceConversationId ? { sourceConversationId: target.sourceConversationId } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({ tone: "success", title: "Widget copied", message: `${sourceWidget.title} copied to ${response.dashboard.title}.`, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not copy widget"));
+      }
     }
   }
 
@@ -2969,6 +3923,7 @@ export default function App() {
   async function handleNewChat() {
     if (!token || !selectedProject) {
       setActiveTab("chat");
+      setActiveDashboardId(null);
       setMessages([]);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
@@ -2979,7 +3934,7 @@ export default function App() {
     setMessages([]);
     setChatProviderDiagnostics(null);
     setChatProviderRequestId(undefined);
-    setActiveTab("chat");
+    applyWorkspacePath(selectedProject.id, "chat");
     setBanner({
       tone: "info",
       title: "New chat ready",
@@ -2991,7 +3946,6 @@ export default function App() {
     if (!token || !selectedProject) return;
     if (convId === activeConversationId) {
       setPendingNewChat(false);
-      setActiveTab("chat");
       applyWorkspacePath(selectedProject.id, "chat");
       return;
     }
@@ -3075,6 +4029,10 @@ export default function App() {
         setPendingNewChat(false);
         setKnowledgeBaseDocuments([]);
         setRepositoryItems([]);
+        setDashboards([]);
+        setActiveDashboardId(null);
+        setDashboardLiveValues({});
+        setDashboardRealtimeAt(null);
         setKbTotalCount(0);
         setRepoTotalCount(0);
         setChatProviderDiagnostics(null);
@@ -3100,6 +4058,7 @@ export default function App() {
   async function handleResetChat() {
     if (!token || !selectedProject) {
       setActiveTab("chat");
+      setActiveDashboardId(null);
       setMessages([]);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
@@ -3118,7 +4077,7 @@ export default function App() {
       }
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
-      setActiveTab("chat");
+      applyWorkspacePath(selectedProject.id, "chat");
       // Update the conversation message count
       setConversations((current) =>
         current.map((c) =>
@@ -3174,6 +4133,10 @@ export default function App() {
           activeConversationId={activeConversationId}
           kbDocuments={knowledgeBaseDocuments}
           repoItems={repositoryItems}
+          dashboards={dashboards}
+          activeDashboard={activeDashboard}
+          dashboardLiveValues={dashboardLiveValues}
+          dashboardRealtimeStale={dashboardRealtimeStale}
           kbTotalCount={kbTotalCount}
           repoTotalCount={repoTotalCount}
           providerDiagnostics={chatProviderDiagnostics}
@@ -3181,7 +4144,7 @@ export default function App() {
           registry={registry}
           management={management}
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={handleTabChange}
           onSend={handleSend}
           onNewChat={handleNewChat}
           onResetChat={handleResetChat}
@@ -3190,11 +4153,16 @@ export default function App() {
             setMessages([]);
             setConversations([]);
             setActiveConversationId(null);
+            setDashboards([]);
+            setActiveDashboardId(null);
+            setDashboardLiveValues({});
+            setDashboardRealtimeAt(null);
             storeSession({ token, user, projectId: null });
             window.history.pushState({}, "", "/");
           }}
           onSelectProject={(project) => { void handleProjectSelect(project); }}
           onSelectConversation={(convId) => { void handleSelectConversation(convId); }}
+          onOpenDashboard={(dashboardId) => { void handleOpenDashboard(dashboardId); }}
           onCreateProject={(name) => { void handleCreateProject(name); }}
           onSignOut={() => clearAuth()}
           projectConversationCounts={projectConversationCounts}
@@ -3203,6 +4171,14 @@ export default function App() {
           onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }}
           onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }}
           onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }}
+          onDashboardSpecChange={handleDashboardSpecChange}
+          onDashboardLayoutChange={handleDashboardLayoutChange}
+          onDashboardVisibilityChange={handleDashboardVisibilityChange}
+          onRenameDashboard={handleRenameDashboard}
+          onDuplicateDashboard={handleDuplicateDashboard}
+          onDeleteDashboard={handleDeleteDashboard}
+          onMergeDashboard={handleMergeDashboard}
+          onCopyWidgetToDashboard={handleCopyWidgetToDashboard}
           onStop={handleStop}
           streamingActivity={visibleStreamingActivity}
           streamOutputStarted={streamShowsWorkedFor(visibleStreamState)}

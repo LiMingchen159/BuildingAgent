@@ -26,6 +26,41 @@ export interface BmsCollectorPointsResponse {
   items: BmsCollectorPoint[];
 }
 
+export interface BmsCollectorTimeseriesRow {
+  point_id?: number;
+  name?: string;
+  object_ref?: string;
+  ts: string;
+  value?: string;
+  value_num?: number | null;
+  value_text?: string | null;
+}
+
+export interface BmsCollectorTimeseriesResponse {
+  total: number;
+  items: BmsCollectorTimeseriesRow[];
+}
+
+export interface BmsDashboardHistoryBatchQuery {
+  key: string;
+  name?: string;
+  point_id?: string;
+  object_ref?: string;
+  from: string;
+  to?: string;
+  range?: string;
+  limit?: string;
+  order?: "asc" | "desc";
+}
+
+export interface BmsDashboardHistoryBatchResult {
+  key: string;
+  ok: boolean;
+  total: number;
+  items: BmsCollectorTimeseriesRow[];
+  error?: string;
+}
+
 function collectorUrl(prefix: string, path: string): string {
   const normalized = path.startsWith("/") ? path : `/${path}`;
   return `${prefix}${normalized}`;
@@ -90,10 +125,11 @@ export async function getBmsCollectorHealth(token: string): Promise<{ status: st
 export async function queryBmsCollectorPoints(
   token: string,
   query: string,
-  limit = 50
+  limit = 50,
+  init: RequestInit = {}
 ): Promise<BmsCollectorPointsResponse> {
   const params = new URLSearchParams({ q: query, limit: String(limit) });
-  const payload = await fetchBmsCollector(token, `/api/v1/points?${params.toString()}`);
+  const payload = await fetchBmsCollector(token, `/api/v1/points?${params.toString()}`, init);
   if (!payload || typeof payload !== "object" || !Array.isArray((payload as BmsCollectorPointsResponse).items)) {
     throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS points response." }, 200);
   }
@@ -102,8 +138,58 @@ export async function queryBmsCollectorPoints(
 
 export async function getBmsCollectorLastValue(
   token: string,
-  pointName: string
+  pointName: string,
+  init: RequestInit = {}
 ): Promise<BmsCollectorPoint | null> {
-  const { items } = await queryBmsCollectorPoints(token, pointName, 1);
+  const { items } = await queryBmsCollectorPoints(token, pointName, 1, init);
   return items.find((item) => item.name === pointName) ?? items[0] ?? null;
+}
+
+export async function queryBmsCollectorTimeseries(
+  token: string,
+  params: Record<string, string>
+): Promise<BmsCollectorTimeseriesResponse> {
+  const payload = await fetchBmsCollector(token, `/api/v1/timeseries?${new URLSearchParams(params).toString()}`);
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as BmsCollectorTimeseriesResponse).items)) {
+    throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS timeseries response." }, 200);
+  }
+  return payload as BmsCollectorTimeseriesResponse;
+}
+
+export async function queryBmsCollectorReadings(
+  token: string,
+  params: Record<string, string>
+): Promise<BmsCollectorTimeseriesResponse> {
+  const payload = await fetchBmsCollector(token, `/api/v1/readings?${new URLSearchParams(params).toString()}`);
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as BmsCollectorTimeseriesResponse).items)) {
+    throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS readings response." }, 200);
+  }
+  return payload as BmsCollectorTimeseriesResponse;
+}
+
+export async function queryBmsDashboardHistoryBatch(
+  token: string,
+  queries: BmsDashboardHistoryBatchQuery[],
+  init: RequestInit = {}
+): Promise<{ results: BmsDashboardHistoryBatchResult[]; requestId: string }> {
+  const headers = new Headers(authHeaders(token));
+  headers.set("content-type", "application/json");
+  const response = await fetch("/api/bms/dashboard/history-batch", {
+    ...init,
+    method: "POST",
+    headers,
+    body: JSON.stringify({ queries })
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error?: { message?: string } }).error?.message ?? "BMS dashboard history batch failed.")
+        : "BMS dashboard history batch failed.";
+    throw new ApiClientError({ code: "bms_collector_error", message: detail }, response.status);
+  }
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { results?: unknown[] }).results) || typeof (payload as { requestId?: unknown }).requestId !== "string") {
+    throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS dashboard history batch response." }, 200);
+  }
+  return payload as { results: BmsDashboardHistoryBatchResult[]; requestId: string };
 }

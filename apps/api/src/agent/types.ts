@@ -1,5 +1,6 @@
 import type { ChatCompletionResult, ChatProvider, ChatToolCall, ProviderChatMessage } from "../providers.js";
 import type { ChatMessage, ChatMessageDownload, ChatMessageImage, KnowledgeBaseDocument, RepositoryArtifact } from "../seed.js";
+import type { DashboardMutationInput, DashboardRecord } from "../dashboards.js";
 
 export type AgentLifecycleEventType =
   | "user_message_received"
@@ -84,6 +85,9 @@ export interface AgentToolContext {
   messages: ChatMessage[];
   /** OpenAI tool_call id — used for compaction cache filenames. */
   toolCallId?: string;
+  dashboardOps?: {
+    create: (input: DashboardMutationInput) => DashboardRecord;
+  };
 }
 
 export interface AgentTool {

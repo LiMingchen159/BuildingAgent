@@ -24,16 +24,16 @@ beforeEach(() => {
 });
 
 describe("BuildingGPT no-blank HTML shell", () => {
- it("ships non-empty tracked #root fallback markup with brand, skeleton loading copy, and mock-only safety language", () => {
+ it("ships non-empty tracked #root fallback markup with brand and calm loading copy", () => {
  const root = getRootFromIndexHtml();
 
  expect(root.innerHTML.trim()).not.toHaveLength(0);
  expect(root.querySelector("[data-static-fallback]")).toBeTruthy();
- expect(root.textContent).toMatch(/BuildingGPT/i);
- expect(root.textContent).toMatch(/loading|preparing/i);
- expect(root.querySelector(".html-fallback-skeleton")).toBeTruthy();
- expect(root.textContent).toMatch(/safe startup|preparing/i);
- expect(root.querySelector("[data-static-fallback]")?.textContent).toMatch(/safe startup mode/i);
+ expect(root.querySelector("[data-static-fallback]")?.getAttribute("aria-label")).toMatch(/BuildingGPT/i);
+ expect(root.textContent?.trim()).toBe("");
+ expect(root.querySelector(".startup-fallback-shell")).toBeTruthy();
+ expect(root.querySelectorAll(".startup-fallback-burst span")).toHaveLength(12);
+ expect(root.querySelector("[data-static-fallback]")?.textContent).not.toMatch(/safe startup|loading state/i);
  });
 
  it("mountBuildingGPT removes the static fallback before normal React rendering", async () => {
@@ -47,8 +47,8 @@ describe("BuildingGPT no-blank HTML shell", () => {
  mountBuildingGPT(root);
 
  expect(root.querySelector("[data-static-fallback]")).toBeNull();
- expect(await screen.findByRole("heading", { name: /sign in to buildinggpt/i })).toBeInTheDocument();
- await waitFor(() => expect(screen.queryByText(/safe startup mode/i)).not.toBeInTheDocument());
+ expect(await screen.findByRole("heading", { name: /sign in to buildingagent/i })).toBeInTheDocument();
+ await waitFor(() => expect(screen.queryByText(/Preparing workspace/i)).not.toBeInTheDocument());
  });
 });
 
