@@ -299,4 +299,100 @@ describe("derived metric agent tools", () => {
       }
     });
   });
+
+  it("previews Delta T calculations without persistence before approval", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const returnMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "return_temp",
+      entityId: "WCC_11",
+      formula: "source return temperature",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-11_CHWRT" }]
+    });
+    const supplyMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "supply_temp",
+      entityId: "WCC_11",
+      formula: "source supply temperature",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-11_CHWST" }]
+    });
+    metrics.recordSample({ instanceId: returnMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 13.25 });
+    metrics.recordSample({ instanceId: supplyMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 7 });
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const preview = registry.list().find((tool) => tool.name === "derived_metric_preview");
+    const calculate = registry.list().find((tool) => tool.name === "derived_metric_calculate");
+    expect(preview).toBeDefined();
+    expect(calculate).toBeDefined();
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_preview_delta_t",
+      conversationId: "conv_preview_delta_t",
+      canConfigure: true,
+      messages: []
+    };
+
+    const previewResult = await preview!.run({
+      metricKey: "delta_t",
+      entityId: "WCC_11",
+      displayName: "WCC-11 Delta T",
+      unit: "degC",
+      formulaKind: "difference",
+      minuendRole: "return_temp",
+      subtrahendRole: "supply_temp",
+      from: "2026-06-26T00:00:00.000Z",
+      to: "2026-06-26T01:00:00.000Z",
+      dependencies: [
+        { role: "return_temp", sourceType: "metric", sourceId: returnMetric.instance.instanceId },
+        { role: "supply_temp", sourceType: "metric", sourceId: supplyMetric.instance.instanceId }
+      ]
+    }, context);
+
+    expect(previewResult).toMatchObject({
+      preview: true,
+      persisted: false,
+      calculated: true,
+      sampleCount: 1,
+      latestPreview: { value: 6.25 },
+      persistCandidate: {
+        tool: "derived_metric_calculate",
+        args: {
+          metricKey: "delta_t",
+          entityId: "WCC_11",
+          formulaKind: "difference"
+        }
+      }
+    });
+    expect(metrics.lookup({ projectId: "project_element", metricKey: "delta_t", entityId: "WCC_11" })).toHaveLength(0);
+    expect(memory.readBank("project_element", "user_buildinggpt", "project").entries).toHaveLength(0);
+
+    const persistArgs = (previewResult as { persistCandidate?: { args?: Record<string, unknown> } }).persistCandidate?.args;
+    expect(persistArgs).toBeDefined();
+    const saved = await calculate!.run(persistArgs!, context);
+    const found = metrics.lookup({ projectId: "project_element", metricKey: "delta_t", entityId: "WCC_11" });
+
+    expect(saved).toMatchObject({
+      created: true,
+      calculated: true,
+      latest: { valueNum: 6.25 }
+    });
+    expect(found).toHaveLength(1);
+    expect(metrics.readHistory(found[0]!.instanceId).map((sample) => sample.valueNum)).toEqual([6.25]);
+    expect(memory.readBank("project_element", "user_buildinggpt", "project").entries
+      .filter((entry) => entry.includes("WCC_11/delta_t"))).toHaveLength(1);
+  });
 });

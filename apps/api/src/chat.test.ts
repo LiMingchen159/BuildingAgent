@@ -972,6 +972,237 @@ describe("project-scoped chat contract", () => {
       .filter((entry) => entry.includes("WCC_09/system_cop"))).toHaveLength(1);
   });
 
+  it("previews Delta T through chat before saving it as a reusable metric", async () => {
+    const buildinggptToken = "seed-token-buildinggpt";
+    const env = isolatedDataEnv();
+    const store = createSeedStore();
+    const seedMetrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    const returnMetric = seedMetrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "return_temp",
+      entityId: "WCC_12",
+      formula: "source return temperature",
+      dependencies: [{ role: "source", sourceType: "raw_point", sourceId: "WCC-L1-12_CHWRT" }]
+    });
+    const supplyMetric = seedMetrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "supply_temp",
+      entityId: "WCC_12",
+      formula: "source supply temperature",
+      dependencies: [{ role: "source", sourceType: "raw_point", sourceId: "WCC-L1-12_CHWST" }]
+    });
+    seedMetrics.recordSample({ instanceId: returnMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 12.75 });
+    seedMetrics.recordSample({ instanceId: supplyMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 7.5 });
+
+    type ProviderMessages = Parameters<ChatProvider["complete"]>[0]["messages"];
+    const parseToolResult = (index: number, messages: ProviderMessages): Record<string, unknown> => {
+      const message = messages[index];
+      return JSON.parse(typeof message?.content === "string" ? message.content : "{}") as Record<string, unknown>;
+    };
+    let persistCandidateArgs: Record<string, unknown> | null = null;
+    let persistedInstanceId = "";
+    const provider: ChatProvider = {
+      metadata: { id: "derived-preview-real", mode: "real", model: "dashboard-model", status: "configured" },
+      async complete(request) {
+        const firstMessage = request.messages[0]?.content;
+        if (typeof firstMessage === "string" && firstMessage.includes("Summarize this chat")) {
+          return {
+            text: "Delta T preview",
+            provider: provider.metadata,
+            fallbackUsed: false
+          };
+        }
+
+        const requestMessages = request.messages;
+        const toolMessages = requestMessages.filter((message) => message.role === "tool");
+        const lastUserText = String(requestMessages.filter((message) => message.role === "user").at(-1)?.content ?? "");
+        const reuseRequest = /再次|already|reuse|已经保存|保存的/i.test(lastUserText);
+        const saveRequest = !reuseRequest && /保存这个|请保存|同意保存|save this/i.test(lastUserText);
+
+        if (toolMessages.length === 0) {
+          if (saveRequest) {
+            expect(persistCandidateArgs).toBeTruthy();
+            return {
+              text: "",
+              provider: provider.metadata,
+              fallbackUsed: false,
+              toolCalls: [{
+                id: "call_delta_save",
+                type: "function",
+                function: { name: "derived_metric_calculate", arguments: JSON.stringify(persistCandidateArgs) }
+              }]
+            };
+          }
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: reuseRequest ? "call_delta_reuse_lookup" : "call_delta_lookup",
+              type: "function",
+              function: {
+                name: "derived_metric_lookup",
+                arguments: JSON.stringify({ metricKey: "delta_t", entityId: "WCC_12", limit: 1 })
+              }
+            }]
+          };
+        }
+
+        if (saveRequest) {
+          const saveResult = parseToolResult(0, toolMessages);
+          const instance = saveResult.instance as { instanceId?: string } | undefined;
+          persistedInstanceId = instance?.instanceId ?? "";
+          expect(saveResult).toMatchObject({
+            created: true,
+            calculated: true,
+            latest: { valueNum: 5.25 }
+          });
+          return {
+            text: "Delta T has been saved as a reusable derived metric.",
+            provider: provider.metadata,
+            fallbackUsed: false
+          };
+        }
+
+        if (reuseRequest) {
+          if (toolMessages.length === 1) {
+            const lookupResult = parseToolResult(0, toolMessages);
+            expect(lookupResult).toMatchObject({ total: 1 });
+            return {
+              text: "",
+              provider: provider.metadata,
+              fallbackUsed: false,
+              toolCalls: [{
+                id: "call_delta_reuse_read",
+                type: "function",
+                function: {
+                  name: "derived_metric_read",
+                  arguments: JSON.stringify({ metricKey: "delta_t", entityId: "WCC_12", mode: "latest" })
+                }
+              }]
+            };
+          }
+          const readResult = parseToolResult(1, toolMessages);
+          const instance = readResult.instance as { instanceId?: string } | undefined;
+          expect(instance?.instanceId).toBe(persistedInstanceId);
+          expect(readResult).toMatchObject({ latest: { valueNum: 5.25 } });
+          return {
+            text: "I reused the saved Delta T metric.",
+            provider: provider.metadata,
+            fallbackUsed: false
+          };
+        }
+
+        if (toolMessages.length === 1) {
+          const lookupResult = parseToolResult(0, toolMessages);
+          expect(lookupResult).toMatchObject({ total: 0 });
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_delta_preview",
+              type: "function",
+              function: {
+                name: "derived_metric_preview",
+                arguments: JSON.stringify({
+                  metricKey: "delta_t",
+                  entityId: "WCC_12",
+                  displayName: "WCC-12 Delta T",
+                  unit: "degC",
+                  formulaKind: "difference",
+                  minuendRole: "return_temp",
+                  subtrahendRole: "supply_temp",
+                  from: "2026-06-26T00:00:00.000Z",
+                  to: "2026-06-26T01:00:00.000Z",
+                  dependencies: [
+                    { role: "return_temp", sourceType: "metric", sourceId: returnMetric.instance.instanceId },
+                    { role: "supply_temp", sourceType: "metric", sourceId: supplyMetric.instance.instanceId }
+                  ]
+                })
+              }
+            }]
+          };
+        }
+
+        const previewResult = parseToolResult(1, toolMessages);
+        persistCandidateArgs = (previewResult.persistCandidate as { args?: Record<string, unknown> } | undefined)?.args ?? null;
+        expect(previewResult).toMatchObject({
+          preview: true,
+          persisted: false,
+          calculated: true,
+          latestPreview: { value: 5.25 }
+        });
+        return {
+          text: "Preview Delta T is 5.25 degC. Should I save it as a reusable metric?",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider, env });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(buildinggptToken) });
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/chat",
+      headers: bearer(buildinggptToken),
+      payload: { message: "请先算一下 WCC-12 的供回水温差 Delta T，暂时不要保存" }
+    });
+
+    expect(preview.statusCode).toBe(201);
+    const previewTools = preview.json().lifecycle
+      .filter((event: { type?: string; metadata?: { tool?: string } }) => event.type === "tool_started" && event.metadata?.tool)
+      .map((event: { metadata: { tool: string } }) => event.metadata.tool);
+    expect(previewTools).toEqual(expect.arrayContaining(["derived_metric_lookup", "derived_metric_preview"]));
+    expect(previewTools).not.toContain("derived_metric_calculate");
+    let metrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    expect(metrics.lookup({ projectId: "project_element", metricKey: "delta_t", entityId: "WCC_12" })).toHaveLength(0);
+    expect(new AgentMemoryStore(env.BUILDING_AGENT_DATA_DIR).readBank("project_element", "user_buildinggpt", "project").entries
+      .filter((entry) => entry.includes("WCC_12/delta_t"))).toHaveLength(0);
+
+    const save = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/chat",
+      headers: bearer(buildinggptToken),
+      payload: {
+        conversationId: preview.json().conversationId,
+        message: "保存这个 Delta T，后面直接复用"
+      }
+    });
+
+    expect(save.statusCode).toBe(201);
+    const saveTools = save.json().lifecycle
+      .filter((event: { type?: string; metadata?: { tool?: string } }) => event.type === "tool_started" && event.metadata?.tool)
+      .map((event: { metadata: { tool: string } }) => event.metadata.tool);
+    expect(saveTools).toEqual(expect.arrayContaining(["derived_metric_calculate"]));
+    metrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    const savedMetrics = metrics.lookup({ projectId: "project_element", metricKey: "delta_t", entityId: "WCC_12" });
+    expect(savedMetrics).toHaveLength(1);
+    expect(metrics.readLatest(savedMetrics[0]!.instanceId)).toMatchObject({ valueNum: 5.25 });
+    expect(new AgentMemoryStore(env.BUILDING_AGENT_DATA_DIR).readBank("project_element", "user_buildinggpt", "project").entries
+      .filter((entry) => entry.includes("WCC_12/delta_t"))).toHaveLength(1);
+
+    const reuse = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/chat",
+      headers: bearer(buildinggptToken),
+      payload: {
+        conversationId: preview.json().conversationId,
+        message: "再次查询这个已经保存的 Delta T"
+      }
+    });
+
+    expect(reuse.statusCode).toBe(201);
+    const reuseTools = reuse.json().lifecycle
+      .filter((event: { type?: string; metadata?: { tool?: string } }) => event.type === "tool_started" && event.metadata?.tool)
+      .map((event: { metadata: { tool: string } }) => event.metadata.tool);
+    expect(reuseTools).toEqual(expect.arrayContaining(["derived_metric_lookup", "derived_metric_read"]));
+    expect(reuseTools).not.toContain("derived_metric_preview");
+    expect(reuseTools).not.toContain("derived_metric_calculate");
+    expect(metrics.readHistory(savedMetrics[0]!.instanceId).map((sample) => sample.valueNum)).toEqual([5.25]);
+  });
+
   it("places conditional dashboard notes in a Notes section without requiring layout input", async () => {
     const store = createSeedStore();
     const provider: ChatProvider = {
