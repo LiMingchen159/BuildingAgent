@@ -129,4 +129,174 @@ describe("derived metric agent tools", () => {
     expect(projectMemory.filter((entry) => entry.includes("WCC_03/system_cop"))).toHaveLength(1);
     expect(projectMemory[0]).toContain("Use derived_metric_read before recalculating");
   });
+
+  it("calculates ratio metrics once, persists samples, and reuses existing latest values", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const loadMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "cooling_load_kw",
+      entityId: "WCC_09",
+      formula: "source cooling load",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-09_Q" }]
+    });
+    const powerMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "power_kw",
+      entityId: "WCC_09",
+      formula: "source power",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-09_P" }]
+    });
+    for (const [ts, load, power] of [
+      ["2026-06-26T00:00:00.000Z", 100, 25],
+      ["2026-06-26T00:15:00.000Z", 120, 30]
+    ] as const) {
+      metrics.recordSample({ instanceId: loadMetric.instance.instanceId, ts, valueNum: load });
+      metrics.recordSample({ instanceId: powerMetric.instance.instanceId, ts, valueNum: power });
+    }
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const calculate = registry.list().find((tool) => tool.name === "derived_metric_calculate");
+    expect(calculate).toBeDefined();
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_calc_cop",
+      conversationId: "conv_calc_cop",
+      canConfigure: true,
+      messages: []
+    };
+
+    const first = await calculate!.run({
+      metricKey: "system_cop",
+      entityId: "WCC_09",
+      displayName: "WCC-09 System COP",
+      formulaKind: "ratio",
+      numeratorRole: "cooling_load_kw",
+      denominatorRole: "power_kw",
+      from: "2026-06-26T00:00:00.000Z",
+      to: "2026-06-26T01:00:00.000Z",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "metric", sourceId: loadMetric.instance.instanceId },
+        { role: "power_kw", sourceType: "metric", sourceId: powerMetric.instance.instanceId }
+      ]
+    }, context);
+
+    expect(first).toMatchObject({
+      created: true,
+      calculated: true,
+      reused: false,
+      sampleCount: 2,
+      latest: { valueNum: 4 },
+      dashboardBinding: {
+        source: "derived_metric",
+        metricKey: "system_cop",
+        entityId: "WCC_09",
+        label: "WCC-09 System COP"
+      }
+    });
+
+    const second = await calculate!.run({
+      metricKey: "system_cop",
+      entityId: "WCC_09",
+      formulaKind: "ratio",
+      from: "2026-06-26T00:00:00.000Z"
+    }, context);
+    const found = metrics.lookup({ projectId: "project_element", metricKey: "system_cop", entityId: "WCC_09" });
+    const history = metrics.readHistory(found[0]!.instanceId, { order: "asc" });
+    const projectMemory = memory.readBank("project_element", "user_buildinggpt", "project").entries;
+
+    expect(second).toMatchObject({
+      reused: true,
+      calculated: false,
+      created: false,
+      latest: { valueNum: 4 }
+    });
+    expect(found).toHaveLength(1);
+    expect(history.map((sample) => sample.valueNum)).toEqual([4, 4]);
+    expect(projectMemory.filter((entry) => entry.includes("WCC_09/system_cop"))).toHaveLength(1);
+  });
+
+  it("calculates Delta T style difference metrics", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const returnMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "return_temp",
+      entityId: "WCC_10",
+      formula: "source return temperature",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-10_CHWRT" }]
+    });
+    const supplyMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "supply_temp",
+      entityId: "WCC_10",
+      formula: "source supply temperature",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-10_CHWST" }]
+    });
+    metrics.recordSample({ instanceId: returnMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 12.5 });
+    metrics.recordSample({ instanceId: supplyMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 7.25 });
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const calculate = registry.list().find((tool) => tool.name === "derived_metric_calculate");
+    const result = await calculate!.run({
+      metricKey: "delta_t",
+      entityId: "WCC_10",
+      displayName: "WCC-10 Delta T",
+      unit: "degC",
+      formulaKind: "difference",
+      minuendRole: "return_temp",
+      subtrahendRole: "supply_temp",
+      from: "2026-06-26T00:00:00.000Z",
+      to: "2026-06-26T01:00:00.000Z",
+      dependencies: [
+        { role: "return_temp", sourceType: "metric", sourceId: returnMetric.instance.instanceId },
+        { role: "supply_temp", sourceType: "metric", sourceId: supplyMetric.instance.instanceId }
+      ]
+    }, {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_calc_delta_t",
+      conversationId: "conv_calc_delta_t",
+      canConfigure: true,
+      messages: []
+    });
+
+    expect(result).toMatchObject({
+      created: true,
+      calculated: true,
+      sampleCount: 1,
+      latest: { valueNum: 5.25 },
+      dashboardBinding: {
+        source: "derived_metric",
+        metricKey: "delta_t",
+        entityId: "WCC_10",
+        unit: "degC"
+      }
+    });
+  });
 });
