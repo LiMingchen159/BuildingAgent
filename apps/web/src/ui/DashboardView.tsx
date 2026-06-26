@@ -263,6 +263,13 @@ function normalizeRange(value: string | undefined): RangeKey {
   return "24h";
 }
 
+function historyRangeForWidget(widget: DashboardWidget, selectedRange?: RangeKey): RangeKey {
+  if (widget.kind === "timeseries_chart") {
+    return selectedRange ?? normalizeRange(widget.defaultTimeRange);
+  }
+  return "24h";
+}
+
 function hoursForRange(range: RangeKey): number {
   return RANGE_OPTIONS.find((entry) => entry.key === range)?.hours ?? 24;
 }
@@ -307,7 +314,7 @@ function chartTimeSplits(range: RangeKey, plotWidth: number): UPlot.Axis.Splits 
 
 function widgetSubtitle(widget: DashboardWidget, range?: RangeKey): string {
   if (widget.kind === "timeseries_chart") return `${range ?? normalizeRange(widget.defaultTimeRange)} history / HKT`;
-  if (widget.kind === "stat_value") return "Latest value";
+  if (widget.kind === "stat_value") return "Latest value / 24h stats";
   if (widget.kind === "bar_comparison") return "Latest comparison";
   if (widget.kind === "note") return "Board note";
   return "Live values";
@@ -1128,15 +1135,15 @@ function TimeSeriesWidget({
   );
 }
 
-function StatValueWidget({ values }: { values: WidgetValue[] }) {
+function StatValueWidget({ values, historySeries = [] }: { values: WidgetValue[]; historySeries?: ChartSeries[] }) {
   const primary = values[0];
-  const numeric = primary?.numeric ?? null;
   const updatedAt = primary?.point?.last_polled_at;
   const secondary = values.slice(1, 5);
-  const validValues = values.map((entry) => entry.numeric).filter((entry): entry is number => entry !== null);
-  const min = validValues.length > 0 ? Math.min(...validValues) : null;
-  const max = validValues.length > 0 ? Math.max(...validValues) : null;
-  const spread = min !== null && max !== null ? max - min : null;
+  const primaryHistory = historySeries[0];
+  const historyStats = primaryHistory ? seriesStats(primaryHistory) : null;
+  const min = historyStats?.min ?? null;
+  const max = historyStats?.max ?? null;
+  const avg = historyStats?.avg ?? null;
 
   return (
     <div className="dashboard-stat-widget">
@@ -1147,16 +1154,16 @@ function StatValueWidget({ values }: { values: WidgetValue[] }) {
       </div>
       <div className="dashboard-stat-strip">
         <span>
-          <small>Min</small>
+          <small>24h Min</small>
           <strong>{formatNumber(min, primary?.unit)}</strong>
         </span>
         <span>
-          <small>Max</small>
+          <small>24h Max</small>
           <strong>{formatNumber(max, primary?.unit)}</strong>
         </span>
         <span>
-          <small>Spread</small>
-          <strong>{formatNumber(spread, primary?.unit)}</strong>
+          <small>24h Avg</small>
+          <strong>{formatNumber(avg, primary?.unit)}</strong>
         </span>
       </div>
       {secondary.length > 0 ? (
@@ -1169,9 +1176,6 @@ function StatValueWidget({ values }: { values: WidgetValue[] }) {
           ))}
         </div>
       ) : null}
-      <div className="dashboard-stat-meter" aria-hidden="true">
-        <span style={{ width: `${numeric === null ? 0 : Math.max(8, Math.min(100, Math.abs(numeric) % 100))}%` }} />
-      </div>
     </div>
   );
 }
@@ -1642,6 +1646,27 @@ function DashboardNoteSectionPickerTray({
   );
 }
 
+function DashboardFloatingTray({
+  children,
+  onDismiss
+}: {
+  children: React.ReactNode;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="dashboard-floating-tray-backdrop" onClick={onDismiss} role="presentation">
+      <div
+        className="dashboard-floating-tray-shell"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function DashboardView({
   token,
   dashboard,
@@ -1699,8 +1724,8 @@ export function DashboardView({
   const canEditCanonicalLayout = layoutEditing && !usingCompactGrid;
   const activeGridLayoutBySection = usingCompactGrid ? compactGridLayoutBySection : gridLayoutBySection;
   const widgetsById = useMemo(() => new Map(dashboard.widgets.map((widget) => [widget.id, widget])), [dashboard.widgets]);
-  const chartWidgets = useMemo(
-    () => dashboard.widgets.filter((widget) => widget.kind === "timeseries_chart"),
+  const historyWidgets = useMemo(
+    () => dashboard.widgets.filter((widget) => widget.kind === "timeseries_chart" || widget.kind === "stat_value"),
     [dashboard.widgets]
   );
   const sectionViewModels = useMemo(
@@ -1737,12 +1762,12 @@ export function DashboardView({
   const dashboardWidgetStructureSignature = widgetStructureSignature(dashboard.widgets);
   const dashboardSectionSignature = sectionSignature(sectionsForDashboard(dashboard));
   const dashboardSaveSignature = `${dashboardLayoutSignature}::${dashboardSectionSignature}`;
-  const chartWidgetIdsSignature = chartWidgetIdSignature(chartWidgets);
-  const chartQuerySignature = chartQuerySignatureForWidgets(chartWidgets);
-  const chartRangesSignature = chartWidgets
-    .map((widget) => `${widget.id}:${rangeByWidget[widget.id] ?? normalizeRange(widget.defaultTimeRange)}`)
+  const chartWidgetIdsSignature = chartWidgetIdSignature(historyWidgets);
+  const chartQuerySignature = chartQuerySignatureForWidgets(historyWidgets);
+  const chartRangesSignature = historyWidgets
+    .map((widget) => `${widget.id}:${historyRangeForWidget(widget, rangeByWidget[widget.id])}`)
     .join("|");
-  const chartRefreshSignature = chartWidgets.map((widget) => `${widget.id}:${refreshByWidget[widget.id] ?? 0}`).join("|");
+  const chartRefreshSignature = historyWidgets.map((widget) => `${widget.id}:${refreshByWidget[widget.id] ?? 0}`).join("|");
   const fallbackPointNamesSignature = chartPointNamesSignature(dashboard.widgets);
 
   useEffect(() => {
@@ -1798,13 +1823,13 @@ export function DashboardView({
   }, [dashboard.id, dashboardLayoutSignature, dashboardWidgetStructureSignature, dashboardSectionSignature]);
 
   useEffect(() => {
-    const chartWidgetIds = new Set(chartWidgets.map((widget) => widget.id));
+    const chartWidgetIds = new Set(historyWidgets.map((widget) => widget.id));
 
     setChartSeriesByWidget((current) => {
       const next = Object.fromEntries(Object.entries(current).filter(([widgetId]) => chartWidgetIds.has(widgetId)));
-      for (const widget of chartWidgets) {
+      for (const widget of historyWidgets) {
         if (!next[widget.id]) {
-          const range = rangeByWidget[widget.id] ?? normalizeRange(widget.defaultTimeRange);
+          const range = historyRangeForWidget(widget, rangeByWidget[widget.id]);
           const refreshNonce = refreshByWidget[widget.id] ?? 0;
           next[widget.id] = seriesWithWidgetMetadata(widget, cachedChartSeries(chartHistoryKey(widget, range, refreshNonce)) ?? []);
         }
@@ -1813,14 +1838,14 @@ export function DashboardView({
     });
     setLoadingWidgets((current) => Object.fromEntries(Object.entries(current).filter(([widgetId]) => chartWidgetIds.has(widgetId))));
     chartHistoryKeysRef.current = Object.fromEntries(Object.entries(chartHistoryKeysRef.current).filter(([widgetId]) => chartWidgetIds.has(widgetId)));
-  }, [chartWidgetIdsSignature]);
+  }, [chartWidgetIdsSignature, historyWidgets, rangeByWidget, refreshByWidget]);
 
   useEffect(() => {
     let cancelled = false;
     const abortController = new AbortController();
 
-    const requestedJobs = chartWidgets.map((widget) => {
-      const range = rangeByWidget[widget.id] ?? normalizeRange(widget.defaultTimeRange);
+    const requestedJobs = historyWidgets.map((widget) => {
+      const range = historyRangeForWidget(widget, rangeByWidget[widget.id]);
       const refreshNonce = refreshByWidget[widget.id] ?? 0;
       return { widget, range, key: chartHistoryKey(widget, range, refreshNonce) };
     }).filter((job) => chartHistoryKeysRef.current[job.widget.id] !== job.key);
@@ -1950,7 +1975,7 @@ export function DashboardView({
       window.clearTimeout(startTimer);
       abortController.abort();
     };
-  }, [dashboard.id, chartQuerySignature, chartRangesSignature, chartRefreshSignature, token]);
+  }, [dashboard.id, chartQuerySignature, chartRangesSignature, chartRefreshSignature, historyWidgets, rangeByWidget, refreshByWidget, token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2612,18 +2637,24 @@ export function DashboardView({
       </div>
 
       {noteSectionPickerOpen ? (
-        <DashboardNoteSectionPickerTray
-          sections={noteTargetSections}
-          onCancel={() => setNoteSectionPickerOpen(false)}
-          onSelect={(sectionId) => { void handleCreateNotePlacement(sectionId); }}
-        />
+        <DashboardFloatingTray onDismiss={() => setNoteSectionPickerOpen(false)}>
+          <DashboardNoteSectionPickerTray
+            sections={noteTargetSections}
+            onCancel={() => setNoteSectionPickerOpen(false)}
+            onSelect={(sectionId) => { void handleCreateNotePlacement(sectionId); }}
+          />
+        </DashboardFloatingTray>
       ) : noteEditor ? (
-        <DashboardNoteEditorTray
-          editor={noteEditor}
-          saving={noteEditorSaving}
-          onCancel={() => setNoteEditor(null)}
-          onSubmit={(value) => { void handleSubmitNoteEditor(value); }}
-        />
+        <DashboardFloatingTray onDismiss={() => {
+          if (!noteEditorSaving) setNoteEditor(null);
+        }}>
+          <DashboardNoteEditorTray
+            editor={noteEditor}
+            saving={noteEditorSaving}
+            onCancel={() => setNoteEditor(null)}
+            onSubmit={(value) => { void handleSubmitNoteEditor(value); }}
+          />
+        </DashboardFloatingTray>
       ) : renameEditor ? (
         <DashboardWidgetRenameTray
           editor={renameEditor}
@@ -2748,10 +2779,10 @@ export function DashboardView({
 	                              widget={widget}
 	                              subtitle={widgetSubtitle(widget, range)}
 	                              loading={loading}
-	                              saving={savingLayout}
-	                              layoutEditing={canEditCanonicalLayout}
-	                              placementMode={placementMode}
-	                              {...(canEditCanonicalLayout && layoutItem ? { sizeLabel: `${layoutItem.w} x ${layoutItem.h}` } : {})}
+                              saving={savingLayout}
+                              layoutEditing={canEditCanonicalLayout}
+                              placementMode={placementMode}
+                              {...(canEditCanonicalLayout && layoutItem ? { sizeLabel: `${layoutItem.w} x ${layoutItem.h}` } : {})}
                               onNativeDragStart={handleNativeDragStart}
                               onNativeDragOver={handleNativeDragOver}
                               onNativeDrop={(targetId) => handleNativeDrop(section.id, targetId)}
@@ -2770,7 +2801,7 @@ export function DashboardView({
                               onFitToContent={(targetId) => { void handleWidgetSizeAction(targetId, "fit"); }}
                               onRemove={(targetId) => { void handleRemoveWidget(targetId); }}
 	                            >
-	                              {widget.kind === "note" ? (
+                              {widget.kind === "note" ? (
 	                                <NoteWidget
 	                                  widget={widget}
 	                                  saving={savingLayout}
@@ -2780,7 +2811,7 @@ export function DashboardView({
                               ) : widget.kind === "live_value_grid" ? (
                                 <LiveValueGridWidget values={values} />
                               ) : widget.kind === "stat_value" ? (
-                                <StatValueWidget values={values} />
+                                <StatValueWidget values={values} historySeries={chartSeriesByWidget[widget.id] ?? []} />
                               ) : widget.kind === "bar_comparison" ? (
                                 <BarComparisonWidget values={values} />
                               ) : (
