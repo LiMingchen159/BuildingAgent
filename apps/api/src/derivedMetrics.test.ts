@@ -1,6 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { DerivedMetricStore } from "./derivedMetrics.js";
 import { createGenericToolRegistry } from "./agent/genericTools.js";
@@ -42,6 +43,141 @@ describe("DerivedMetricStore", () => {
     expect(second.instance.instanceId).toBe(first.instance.instanceId);
     expect(store.lookup({ projectId: "project_element", metricKey: "system_cop", entityId: "WCC_01" })).toHaveLength(1);
     expect(first.instance.dependencies.map((dependency) => dependency.sourceId).sort()).toEqual(["WCC-L1-01_P", "WCC-L1-01_Q"]);
+  });
+
+  it("preserves formula lineage per equipment instance for shared metric keys", () => {
+    const store = new DerivedMetricStore(tempDir());
+    const first = store.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_01",
+      displayName: "WCC-01 System COP",
+      formula: "WCC-L1-01_Q / WCC-L1-01_P",
+      formulaDescription: "WCC-01 cooling load divided by WCC-01 chiller power",
+      dependencies: [
+        { role: "cooling_load_kw", sourceId: "WCC-L1-01_Q" },
+        { role: "power_kw", sourceId: "WCC-L1-01_P" }
+      ]
+    });
+    const second = store.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_02",
+      displayName: "WCC-02 System COP",
+      formula: "WCC-L1-02_Q / WCC-L1-02_P",
+      formulaDescription: "WCC-02 cooling load divided by WCC-02 chiller power",
+      dependencies: [
+        { role: "cooling_load_kw", sourceId: "WCC-L1-02_Q" },
+        { role: "power_kw", sourceId: "WCC-L1-02_P" }
+      ]
+    });
+
+    expect(store.getInstance(first.instance.instanceId)).toMatchObject({
+      entityId: "WCC_01",
+      formula: "WCC-L1-01_Q / WCC-L1-01_P",
+      formulaDescription: "WCC-01 cooling load divided by WCC-01 chiller power"
+    });
+    expect(store.getInstance(second.instance.instanceId)).toMatchObject({
+      entityId: "WCC_02",
+      formula: "WCC-L1-02_Q / WCC-L1-02_P",
+      formulaDescription: "WCC-02 cooling load divided by WCC-02 chiller power"
+    });
+  });
+
+  it("migrates older stores by snapshotting shared formula lineage onto instances", () => {
+    const dir = tempDir();
+    const db = new Database(path.join(dir, "derived_metrics.db"));
+    db.exec(`
+      CREATE TABLE metric_definitions (
+        definition_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        metric_key TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        metric_type TEXT NOT NULL,
+        default_unit TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id, metric_key)
+      );
+
+      CREATE TABLE metric_versions (
+        version_id TEXT PRIMARY KEY,
+        definition_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        formula TEXT NOT NULL,
+        formula_description TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(definition_id, version)
+      );
+
+      CREATE TABLE metric_instances (
+        instance_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        definition_id TEXT NOT NULL,
+        version_id TEXT NOT NULL,
+        metric_key TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        entity_name TEXT,
+        display_name TEXT NOT NULL,
+        unit TEXT,
+        status TEXT NOT NULL,
+        created_by TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id, entity_id, metric_key)
+      );
+
+      INSERT INTO metric_definitions (
+        definition_id, project_id, metric_key, display_name, metric_type, default_unit, metadata_json, created_at, updated_at
+      ) VALUES (
+        'mdef_legacy', 'project_element', 'system_cop', 'System COP', 'derived', 'COP', NULL,
+        '2026-06-26T00:00:00.000Z', '2026-06-26T00:00:00.000Z'
+      );
+      INSERT INTO metric_versions (
+        version_id, definition_id, version, formula, formula_description, metadata_json, created_at
+      ) VALUES (
+        'mver_legacy', 'mdef_legacy', 'v1', 'WCC-L1-01_Q / WCC-L1-01_P',
+        'legacy WCC-01 formula', NULL, '2026-06-26T00:00:00.000Z'
+      );
+      INSERT INTO metric_instances (
+        instance_id, project_id, definition_id, version_id, metric_key, entity_id, entity_name,
+        display_name, unit, status, created_by, metadata_json, created_at, updated_at
+      ) VALUES (
+        'minst_legacy_01', 'project_element', 'mdef_legacy', 'mver_legacy', 'system_cop', 'WCC_01',
+        NULL, 'WCC-01 System COP', 'COP', 'active', NULL, NULL,
+        '2026-06-26T00:00:00.000Z', '2026-06-26T00:00:00.000Z'
+      );
+    `);
+    db.close();
+
+    const store = new DerivedMetricStore(dir);
+    expect(store.getInstance("minst_legacy_01")).toMatchObject({
+      entityId: "WCC_01",
+      formula: "WCC-L1-01_Q / WCC-L1-01_P",
+      formulaDescription: "legacy WCC-01 formula"
+    });
+
+    store.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_02",
+      displayName: "WCC-02 System COP",
+      formula: "WCC-L1-02_Q / WCC-L1-02_P",
+      formulaDescription: "WCC-02 formula",
+      dependencies: [
+        { role: "cooling_load_kw", sourceId: "WCC-L1-02_Q" },
+        { role: "power_kw", sourceId: "WCC-L1-02_P" }
+      ]
+    });
+
+    expect(store.getInstance("minst_legacy_01")).toMatchObject({
+      entityId: "WCC_01",
+      formula: "WCC-L1-01_Q / WCC-L1-01_P",
+      formulaDescription: "legacy WCC-01 formula"
+    });
   });
 
   it("records latest and history samples for persisted metrics", () => {
