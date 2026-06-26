@@ -28,7 +28,7 @@ import { chartSanityViolation, executeCodeInjectedHeader } from "./chartStyle.js
 import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
 import { bmsCollectorBaseUrl } from "../bmsCollectorUrl.js";
-import { fetchTimeseries } from "../bmsTimeseries.js";
+import { fetchTimeseries, type BmsTimeseriesRow } from "../bmsTimeseries.js";
 import { DASHBOARD_GRID_COLUMNS, DASHBOARD_LAYOUT_VERSION, dashboardPath, parseDashboardMutationInput } from "../dashboards.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -59,6 +59,17 @@ function numArg(args: Record<string, unknown>, key: string, fallback: number): n
   const value = args[key];
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return Math.floor(value);
+  }
+  return fallback;
+}
+
+function boolArg(args: Record<string, unknown>, key: string, fallback = false): boolean {
+  const value = args[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "1", "on"].includes(normalized)) return true;
+    if (["false", "no", "0", "off"].includes(normalized)) return false;
   }
   return fallback;
 }
@@ -735,6 +746,15 @@ function appendGeneratedOutputHints(
 const MEMORY_ACTIONS = new Set<MemoryAction>(["add", "replace", "remove", "read", "clear"]);
 const MEMORY_TARGETS = new Set<MemoryTarget>(["user", "project"]);
 const DERIVED_METRIC_SOURCE_TYPES = new Set(["raw_point", "metric"]);
+const DERIVED_METRIC_FORMULA_KINDS = new Set(["ratio", "difference"]);
+
+type DerivedMetricFormulaKind = "ratio" | "difference";
+
+interface DerivedMetricCalculationSample {
+  ts: string;
+  value: number;
+  inputs: Record<string, number>;
+}
 
 function normalizeDerivedMetricDependency(value: unknown): DerivedMetricDependencyInput | null {
   if (!isPlainRecord(value)) return null;
@@ -757,6 +777,114 @@ function normalizeDerivedMetricDependency(value: unknown): DerivedMetricDependen
   return dependency;
 }
 
+function normalizeDerivedMetricFormulaKind(value: string): DerivedMetricFormulaKind | null {
+  const normalized = value.trim().toLowerCase();
+  return DERIVED_METRIC_FORMULA_KINDS.has(normalized) ? normalized as DerivedMetricFormulaKind : null;
+}
+
+function roleOrFallback(args: Record<string, unknown>, keys: string[], fallback: string): string {
+  for (const key of keys) {
+    const value = textArg(args, key);
+    if (value) return value;
+  }
+  return fallback;
+}
+
+function dependencyForRole(
+  dependencies: DerivedMetricDependencyInput[],
+  role: string,
+  fallbackIndex: number
+): DerivedMetricDependencyInput | null {
+  return dependencies.find((dependency) => dependency.role === role)
+    ?? dependencies[fallbackIndex]
+    ?? null;
+}
+
+function formulaForDerivedMetric(kind: DerivedMetricFormulaKind, leftRole: string, rightRole: string): string {
+  return kind === "ratio" ? `${leftRole} / ${rightRole}` : `${leftRole} - ${rightRole}`;
+}
+
+function numericSeriesFromRows(rows: BmsTimeseriesRow[]): Map<string, number> {
+  const series = new Map<string, number>();
+  for (const row of rows) {
+    const value = typeof row.value_num === "number" && Number.isFinite(row.value_num)
+      ? row.value_num
+      : Number(row.value ?? row.value_text ?? "");
+    if (Number.isFinite(value)) {
+      series.set(row.ts, value);
+    }
+  }
+  return series;
+}
+
+async function readDerivedMetricDependencySeries(
+  derivedMetrics: DerivedMetricStore,
+  dependency: DerivedMetricDependencyInput,
+  from: string,
+  to: string,
+  limit: number
+): Promise<Map<string, number>> {
+  if (dependency.sourceType === "metric") {
+    const instance = derivedMetrics.getInstance(dependency.sourceId);
+    if (!instance) return new Map();
+    const samples = derivedMetrics.readHistory(instance.instanceId, { from, to, limit, order: "asc" });
+    return new Map(samples.flatMap((sample) =>
+      typeof sample.valueNum === "number" && Number.isFinite(sample.valueNum)
+        ? [[sample.ts, sample.valueNum] as const]
+        : []
+    ));
+  }
+
+  const params: Record<string, string> = {
+    from,
+    to,
+    limit: String(Math.min(Math.max(1, limit), 20_000)),
+    order: "asc"
+  };
+  if (dependency.pointName) {
+    params.name = dependency.pointName;
+  } else if (dependency.objectRef) {
+    params.object_ref = dependency.objectRef;
+  } else {
+    params.name = dependency.sourceId;
+  }
+  const result = await fetchTimeseries(bmsCollectorBaseUrl(), params);
+  return numericSeriesFromRows(result.items);
+}
+
+function calculateAlignedDerivedMetricSamples(
+  kind: DerivedMetricFormulaKind,
+  leftRole: string,
+  rightRole: string,
+  leftSeries: Map<string, number>,
+  rightSeries: Map<string, number>
+): { samples: DerivedMetricCalculationSample[]; skipped: number } {
+  const timestamps = [...leftSeries.keys()]
+    .filter((ts) => rightSeries.has(ts))
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  const samples: DerivedMetricCalculationSample[] = [];
+  let skipped = 0;
+  for (const ts of timestamps) {
+    const left = leftSeries.get(ts);
+    const right = rightSeries.get(ts);
+    if (typeof left !== "number" || typeof right !== "number" || !Number.isFinite(left) || !Number.isFinite(right)) {
+      skipped += 1;
+      continue;
+    }
+    if (kind === "ratio" && right === 0) {
+      skipped += 1;
+      continue;
+    }
+    const value = kind === "ratio" ? left / right : left - right;
+    if (!Number.isFinite(value)) {
+      skipped += 1;
+      continue;
+    }
+    samples.push({ ts, value, inputs: { [leftRole]: left, [rightRole]: right } });
+  }
+  return { samples, skipped };
+}
+
 function derivedMetricPointerContent(instance: {
   instanceId: string;
   metricKey: string;
@@ -773,6 +901,30 @@ function derivedMetricPointerContent(instance: {
     dependencies ? `dependencies=${dependencies}` : "",
     "Use derived_metric_read before recalculating."
   ].filter(Boolean).join("; ");
+}
+
+function writeDerivedMetricMemoryPointer(
+  memory: AgentMemoryStore,
+  context: { projectId: string; userId: string; conversationId: string; canConfigure: boolean },
+  instance: {
+    instanceId: string;
+    metricKey: string;
+    entityId: string;
+    formulaVersion: string;
+    formula: string;
+    dependencies: Array<{ role: string; sourceId: string }>;
+  }
+): { content: string; result: ReturnType<AgentMemoryStore["runAction"]> } {
+  const pointer = derivedMetricPointerContent(instance);
+  const result = memory.runAction(
+    context.projectId,
+    context.userId,
+    context.conversationId,
+    "add",
+    "project",
+    { content: pointer, canConfigure: context.canConfigure }
+  );
+  return { content: pointer, result };
 }
 
 export function createGenericToolRegistry(
@@ -1010,6 +1162,210 @@ export function createGenericToolRegistry(
       }
     },
     {
+      name: "derived_metric_calculate",
+      category: "building",
+      description: "Calculate and persist a reusable ratio/difference derived metric from source BMS or metric dependencies.",
+      schema: {
+        name: "derived_metric_calculate",
+        description:
+          "Lookup first, then calculate and persist a reusable derived metric when needed. Supports safe formulaKind values: ratio (left/right) and difference (left-right). Returns dashboard-ready binding metadata.",
+        parameters: {
+          type: "object",
+          properties: {
+            metricKey: { type: "string", description: "Stable metric key, e.g. system_cop or delta_t." },
+            entityId: { type: "string", description: "Entity/equipment id, e.g. WCC_04." },
+            entityName: { type: "string", description: "Human-readable entity name." },
+            displayName: { type: "string", description: "Metric display name." },
+            unit: { type: "string", description: "Metric unit." },
+            metricType: { type: "string", description: "derived, kpi, fd_score, etc." },
+            formulaKind: { type: "string", enum: ["ratio", "difference"], description: "ratio computes left/right; difference computes left-right." },
+            formulaVersion: { type: "string", description: "Formula version, default v1." },
+            formula: { type: "string", description: "Optional formula string stored with the metric definition." },
+            formulaDescription: { type: "string", description: "Plain-language formula description." },
+            leftRole: { type: "string", description: "Role for left/numerator/minuend dependency." },
+            rightRole: { type: "string", description: "Role for right/denominator/subtrahend dependency." },
+            numeratorRole: { type: "string", description: "Alias for leftRole in ratio formulas." },
+            denominatorRole: { type: "string", description: "Alias for rightRole in ratio formulas." },
+            minuendRole: { type: "string", description: "Alias for leftRole in difference formulas." },
+            subtrahendRole: { type: "string", description: "Alias for rightRole in difference formulas." },
+            dependencies: {
+              type: "array",
+              description:
+                "Dependencies [{role, sourceType: raw_point|metric, sourceId, pointName?, objectRef?, unit?, label?}]. Required unless reusing an existing metric with latest value."
+            },
+            from: { type: "string", description: "Source window start UTC ISO8601." },
+            to: { type: "string", description: "Source window end UTC ISO8601; defaults to now." },
+            limit: { type: "number", description: "Max source samples per dependency, default 2000." },
+            forceRecalculate: { type: "boolean", description: "If false and latest exists, reuse without recalculating." },
+            calculationRunId: { type: "string", description: "Optional deterministic calculation run id." },
+            metadata: { type: "object", description: "Optional metadata stored with the metric definition and samples." }
+          },
+          required: ["metricKey", "entityId", "formulaKind", "from"]
+        }
+      },
+      async run(args, context) {
+        if (!derivedMetrics) {
+          return { error: "derived_metrics_unavailable" };
+        }
+        if (!context.canConfigure) {
+          return boundsViolationResult("derived_metric_calculate requires project:configure.");
+        }
+
+        const metricKey = textArg(args, "metricKey");
+        const entityId = textArg(args, "entityId");
+        const kind = normalizeDerivedMetricFormulaKind(textArg(args, "formulaKind"));
+        const from = textArg(args, "from");
+        const to = textArg(args, "to") || new Date().toISOString();
+        if (!metricKey || !entityId) {
+          return { error: "metricKey and entityId are required" };
+        }
+        if (!kind) {
+          return { error: "formulaKind must be ratio or difference" };
+        }
+        if (!from) {
+          return { error: "from is required" };
+        }
+
+        const existing = derivedMetrics.lookup({
+          projectId: context.projectId,
+          metricKey,
+          entityId,
+          limit: 1
+        })[0] ?? null;
+        const existingLatest = existing ? derivedMetrics.readLatest(existing.instanceId) : null;
+        const forceRecalculate = boolArg(args, "forceRecalculate");
+        const dashboardBinding = (instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string }) => ({
+          source: "derived_metric",
+          metricInstanceId: instance.instanceId,
+          metricKey: instance.metricKey,
+          entityId: instance.entityId,
+          label: instance.displayName,
+          unit: instance.unit ?? textArg(args, "unit")
+        });
+
+        if (existing && existingLatest && !forceRecalculate) {
+          const memoryPointer = writeDerivedMetricMemoryPointer(memory, context, existing);
+          return {
+            reused: true,
+            calculated: false,
+            created: false,
+            instance: existing,
+            latest: existingLatest,
+            dashboardBinding: dashboardBinding(existing),
+            memoryPointer,
+            reuseHint: "Existing latest value reused; no BMS dependency reads or recalculation were performed."
+          };
+        }
+
+        const inputDependencies = Array.isArray(args.dependencies)
+          ? args.dependencies.map((entry) => normalizeDerivedMetricDependency(entry)).filter((entry): entry is DerivedMetricDependencyInput => entry !== null)
+          : [];
+        const existingDependencies: DerivedMetricDependencyInput[] = existing?.dependencies.map((dependency) => ({
+          role: dependency.role,
+          sourceType: dependency.sourceType,
+          sourceId: dependency.sourceId,
+          ...(dependency.pointName ? { pointName: dependency.pointName } : {}),
+          ...(dependency.objectRef ? { objectRef: dependency.objectRef } : {}),
+          ...(dependency.unit ? { unit: dependency.unit } : {}),
+          ...(dependency.label ? { label: dependency.label } : {}),
+          ...(dependency.metadata ? { metadata: dependency.metadata } : {})
+        })) ?? [];
+        const dependencies = inputDependencies.length > 0 ? inputDependencies : existingDependencies;
+        if (dependencies.length < 2) {
+          return { error: "At least two dependencies are required to calculate a missing or forced derived metric." };
+        }
+
+        const leftRole = roleOrFallback(
+          args,
+          kind === "ratio" ? ["leftRole", "numeratorRole"] : ["leftRole", "minuendRole"],
+          dependencies[0]?.role ?? "left"
+        );
+        const rightRole = roleOrFallback(
+          args,
+          kind === "ratio" ? ["rightRole", "denominatorRole"] : ["rightRole", "subtrahendRole"],
+          dependencies[1]?.role ?? "right"
+        );
+        const leftDependency = dependencyForRole(dependencies, leftRole, 0);
+        const rightDependency = dependencyForRole(dependencies, rightRole, 1);
+        if (!leftDependency || !rightDependency) {
+          return { error: "Unable to resolve left/right dependencies for calculation." };
+        }
+
+        try {
+          const limit = Math.min(Math.max(1, numArg(args, "limit", 2000)), 20_000);
+          const [leftSeries, rightSeries] = await Promise.all([
+            readDerivedMetricDependencySeries(derivedMetrics, leftDependency, from, to, limit),
+            readDerivedMetricDependencySeries(derivedMetrics, rightDependency, from, to, limit)
+          ]);
+          const calculated = calculateAlignedDerivedMetricSamples(kind, leftRole, rightRole, leftSeries, rightSeries);
+          if (calculated.samples.length === 0) {
+            return {
+              error: "no_aligned_samples",
+              inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
+              skipped: calculated.skipped,
+              message: "No aligned numeric samples were available for the requested source window."
+            };
+          }
+
+          const metadata = isPlainRecord(args.metadata) ? args.metadata : undefined;
+          const formula = textArg(args, "formula") || formulaForDerivedMetric(kind, leftRole, rightRole);
+          const registerResult = existing
+            ? { created: false, instance: existing }
+            : derivedMetrics.registerMetric({
+                projectId: context.projectId,
+                metricKey,
+                entityId,
+                formula,
+                dependencies,
+                ...(textArg(args, "entityName") ? { entityName: textArg(args, "entityName") } : {}),
+                ...(textArg(args, "displayName") ? { displayName: textArg(args, "displayName") } : {}),
+                ...(textArg(args, "unit") ? { unit: textArg(args, "unit") } : {}),
+                ...(textArg(args, "metricType") ? { metricType: textArg(args, "metricType") } : {}),
+                ...(textArg(args, "formulaVersion") ? { formulaVersion: textArg(args, "formulaVersion") } : {}),
+                ...(textArg(args, "formulaDescription") ? { formulaDescription: textArg(args, "formulaDescription") } : {}),
+                createdBy: context.userId,
+                ...(metadata ? { metadata } : {})
+              });
+
+          const calculationRunId = textArg(args, "calculationRunId")
+            || `derived_metric_calculate:${metricKey}:${entityId}:${kind}:${from}:${to}`;
+          for (const sample of calculated.samples) {
+            derivedMetrics.recordSample({
+              instanceId: registerResult.instance.instanceId,
+              ts: sample.ts,
+              valueNum: sample.value,
+              calculationRunId,
+              sourceWindowStart: from,
+              sourceWindowEnd: to,
+              metadata: {
+                ...(metadata ?? {}),
+                formulaKind: kind,
+                inputs: sample.inputs
+              }
+            });
+          }
+          const latest = derivedMetrics.readLatest(registerResult.instance.instanceId);
+          const memoryPointer = writeDerivedMetricMemoryPointer(memory, context, registerResult.instance);
+          return {
+            reused: false,
+            calculated: true,
+            created: registerResult.created,
+            instance: registerResult.instance,
+            latest,
+            sampleCount: calculated.samples.length,
+            skipped: calculated.skipped,
+            inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
+            formulaKind: kind,
+            dashboardBinding: dashboardBinding(registerResult.instance),
+            memoryPointer,
+            reuseHint: "Metric samples persisted. Future requests should call derived_metric_lookup/read before recalculating."
+          };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : "derived_metric_calculate_failed" };
+        }
+      }
+    },
+    {
       name: "derived_metric_register",
       category: "building",
       description: "Persist a reusable calculated metric definition/instance and write a project-memory pointer.",
@@ -1069,21 +1425,10 @@ export function createGenericToolRegistry(
             createdBy: context.userId,
             ...(metadata ? { metadata } : {})
           });
-          const pointer = derivedMetricPointerContent(result.instance);
-          const memoryResult = memory.runAction(
-            context.projectId,
-            context.userId,
-            context.conversationId,
-            "add",
-            "project",
-            { content: pointer, canConfigure: context.canConfigure }
-          );
+          const memoryPointer = writeDerivedMetricMemoryPointer(memory, context, result.instance);
           return {
             ...result,
-            memoryPointer: {
-              content: pointer,
-              result: memoryResult
-            },
+            memoryPointer,
             reuseHint: result.created
               ? "Metric persisted. Future requests should call derived_metric_lookup/read first."
               : "Existing metric reused; do not recalculate or register a duplicate."
