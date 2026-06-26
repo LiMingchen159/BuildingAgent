@@ -64,7 +64,7 @@ import {
   restoreFeedbackSequence
 } from "./projectFeedback.js";
 import { createEmbeddingProvider } from "./embeddingProvider.js";
-import { DerivedMetricStore } from "./derivedMetrics.js";
+import { DerivedMetricStore, type DerivedMetricInstance, type DerivedMetricSample } from "./derivedMetrics.js";
 import { GroundingRuleIndex } from "./groundingRuleIndex.js";
 import { hasConfigurePermission, platformBoundsPayload } from "./platformBounds.js";
 import {
@@ -98,16 +98,33 @@ import {
   type DashboardRecord
 } from "./dashboards.js";
 
+type DashboardDataSource = "bms" | "derived_metric";
+
 interface BmsDashboardHistoryBatchQuery {
   key: string;
+  source: DashboardDataSource;
   name?: string;
   point_id?: string;
   object_ref?: string;
+  metric_instance_id?: string;
+  metric_key?: string;
+  entity_id?: string;
   from: string;
   to?: string;
   range?: string;
   limit?: string;
   order?: string;
+}
+
+interface BmsDashboardLatestBatchQuery {
+  key: string;
+  source: DashboardDataSource;
+  name?: string;
+  point_id?: string;
+  object_ref?: string;
+  metric_instance_id?: string;
+  metric_key?: string;
+  entity_id?: string;
 }
 
 interface BuildServerOptions {
@@ -671,27 +688,79 @@ function stringField(record: Record<string, unknown>, key: string): string | und
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function stringFieldAny(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = stringField(record, key);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function dashboardDataSource(record: Record<string, unknown>): DashboardDataSource {
+  const source = stringField(record, "source") ?? stringField(record, "sourceType") ?? stringField(record, "source_type");
+  if (source === "derived_metric" || source === "derived" || source === "metric") return "derived_metric";
+  if (stringFieldAny(record, ["metric_instance_id", "metricInstanceId", "metric_key", "metricKey", "entity_id", "entityId"])) {
+    return "derived_metric";
+  }
+  return "bms";
+}
+
 function parseBmsDashboardHistoryBatchQuery(value: unknown): BmsDashboardHistoryBatchQuery | null {
   if (!isRecordValue(value)) return null;
   const key = stringField(value, "key");
   const from = stringField(value, "from");
+  const source = dashboardDataSource(value);
   const name = stringField(value, "name");
   const pointId = stringField(value, "point_id") ?? stringField(value, "pointId");
   const objectRef = stringField(value, "object_ref") ?? stringField(value, "objectRef");
+  const metricInstanceId = stringFieldAny(value, ["metric_instance_id", "metricInstanceId", "instance_id", "instanceId"]);
+  const metricKey = stringFieldAny(value, ["metric_key", "metricKey"]);
+  const entityId = stringFieldAny(value, ["entity_id", "entityId"]);
   const to = stringField(value, "to");
   const range = stringField(value, "range");
   const limit = stringField(value, "limit");
-  if (!key || !from || (!name && !pointId && !objectRef)) return null;
+  if (!key || !from) return null;
+  if (source === "derived_metric" && !metricInstanceId && (!metricKey || !entityId)) return null;
+  if (source === "bms" && !name && !pointId && !objectRef) return null;
   return {
     key,
+    source,
     from,
     ...(name ? { name } : {}),
     ...(pointId ? { point_id: pointId } : {}),
     ...(objectRef ? { object_ref: objectRef } : {}),
+    ...(metricInstanceId ? { metric_instance_id: metricInstanceId } : {}),
+    ...(metricKey ? { metric_key: metricKey } : {}),
+    ...(entityId ? { entity_id: entityId } : {}),
     ...(to ? { to } : {}),
     ...(range ? { range } : {}),
     ...(limit ? { limit } : {}),
     ...(stringField(value, "order") === "desc" ? { order: "desc" } : { order: "asc" })
+  };
+}
+
+function parseBmsDashboardLatestBatchQuery(value: unknown): BmsDashboardLatestBatchQuery | null {
+  if (!isRecordValue(value)) return null;
+  const key = stringField(value, "key");
+  const source = dashboardDataSource(value);
+  const name = stringField(value, "name");
+  const pointId = stringField(value, "point_id") ?? stringField(value, "pointId");
+  const objectRef = stringField(value, "object_ref") ?? stringField(value, "objectRef");
+  const metricInstanceId = stringFieldAny(value, ["metric_instance_id", "metricInstanceId", "instance_id", "instanceId"]);
+  const metricKey = stringFieldAny(value, ["metric_key", "metricKey"]);
+  const entityId = stringFieldAny(value, ["entity_id", "entityId"]);
+  if (!key) return null;
+  if (source === "derived_metric" && !metricInstanceId && (!metricKey || !entityId)) return null;
+  if (source === "bms" && !name && !pointId && !objectRef) return null;
+  return {
+    key,
+    source,
+    ...(name ? { name } : {}),
+    ...(pointId ? { point_id: pointId } : {}),
+    ...(objectRef ? { object_ref: objectRef } : {}),
+    ...(metricInstanceId ? { metric_instance_id: metricInstanceId } : {}),
+    ...(metricKey ? { metric_key: metricKey } : {}),
+    ...(entityId ? { entity_id: entityId } : {})
   };
 }
 
@@ -706,6 +775,36 @@ function paramsForBmsDashboardHistoryBatchQuery(query: BmsDashboardHistoryBatchQ
   if (query.object_ref) params.object_ref = query.object_ref;
   if (query.to) params.to = query.to;
   return params;
+}
+
+function resolveDerivedDashboardMetric(
+  store: DerivedMetricStore,
+  projectId: string,
+  query: Pick<BmsDashboardHistoryBatchQuery | BmsDashboardLatestBatchQuery, "metric_instance_id" | "metric_key" | "entity_id">
+): DerivedMetricInstance | null {
+  if (query.metric_instance_id) {
+    const instance = store.getInstance(query.metric_instance_id);
+    return instance?.projectId === projectId ? instance : null;
+  }
+  if (query.metric_key && query.entity_id) {
+    return store.lookup({
+      projectId,
+      metricKey: query.metric_key,
+      entityId: query.entity_id,
+      limit: 1
+    })[0] ?? null;
+  }
+  return null;
+}
+
+function derivedMetricTimeseriesRow(instance: DerivedMetricInstance, sample: DerivedMetricSample): BmsTimeseriesRow {
+  return {
+    name: instance.displayName || `${instance.entityId} ${instance.metricKey}`,
+    object_ref: instance.instanceId,
+    ts: sample.ts,
+    ...(typeof sample.valueNum === "number" ? { value_num: sample.valueNum, value: String(sample.valueNum) } : {}),
+    ...(sample.valueText ? { value_text: sample.valueText, value: sample.valueText } : {})
+  };
 }
 
 const BMS_DASHBOARD_HISTORY_BATCH_CONCURRENCY = 8;
@@ -1843,7 +1942,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     const queries = rawQueries.map((entry) => parseBmsDashboardHistoryBatchQuery(entry));
     if (queries.some((entry) => entry === null)) {
-      return sendError(request, reply, 422, "bms_history_batch_invalid", "Each query requires key, from, and name/point_id/object_ref.");
+      return sendError(request, reply, 422, "bms_history_batch_invalid", "Each query requires key, from, and either name/point_id/object_ref or derived metric identifiers.");
     }
 
     const baseUrl = bmsCollectorBaseUrl(env);
@@ -1861,6 +1960,30 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         BMS_DASHBOARD_HISTORY_BATCH_CONCURRENCY,
         async (query) => {
           try {
+            if (query.source === "derived_metric") {
+              const instance = resolveDerivedDashboardMetric(derivedMetrics, session.projectId!, query);
+              if (!instance) {
+                return {
+                  key: query.key,
+                  ok: false,
+                  total: 0,
+                  items: [] as BmsTimeseriesRow[],
+                  error: "derived_metric_not_found"
+                };
+              }
+              const items = derivedMetrics.readHistory(instance.instanceId, {
+                from: query.from,
+                ...(query.to ? { to: query.to } : {}),
+                limit: Math.min(Math.max(1, Number.parseInt(query.limit ?? "720", 10) || 720), 20_000),
+                order: query.order === "desc" ? "desc" : "asc"
+              }).map((sample) => derivedMetricTimeseriesRow(instance, sample));
+              return {
+                key: query.key,
+                ok: true,
+                total: items.length,
+                items
+              };
+            }
             const params = paramsForBmsDashboardHistoryBatchQuery(query);
             const pointId = await resolveBmsDashboardPointId(baseUrl, query, fetchProxy as typeof fetch, abortController.signal);
             if (pointId) {
@@ -1887,6 +2010,117 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
               total: 0,
               items: [] as BmsTimeseriesRow[],
               error: error instanceof Error ? error.message : "bms_history_query_failed"
+            };
+          }
+        }
+      );
+
+      return {
+        results,
+        requestId: requestIdFor(request)
+      };
+    } finally {
+      reply.raw.off("close", abortIfClientClosed);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/bms/dashboard/latest-batch", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    if (!session.projectId) {
+      return sendError(request, reply, 403, "project_not_selected", "Select a project before querying dashboard latest values.");
+    }
+    const membership = requireProjectMembership(request, reply, store, session, session.projectId);
+    if (isReply(membership)) return membership;
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const body = isRecordValue(request.body) ? request.body : {};
+    const rawQueries = Array.isArray(body.queries) ? body.queries : [];
+    if (rawQueries.length === 0) {
+      return sendError(request, reply, 422, "bms_latest_batch_invalid", "queries must be a non-empty array.");
+    }
+    if (rawQueries.length > 64) {
+      return sendError(request, reply, 422, "bms_latest_batch_too_large", "Dashboard latest batch supports at most 64 queries.");
+    }
+    const queries = rawQueries.map((entry) => parseBmsDashboardLatestBatchQuery(entry));
+    if (queries.some((entry) => entry === null)) {
+      return sendError(request, reply, 422, "bms_latest_batch_invalid", "Each query requires key and either name/point_id/object_ref or derived metric identifiers.");
+    }
+
+    const baseUrl = bmsCollectorBaseUrl(env);
+    const abortController = new AbortController();
+    const abortIfClientClosed = () => {
+      if (!reply.raw.writableEnded) {
+        abortController.abort();
+      }
+    };
+    reply.raw.on("close", abortIfClientClosed);
+
+    try {
+      const results = await mapWithConcurrency(
+        queries as BmsDashboardLatestBatchQuery[],
+        BMS_DASHBOARD_HISTORY_BATCH_CONCURRENCY,
+        async (query) => {
+          try {
+            if (query.source === "derived_metric") {
+              const instance = resolveDerivedDashboardMetric(derivedMetrics, session.projectId!, query);
+              const sample = instance ? derivedMetrics.readLatest(instance.instanceId) : null;
+              if (!instance || !sample) {
+                return { key: query.key, ok: false, total: 0, point: null, error: instance ? "derived_metric_latest_not_found" : "derived_metric_not_found" };
+              }
+              return {
+                key: query.key,
+                ok: true,
+                total: 1,
+                point: {
+                  id: -1,
+                  name: query.metric_instance_id ? `derived:${query.metric_instance_id}` : `derived:${query.entity_id}:${query.metric_key}`,
+                  object_ref: instance.instanceId,
+                  last_value: typeof sample.valueNum === "number" ? String(sample.valueNum) : sample.valueText ?? null,
+                  last_polled_at: sample.ts
+                }
+              };
+            }
+
+            const lookupValue = query.name ?? query.object_ref ?? query.point_id;
+            if (!lookupValue) {
+              return { key: query.key, ok: false, total: 0, point: null, error: "bms_lookup_missing" };
+            }
+            const response = await fetchProxy(`${baseUrl}/api/v1/points?${new URLSearchParams({ q: lookupValue, limit: "20" }).toString()}`, {
+              headers: { accept: "application/json" },
+              signal: abortController.signal
+            });
+            if (!response.ok) {
+              return { key: query.key, ok: false, total: 0, point: null, error: `bms_points_failed:${response.status}` };
+            }
+            const payload = (await response.json()) as { items?: Array<Record<string, unknown>> };
+            const items = Array.isArray(payload.items) ? payload.items : [];
+            const match = items.find((item) => query.name ? item.name === query.name : query.object_ref ? item.object_ref === query.object_ref : String(item.id ?? "") === query.point_id)
+              ?? items[0];
+            if (!match || typeof match.name !== "string") {
+              return { key: query.key, ok: false, total: 0, point: null, error: "bms_point_not_found" };
+            }
+            const rawId = match.id;
+            return {
+              key: query.key,
+              ok: true,
+              total: 1,
+              point: {
+                id: typeof rawId === "number" ? rawId : Number.parseInt(String(rawId ?? "-1"), 10) || -1,
+                name: match.name,
+                ...(typeof match.object_ref === "string" ? { object_ref: match.object_ref } : {}),
+                last_value: typeof match.last_value === "string" || match.last_value == null ? match.last_value : String(match.last_value),
+                last_polled_at: typeof match.last_polled_at === "string" || match.last_polled_at == null ? match.last_polled_at : null
+              }
+            };
+          } catch (error) {
+            return {
+              key: query.key,
+              ok: false,
+              total: 0,
+              point: null,
+              error: error instanceof Error ? error.message : "bms_latest_query_failed"
             };
           }
         }

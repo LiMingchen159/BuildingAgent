@@ -1381,6 +1381,124 @@ describe("BuildingGPT Web flow", () => {
     expect(screen.queryAllByText(/Loading trend/i)).toHaveLength(0);
   });
 
+  it("loads derived metric dashboard latest and history using source-aware bindings", async () => {
+    const dashboard = dashboardRecord({
+      title: "COP comparison",
+      layout: [
+        { widgetId: "system_cop_stat", x: 0, y: 0, w: 2, h: 2 },
+        { widgetId: "system_cop_trend", x: 2, y: 0, w: 6, h: 4 }
+      ],
+      widgets: [
+        {
+          id: "system_cop_stat",
+          kind: "stat_value",
+          title: "System COP",
+          pointBindings: [
+            {
+              source: "derived_metric",
+              metricInstanceId: "minst_system_cop_04",
+              label: "System COP",
+              unit: ""
+            }
+          ]
+        },
+        {
+          id: "system_cop_trend",
+          kind: "timeseries_chart",
+          title: "System COP trend",
+          defaultTimeRange: "24h",
+          pointBindings: [
+            {
+              source: "derived_metric",
+              metricKey: "system_cop",
+              entityId: "WCC_04",
+              label: "System COP",
+              unit: ""
+            }
+          ]
+        }
+      ]
+    }) as DashboardRecord;
+    const latestQueries: unknown[] = [];
+    const historyQueries: unknown[] = [];
+
+    installFetch((url, init) => {
+      if (url === "/api/bms/dashboard/latest-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: unknown[] };
+        latestQueries.push(...(body.queries ?? []));
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({
+            key: (query as { key?: string }).key ?? "unknown",
+            ok: true,
+            total: 1,
+            point: {
+              id: -1,
+              name: (query as { key?: string }).key ?? "unknown",
+              object_ref: "minst_system_cop_04",
+              last_value: "4.8",
+              last_polled_at: "2026-06-26T01:15:00.000Z"
+            }
+          })),
+          requestId: "req_latest_batch"
+        });
+      }
+      if (url === "/api/bms/dashboard/history-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: unknown[] };
+        historyQueries.push(...(body.queries ?? []));
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({
+            key: (query as { key?: string }).key ?? "unknown",
+            ok: true,
+            total: 2,
+            items: [
+              { ts: "2026-06-26T01:00:00.000Z", value_num: 4.6, name: "System COP" },
+              { ts: "2026-06-26T01:15:00.000Z", value_num: 4.8, name: "System COP" }
+            ]
+          })),
+          requestId: "req_history_batch"
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    render(
+      <DashboardView
+        token="seed-token-ada"
+        dashboard={dashboard}
+        liveValues={{}}
+        stale={false}
+        onLayoutChange={vi.fn(async () => undefined)}
+        onVisibilityChange={vi.fn(async () => undefined)}
+      />
+    );
+
+    expect((await screen.findAllByText(/4\.8/i)).length).toBeGreaterThan(0);
+    await waitFor(() => expect(historyQueries.length).toBeGreaterThan(0));
+    await waitFor(() => expect(latestQueries.length).toBeGreaterThan(0));
+    expect(latestQueries).toEqual([
+      expect.objectContaining({
+        source: "derived_metric",
+        metric_instance_id: "minst_system_cop_04"
+      }),
+      expect.objectContaining({
+        source: "derived_metric",
+        metric_key: "system_cop",
+        entity_id: "WCC_04"
+      })
+    ]);
+    expect(historyQueries).toEqual([
+      expect.objectContaining({
+        source: "derived_metric",
+        metric_instance_id: "minst_system_cop_04"
+      }),
+      expect.objectContaining({
+        source: "derived_metric",
+        metric_key: "system_cop",
+        entity_id: "WCC_04"
+      })
+    ]);
+  });
+
   it("does not reload trend history when note placement changes reorder dashboard widgets", async () => {
     const dashboard = dashboardRecord({
       layout: [

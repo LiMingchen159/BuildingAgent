@@ -100,14 +100,28 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
 
   const pointName = stringValueFrom(value, ["pointName", "point_name", "name", "point"]);
   const objectRef = stringValueFrom(value, ["objectRef", "object_ref", "ref"]);
-  if (!pointName && !objectRef) return null;
+  const metricInstanceId = stringValueFrom(value, ["metricInstanceId", "metric_instance_id", "instanceId", "instance_id"]);
+  const metricKey = stringValueFrom(value, ["metricKey", "metric_key"]);
+  const entityId = stringValueFrom(value, ["entityId", "entity_id", "equipmentId", "equipment_id"]);
+  const sourceRaw = stringValueFrom(value, ["source", "sourceType", "source_type", "type"]);
+  const source = sourceRaw === "derived_metric" || sourceRaw === "derived" || sourceRaw === "metric" || metricInstanceId || metricKey || entityId
+    ? "derived_metric"
+    : sourceRaw === "bms" || sourceRaw === "raw_point" || sourceRaw === "point"
+      ? "bms"
+      : undefined;
+  if (source === "derived_metric" && !metricInstanceId && (!metricKey || !entityId)) return null;
+  if (source !== "derived_metric" && !pointName && !objectRef) return null;
 
   const label = stringValueFrom(value, ["label", "title", "name"]);
   const role = stringValue(value.role);
   const unit = stringValue(value.unit);
   return {
+    ...(source ? { source } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
+    ...(metricInstanceId ? { metricInstanceId } : {}),
+    ...(metricKey ? { metricKey } : {}),
+    ...(entityId ? { entityId } : {}),
     ...(label && label !== pointName ? { label } : {}),
     ...(role ? { role } : {}),
     ...(unit ? { unit } : {})
@@ -171,6 +185,7 @@ function normalizeDashboardWidget(value: unknown, index: number): Record<string,
 
 function equipmentLabelFromBinding(binding: Record<string, unknown>): string | null {
   const source = [
+    stringValue(binding.entityId),
     stringValue(binding.pointName),
     stringValue(binding.objectRef),
     stringValue(binding.label)
@@ -1585,7 +1600,7 @@ export function createGenericToolRegistry(
       schema: {
         name: "dashboard_create",
         description:
-          "Create a dashboard with typed widgets. Provide title and widgets; layout and sections are optional because this tool normalizes them into a canonical 12-column layout. Never generate raw HTML/JS. Supported widgets: live_value_grid for compact live tables, stat_value for one prominent current/latest value, timeseries_chart for history, bar_comparison for comparing latest numeric values across equipment or points, and note for operator annotations without point bindings. For multi-equipment monitoring, group live/stat widgets by equipment; one focused trend per equipment/asset is added when trends are not explicitly disabled. This tool repairs missing/invalid sections into Overview, Comparison, Trends, and conditional Notes. Preferred widget fields are id, kind, title, pointBindings; note widgets should use content and optional tone. The tool also accepts agent-friendly points/object_refs.",
+          "Create a dashboard with typed widgets. Provide title and widgets; layout and sections are optional because this tool normalizes them into a canonical 12-column layout. Never generate raw HTML/JS. Supported widgets: live_value_grid for compact live tables, stat_value for one prominent current/latest value, timeseries_chart for history, bar_comparison for comparing latest numeric values across equipment or points, and note for operator annotations without point bindings. For multi-equipment monitoring, group live/stat widgets by equipment; one focused trend per equipment/asset is added when trends are not explicitly disabled. This tool repairs missing/invalid sections into Overview, Comparison, Trends, and conditional Notes. Preferred widget fields are id, kind, title, pointBindings; note widgets should use content and optional tone. The tool accepts raw BMS bindings ({pointName,label,unit}) and derived metric bindings ({source:\"derived_metric\",metricInstanceId} or {source:\"derived_metric\",metricKey,entityId,label,unit}).",
         parameters: {
           type: "object",
           properties: {
@@ -1596,7 +1611,7 @@ export function createGenericToolRegistry(
             widgets: {
               type: "array",
               description:
-                "Widget definitions. Supported kinds: live_value_grid, stat_value, timeseries_chart, bar_comparison, note. Use pointBindings [{pointName,label,role,unit}] or points [pointName] for data widgets. Use stat_value for one key current value; use bar_comparison for latest-value comparisons; use note with content/tone for board annotations."
+                "Widget definitions. Supported kinds: live_value_grid, stat_value, timeseries_chart, bar_comparison, note. Use pointBindings with raw BMS bindings [{pointName,label,role,unit}] or derived metric bindings [{source:\"derived_metric\",metricInstanceId,metricKey,entityId,label,unit}]. Use stat_value for one key current value; use bar_comparison for latest-value comparisons; use note with content/tone for board annotations."
             },
             layout: {
               type: "array",

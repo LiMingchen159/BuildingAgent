@@ -1015,8 +1015,12 @@ function dashboardWidgetSignature(widget: DashboardRecord["widgets"][number]): s
   const bindings = widget.pointBindings
     .map((binding) => [
       binding.id ?? "",
+      binding.source ?? "",
       binding.pointName ?? "",
       binding.objectRef ?? "",
+      binding.metricInstanceId ?? "",
+      binding.metricKey ?? "",
+      binding.entityId ?? "",
       binding.label ?? "",
       binding.role ?? "",
       binding.unit ?? ""
@@ -1093,6 +1097,7 @@ function dashboardPointNames(dashboard: DashboardRecord | null): string[] {
   if (!dashboard) return [];
   return [...new Set(dashboard.widgets.flatMap((widget) =>
     widget.pointBindings
+      .filter((binding) => binding.source !== "derived_metric" && !binding.metricInstanceId && !binding.metricKey && !binding.entityId)
       .map((binding) => binding.pointName)
       .filter((value): value is string => Boolean(value))
   ))].sort((left, right) => left.localeCompare(right));

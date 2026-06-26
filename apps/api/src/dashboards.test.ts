@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { buildServer } from "./server.js";
 import { createSeedStore } from "./seed.js";
+import { DerivedMetricStore } from "./derivedMetrics.js";
 
 const adaToken = "seed-token-ada";
 const buildingGptToken = "seed-token-buildinggpt";
 
 function bearer(value: string) {
   return { authorization: `Bearer ${value}` };
+}
+
+function isolatedDataEnv(): { BUILDING_AGENT_DATA_DIR: string } {
+  return { BUILDING_AGENT_DATA_DIR: mkdtempSync(path.join(tmpdir(), "ba-dashboard-derived-")) };
 }
 
 function dashboardPayload(overrides: Record<string, unknown> = {}) {
@@ -320,6 +328,131 @@ describe("dashboard project APIs", () => {
       expect.objectContaining({ kind: "stat_value", id: "plant_cop_stat" }),
       expect.objectContaining({ kind: "bar_comparison", id: "chiller_load_compare" })
     ]);
+  });
+
+  it("accepts derived metric bindings and serves derived latest/history batches", async () => {
+    const env = isolatedDataEnv();
+    const metrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    const metric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_04",
+      displayName: "WCC-04 System COP",
+      formula: "cooling_load_kw / power_kw",
+      dependencies: [
+        { role: "cooling_load_kw", sourceId: "WCC-L1-04_Q" },
+        { role: "power_kw", sourceId: "WCC-L1-04_P" }
+      ]
+    });
+    metrics.recordSample({
+      instanceId: metric.instance.instanceId,
+      ts: "2026-06-26T01:00:00.000Z",
+      valueNum: 4.6
+    });
+    metrics.recordSample({
+      instanceId: metric.instance.instanceId,
+      ts: "2026-06-26T01:15:00.000Z",
+      valueNum: 4.8
+    });
+
+    const app = buildServer({ store: createSeedStore(), env });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        title: "COP comparison",
+        widgets: [
+          {
+            id: "system_cop_stat",
+            kind: "stat_value",
+            title: "System COP",
+            pointBindings: [{
+              source: "derived_metric",
+              metricInstanceId: metric.instance.instanceId,
+              label: "System COP",
+              unit: ""
+            }]
+          },
+          {
+            id: "system_cop_trend",
+            kind: "timeseries_chart",
+            title: "System COP Trend",
+            pointBindings: [{
+              source: "derived_metric",
+              metricKey: "system_cop",
+              entityId: "WCC_04",
+              label: "System COP",
+              unit: ""
+            }]
+          }
+        ],
+        layout: [
+          { widgetId: "system_cop_stat", x: 0, y: 0, w: 2, h: 2 },
+          { widgetId: "system_cop_trend", x: 2, y: 0, w: 6, h: 4 }
+        ]
+      })
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().dashboard.widgets[0].pointBindings[0]).toMatchObject({
+      source: "derived_metric",
+      metricInstanceId: metric.instance.instanceId,
+      label: "System COP"
+    });
+
+    const latest = await app.inject({
+      method: "POST",
+      url: "/api/bms/dashboard/latest-batch",
+      headers: bearer(adaToken),
+      payload: {
+        queries: [{
+          key: "cop-latest",
+          source: "derived_metric",
+          metric_instance_id: metric.instance.instanceId
+        }]
+      }
+    });
+    expect(latest.statusCode).toBe(200);
+    expect(latest.json().results).toEqual([
+      expect.objectContaining({
+        key: "cop-latest",
+        ok: true,
+        point: expect.objectContaining({
+          name: `derived:${metric.instance.instanceId}`,
+          last_value: "4.8",
+          last_polled_at: "2026-06-26T01:15:00.000Z"
+        })
+      })
+    ]);
+
+    const history = await app.inject({
+      method: "POST",
+      url: "/api/bms/dashboard/history-batch",
+      headers: bearer(adaToken),
+      payload: {
+        queries: [{
+          key: "cop-history",
+          source: "derived_metric",
+          metric_key: "system_cop",
+          entity_id: "WCC_04",
+          from: "2026-06-26T00:00:00.000Z",
+          to: "2026-06-26T02:00:00.000Z"
+        }]
+      }
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json().results[0]).toMatchObject({
+      key: "cop-history",
+      ok: true,
+      total: 2,
+      items: [
+        expect.objectContaining({ value_num: 4.6, object_ref: metric.instance.instanceId }),
+        expect.objectContaining({ value_num: 4.8, object_ref: metric.instance.instanceId })
+      ]
+    });
   });
 
   it("accepts note dashboard widgets without point bindings", async () => {

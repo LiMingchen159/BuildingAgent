@@ -43,9 +43,13 @@ export interface BmsCollectorTimeseriesResponse {
 
 export interface BmsDashboardHistoryBatchQuery {
   key: string;
+  source?: "bms" | "derived_metric";
   name?: string;
   point_id?: string;
   object_ref?: string;
+  metric_instance_id?: string;
+  metric_key?: string;
+  entity_id?: string;
   from: string;
   to?: string;
   range?: string;
@@ -58,6 +62,25 @@ export interface BmsDashboardHistoryBatchResult {
   ok: boolean;
   total: number;
   items: BmsCollectorTimeseriesRow[];
+  error?: string;
+}
+
+export interface BmsDashboardLatestBatchQuery {
+  key: string;
+  source?: "bms" | "derived_metric";
+  name?: string;
+  point_id?: string;
+  object_ref?: string;
+  metric_instance_id?: string;
+  metric_key?: string;
+  entity_id?: string;
+}
+
+export interface BmsDashboardLatestBatchResult {
+  key: string;
+  ok: boolean;
+  total: number;
+  point: BmsCollectorPoint | null;
   error?: string;
 }
 
@@ -192,4 +215,31 @@ export async function queryBmsDashboardHistoryBatch(
     throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS dashboard history batch response." }, 200);
   }
   return payload as { results: BmsDashboardHistoryBatchResult[]; requestId: string };
+}
+
+export async function queryBmsDashboardLatestBatch(
+  token: string,
+  queries: BmsDashboardLatestBatchQuery[],
+  init: RequestInit = {}
+): Promise<{ results: BmsDashboardLatestBatchResult[]; requestId: string }> {
+  const headers = new Headers(authHeaders(token));
+  headers.set("content-type", "application/json");
+  const response = await fetch("/api/bms/dashboard/latest-batch", {
+    ...init,
+    method: "POST",
+    headers,
+    body: JSON.stringify({ queries })
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error?: { message?: string } }).error?.message ?? "BMS dashboard latest batch failed.")
+        : "BMS dashboard latest batch failed.";
+    throw new ApiClientError({ code: "bms_collector_error", message: detail }, response.status);
+  }
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { results?: unknown[] }).results) || typeof (payload as { requestId?: unknown }).requestId !== "string") {
+    throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS dashboard latest batch response." }, 200);
+  }
+  return payload as { results: BmsDashboardLatestBatchResult[]; requestId: string };
 }
