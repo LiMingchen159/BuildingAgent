@@ -11,6 +11,7 @@ import { AgentToolRegistry } from "./agent/tools.js";
 import { ProviderError, PROVIDER_UNAVAILABLE_MESSAGE, type ChatProvider } from "./providers.js";
 import { buildServer } from "./server.js";
 import { createSeedStore } from "./seed.js";
+import { DerivedMetricStore } from "./derivedMetrics.js";
 
 const adaToken = "seed-token-ada";
 const graceToken = "seed-token-grace";
@@ -701,6 +702,274 @@ describe("project-scoped chat contract", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("runs the derived metric COP workflow through chat and reuses persisted values for later dashboards", async () => {
+    const buildinggptToken = "seed-token-buildinggpt";
+    const env = isolatedDataEnv();
+    const store = createSeedStore();
+    const seedMetrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    const loadMetric = seedMetrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "cooling_load_kw",
+      entityId: "WCC_09",
+      formula: "source cooling load",
+      dependencies: [{ role: "source", sourceType: "raw_point", sourceId: "WCC-L1-09_Q" }]
+    });
+    const powerMetric = seedMetrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "power_kw",
+      entityId: "WCC_09",
+      formula: "source chiller power",
+      dependencies: [{ role: "source", sourceType: "raw_point", sourceId: "WCC-L1-09_P" }]
+    });
+    for (const [ts, load, power] of [
+      ["2026-06-26T00:00:00.000Z", 100, 25],
+      ["2026-06-26T00:15:00.000Z", 120, 30]
+    ] as const) {
+      seedMetrics.recordSample({ instanceId: loadMetric.instance.instanceId, ts, valueNum: load });
+      seedMetrics.recordSample({ instanceId: powerMetric.instance.instanceId, ts, valueNum: power });
+    }
+
+    let persistedSystemCopInstanceId = "";
+    type ProviderMessages = Parameters<ChatProvider["complete"]>[0]["messages"];
+    const parseToolResult = (index: number, messages: ProviderMessages): Record<string, unknown> => {
+      const message = messages[index];
+      return JSON.parse(typeof message?.content === "string" ? message.content : "{}") as Record<string, unknown>;
+    };
+    const dashboardWidgets = (instanceId: string) => [
+      {
+        kind: "bar_comparison",
+        title: "WCC-09 COP side by side",
+        pointBindings: [
+          { source: "bms", pointName: "WCC-L1-09_COP", label: "BMS COP", unit: "COP" },
+          { source: "derived_metric", metricInstanceId: instanceId, metricKey: "system_cop", entityId: "WCC_09", label: "System COP", unit: "COP" }
+        ]
+      },
+      {
+        kind: "timeseries_chart",
+        title: "WCC-09 COP trend",
+        defaultTimeRange: "24h",
+        pointBindings: [
+          { source: "bms", pointName: "WCC-L1-09_COP", label: "BMS COP", unit: "COP" },
+          { source: "derived_metric", metricInstanceId: instanceId, metricKey: "system_cop", entityId: "WCC_09", label: "System COP", unit: "COP" }
+        ]
+      }
+    ];
+    const provider: ChatProvider = {
+      metadata: { id: "derived-dashboard-real", mode: "real", model: "dashboard-model", status: "configured" },
+      async complete(request) {
+        const firstMessage = request.messages[0]?.content;
+        if (typeof firstMessage === "string" && firstMessage.includes("Summarize this chat")) {
+          return {
+            text: "COP dashboard",
+            provider: provider.metadata,
+            fallbackUsed: false
+          };
+        }
+
+        const requestMessages: ProviderMessages = request.messages;
+        const toolMessages = requestMessages.filter((message) => message.role === "tool");
+        const lastUserText = String(requestMessages.filter((message) => message.role === "user").at(-1)?.content ?? "");
+        const reuseRequest = /again|existing|saved|再次|已经保存|不要重新计算/i.test(lastUserText);
+        if (toolMessages.length === 0) {
+          expect(request.messages[0]?.content).toContain("DERIVED METRICS");
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: reuseRequest ? "call_reuse_lookup" : "call_lookup",
+              type: "function",
+              function: {
+                name: "derived_metric_lookup",
+                arguments: JSON.stringify({ metricKey: "system_cop", entityId: "WCC_09", limit: 1 })
+              }
+            }]
+          };
+        }
+
+        if (!reuseRequest) {
+          if (toolMessages.length === 1) {
+            const lookupResult = parseToolResult(0, toolMessages);
+            expect(lookupResult.total).toBe(0);
+            return {
+              text: "",
+              provider: provider.metadata,
+              fallbackUsed: false,
+              toolCalls: [{
+                id: "call_calculate",
+                type: "function",
+                function: {
+                  name: "derived_metric_calculate",
+                  arguments: JSON.stringify({
+                    metricKey: "system_cop",
+                    entityId: "WCC_09",
+                    displayName: "WCC-09 System COP",
+                    unit: "COP",
+                    formulaKind: "ratio",
+                    numeratorRole: "cooling_load_kw",
+                    denominatorRole: "power_kw",
+                    from: "2026-06-26T00:00:00.000Z",
+                    to: "2026-06-26T01:00:00.000Z",
+                    dependencies: [
+                      { role: "cooling_load_kw", sourceType: "metric", sourceId: loadMetric.instance.instanceId },
+                      { role: "power_kw", sourceType: "metric", sourceId: powerMetric.instance.instanceId }
+                    ]
+                  })
+                }
+              }]
+            };
+          }
+          if (toolMessages.length === 2) {
+            const calculateResult = parseToolResult(1, toolMessages);
+            const instance = calculateResult.instance as { instanceId?: string } | undefined;
+            persistedSystemCopInstanceId = instance?.instanceId ?? "";
+            expect(persistedSystemCopInstanceId).toMatch(/^minst_/);
+            expect(calculateResult).toMatchObject({
+              created: true,
+              calculated: true,
+              sampleCount: 2,
+              latest: { valueNum: 4 }
+            });
+            return {
+              text: "",
+              provider: provider.metadata,
+              fallbackUsed: false,
+              toolCalls: [{
+                id: "call_dashboard",
+                type: "function",
+                function: {
+                  name: "dashboard_create",
+                  arguments: JSON.stringify({
+                    title: "WCC-09 COP comparison dashboard",
+                    description: "Compare BMS COP with system-calculated COP.",
+                    widgets: dashboardWidgets(persistedSystemCopInstanceId)
+                  })
+                }
+              }]
+            };
+          }
+          return {
+            text: "Dashboard created with BMS COP and persisted System COP.",
+            provider: provider.metadata,
+            fallbackUsed: false
+          };
+        }
+
+        if (toolMessages.length === 1) {
+          const lookupResult = parseToolResult(0, toolMessages);
+          expect(lookupResult).toMatchObject({ total: 1 });
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_reuse_read",
+              type: "function",
+              function: {
+                name: "derived_metric_read",
+                arguments: JSON.stringify({
+                  metricKey: "system_cop",
+                  entityId: "WCC_09",
+                  mode: "both",
+                  from: "2026-06-26T00:00:00.000Z",
+                  to: "2026-06-26T01:00:00.000Z",
+                  order: "asc"
+                })
+              }
+            }]
+          };
+        }
+        if (toolMessages.length === 2) {
+          const readResult = parseToolResult(1, toolMessages);
+          const instance = readResult.instance as { instanceId?: string } | undefined;
+          expect(instance?.instanceId).toBe(persistedSystemCopInstanceId);
+          expect(readResult).toMatchObject({
+            latest: { valueNum: 4 },
+            history: [{ valueNum: 4 }, { valueNum: 4 }]
+          });
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_reuse_dashboard",
+              type: "function",
+              function: {
+                name: "dashboard_create",
+                arguments: JSON.stringify({
+                  title: "WCC-09 COP comparison dashboard reused",
+                  description: "Reuse the persisted System COP without recalculation.",
+                  widgets: dashboardWidgets(persistedSystemCopInstanceId)
+                })
+              }
+            }]
+          };
+        }
+        return {
+          text: "Dashboard created by reusing the stored System COP.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider, env });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(buildinggptToken) });
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/chat",
+      headers: bearer(buildinggptToken),
+      payload: { message: "请比较 WCC-09 的 BMS COP 和系统自己计算的 COP，并做成 dashboard" }
+    });
+
+    expect(first.statusCode).toBe(201);
+    const firstLifecycleTools = first.json().lifecycle
+      .filter((event: { type?: string; metadata?: { tool?: string } }) => event.type === "tool_started" && event.metadata?.tool)
+      .map((event: { metadata: { tool: string } }) => event.metadata.tool);
+    expect(firstLifecycleTools).toEqual(expect.arrayContaining([
+      "derived_metric_lookup",
+      "derived_metric_calculate",
+      "dashboard_create"
+    ]));
+    const dashboardsAfterFirst = store.dashboardsByProject.project_element ?? [];
+    expect(dashboardsAfterFirst.at(-1)?.widgets.flatMap((widget) => widget.pointBindings)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "bms", pointName: "WCC-L1-09_COP" }),
+      expect.objectContaining({ source: "derived_metric", metricInstanceId: persistedSystemCopInstanceId })
+    ]));
+
+    const metricsAfterFirst = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    const persistedMetrics = metricsAfterFirst.lookup({ projectId: "project_element", metricKey: "system_cop", entityId: "WCC_09" });
+    expect(persistedMetrics).toHaveLength(1);
+    expect(metricsAfterFirst.readHistory(persistedMetrics[0]!.instanceId, { order: "asc" }).map((sample) => sample.valueNum)).toEqual([4, 4]);
+    const projectMemory = new AgentMemoryStore(env.BUILDING_AGENT_DATA_DIR).readBank("project_element", "user_buildinggpt", "project").entries;
+    expect(projectMemory.filter((entry) => entry.includes("WCC_09/system_cop"))).toHaveLength(1);
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/chat",
+      headers: bearer(buildinggptToken),
+      payload: {
+        conversationId: first.json().conversationId,
+        message: "请再次用已经保存的 System COP 做一个 dashboard，不要重新计算"
+      }
+    });
+
+    expect(second.statusCode).toBe(201);
+    const secondLifecycleTools = second.json().lifecycle
+      .filter((event: { type?: string; metadata?: { tool?: string } }) => event.type === "tool_started" && event.metadata?.tool)
+      .map((event: { metadata: { tool: string } }) => event.metadata.tool);
+    expect(secondLifecycleTools).toEqual(expect.arrayContaining([
+      "derived_metric_lookup",
+      "derived_metric_read",
+      "dashboard_create"
+    ]));
+    expect(secondLifecycleTools).not.toContain("derived_metric_calculate");
+    expect(store.dashboardsByProject.project_element).toHaveLength(2);
+    expect(metricsAfterFirst.readHistory(persistedMetrics[0]!.instanceId, { order: "asc" }).map((sample) => sample.valueNum)).toEqual([4, 4]);
+    expect(new AgentMemoryStore(env.BUILDING_AGENT_DATA_DIR).readBank("project_element", "user_buildinggpt", "project").entries
+      .filter((entry) => entry.includes("WCC_09/system_cop"))).toHaveLength(1);
   });
 
   it("places conditional dashboard notes in a Notes section without requiring layout input", async () => {
