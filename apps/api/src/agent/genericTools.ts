@@ -20,6 +20,7 @@ import type { ChatMessage } from "../seed.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
+import type { DerivedMetricDependencyInput, DerivedMetricStore } from "../derivedMetrics.js";
 import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
 import { parseCancelCommand, parseListCommand, parseTimeExpression, nextCronTime } from "../scheduler.js";
 import type { ProcessRegistry } from "./processRegistry.js";
@@ -718,6 +719,46 @@ function appendGeneratedOutputHints(
 
 const MEMORY_ACTIONS = new Set<MemoryAction>(["add", "replace", "remove", "read", "clear"]);
 const MEMORY_TARGETS = new Set<MemoryTarget>(["user", "project"]);
+const DERIVED_METRIC_SOURCE_TYPES = new Set(["raw_point", "metric"]);
+
+function normalizeDerivedMetricDependency(value: unknown): DerivedMetricDependencyInput | null {
+  if (!isPlainRecord(value)) return null;
+  const role = stringValue(value.role);
+  const sourceId = stringValueFrom(value, ["sourceId", "source_id", "pointName", "point_name", "name", "metricInstanceId", "metric_instance_id"]);
+  if (!role || !sourceId) return null;
+  const sourceTypeRaw = stringValueFrom(value, ["sourceType", "source_type"]);
+  const sourceType = DERIVED_METRIC_SOURCE_TYPES.has(sourceTypeRaw) ? sourceTypeRaw as DerivedMetricDependencyInput["sourceType"] : undefined;
+  const dependency: DerivedMetricDependencyInput = { role, sourceId };
+  if (sourceType) dependency.sourceType = sourceType;
+  const pointName = stringValueFrom(value, ["pointName", "point_name", "name"]);
+  if (pointName) dependency.pointName = pointName;
+  const objectRef = stringValueFrom(value, ["objectRef", "object_ref"]);
+  if (objectRef) dependency.objectRef = objectRef;
+  const unit = stringValue(value.unit);
+  if (unit) dependency.unit = unit;
+  const label = stringValue(value.label);
+  if (label) dependency.label = label;
+  if (isPlainRecord(value.metadata)) dependency.metadata = value.metadata;
+  return dependency;
+}
+
+function derivedMetricPointerContent(instance: {
+  instanceId: string;
+  metricKey: string;
+  entityId: string;
+  formulaVersion: string;
+  formula: string;
+  dependencies: Array<{ role: string; sourceId: string }>;
+}): string {
+  const dependencies = instance.dependencies.map((dependency) => `${dependency.role}=${dependency.sourceId}`).join(", ");
+  return [
+    `Derived metric persisted: ${instance.entityId}/${instance.metricKey}`,
+    `metric_instance_id=${instance.instanceId}`,
+    `formula=${instance.formulaVersion}: ${instance.formula}`,
+    dependencies ? `dependencies=${dependencies}` : "",
+    "Use derived_metric_read before recalculating."
+  ].filter(Boolean).join("; ");
+}
 
 export function createGenericToolRegistry(
   memory: AgentMemoryStore,
@@ -728,7 +769,8 @@ export function createGenericToolRegistry(
   projectGroundingBindings?: ProjectGroundingBindings,
   projectFeedbackBindings?: ProjectFeedbackBindings,
   sessionIndex?: SessionSearchIndex,
-  projectMemoryProposalBindings?: ProjectMemoryProposalBindings
+  projectMemoryProposalBindings?: ProjectMemoryProposalBindings,
+  derivedMetrics?: DerivedMetricStore
 ): AgentToolRegistry {
   const registry = new AgentToolRegistry();
   const tools: AgentTool[] = [
@@ -914,6 +956,241 @@ export function createGenericToolRegistry(
           } satisfies AgentTool
         ]
       : []),
+    {
+      name: "derived_metric_lookup",
+      category: "building",
+      description: "Look up persisted derived metrics before calculating new KPI/COP/Delta T values.",
+      schema: {
+        name: "derived_metric_lookup",
+        description:
+          "Search project-scoped derived metric instances. Use before recalculating System COP, Delta T, FD scores, or KPIs.",
+        parameters: {
+          type: "object",
+          properties: {
+            metricKey: { type: "string", description: "Metric key, e.g. system_cop or delta_t." },
+            entityId: { type: "string", description: "Entity/equipment id, e.g. WCC_01." },
+            query: { type: "string", description: "Optional fuzzy query across metric/entity/display name." },
+            limit: { type: "number", description: "Max rows, default 20." }
+          }
+        }
+      },
+      async run(args, context) {
+        if (!derivedMetrics) {
+          return { error: "derived_metrics_unavailable" };
+        }
+        const metrics = derivedMetrics.lookup({
+          projectId: context.projectId,
+          ...(textArg(args, "metricKey") ? { metricKey: textArg(args, "metricKey") } : {}),
+          ...(textArg(args, "entityId") ? { entityId: textArg(args, "entityId") } : {}),
+          ...(textArg(args, "query") ? { query: textArg(args, "query") } : {}),
+          limit: numArg(args, "limit", 20)
+        });
+        return {
+          total: metrics.length,
+          metrics,
+          reuseHint: metrics.length > 0
+            ? "Reuse an existing metric_instance_id with derived_metric_read instead of recalculating/registering a duplicate."
+            : "No persisted derived metric matched; calculate only if needed, then ask whether to persist/register it."
+        };
+      }
+    },
+    {
+      name: "derived_metric_register",
+      category: "building",
+      description: "Persist a reusable calculated metric definition/instance and write a project-memory pointer.",
+      schema: {
+        name: "derived_metric_register",
+        description:
+          "Register a durable derived metric after the user agrees to persist it. Duplicate project/entity/metricKey registrations return the existing metric.",
+        parameters: {
+          type: "object",
+          properties: {
+            metricKey: { type: "string", description: "Stable metric key, e.g. system_cop, delta_t." },
+            entityId: { type: "string", description: "Entity/equipment id, e.g. WCC_01." },
+            entityName: { type: "string", description: "Human readable entity name." },
+            displayName: { type: "string", description: "Metric display name." },
+            unit: { type: "string", description: "Metric unit." },
+            metricType: { type: "string", description: "derived, kpi, fd_score, etc." },
+            formulaVersion: { type: "string", description: "Formula version, default v1." },
+            formula: { type: "string", description: "Formula expression or concise calculation rule." },
+            formulaDescription: { type: "string", description: "Plain-language formula description." },
+            dependencies: {
+              type: "array",
+              description:
+                "Dependencies [{role, sourceType: raw_point|metric, sourceId, pointName?, objectRef?, unit?, label?}]."
+            },
+            metadata: { type: "object", description: "Optional metadata." }
+          },
+          required: ["metricKey", "entityId", "formula", "dependencies"]
+        }
+      },
+      async run(args, context) {
+        if (!derivedMetrics) {
+          return { error: "derived_metrics_unavailable" };
+        }
+        if (!context.canConfigure) {
+          return boundsViolationResult("derived_metric_register requires project:configure.");
+        }
+        const dependencies = Array.isArray(args.dependencies)
+          ? args.dependencies.map((entry) => normalizeDerivedMetricDependency(entry)).filter((entry): entry is DerivedMetricDependencyInput => entry !== null)
+          : [];
+        if (dependencies.length === 0) {
+          return { error: "dependencies are required" };
+        }
+        const metadata = isPlainRecord(args.metadata) ? args.metadata : undefined;
+        try {
+          const result = derivedMetrics.registerMetric({
+            projectId: context.projectId,
+            metricKey: textArg(args, "metricKey"),
+            entityId: textArg(args, "entityId"),
+            formula: textArg(args, "formula"),
+            dependencies,
+            ...(textArg(args, "entityName") ? { entityName: textArg(args, "entityName") } : {}),
+            ...(textArg(args, "displayName") ? { displayName: textArg(args, "displayName") } : {}),
+            ...(textArg(args, "unit") ? { unit: textArg(args, "unit") } : {}),
+            ...(textArg(args, "metricType") ? { metricType: textArg(args, "metricType") } : {}),
+            ...(textArg(args, "formulaVersion") ? { formulaVersion: textArg(args, "formulaVersion") } : {}),
+            ...(textArg(args, "formulaDescription") ? { formulaDescription: textArg(args, "formulaDescription") } : {}),
+            createdBy: context.userId,
+            ...(metadata ? { metadata } : {})
+          });
+          const pointer = derivedMetricPointerContent(result.instance);
+          const memoryResult = memory.runAction(
+            context.projectId,
+            context.userId,
+            context.conversationId,
+            "add",
+            "project",
+            { content: pointer, canConfigure: context.canConfigure }
+          );
+          return {
+            ...result,
+            memoryPointer: {
+              content: pointer,
+              result: memoryResult
+            },
+            reuseHint: result.created
+              ? "Metric persisted. Future requests should call derived_metric_lookup/read first."
+              : "Existing metric reused; do not recalculate or register a duplicate."
+          };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : "derived_metric_register_failed" };
+        }
+      }
+    },
+    {
+      name: "derived_metric_record_sample",
+      category: "building",
+      description: "Record a calculated derived metric value into metric_samples and metric_latest.",
+      schema: {
+        name: "derived_metric_record_sample",
+        description: "Persist a calculated derived metric sample. Use after registering/finding a metric instance.",
+        parameters: {
+          type: "object",
+          properties: {
+            instanceId: { type: "string", description: "Derived metric instance id." },
+            ts: { type: "string", description: "Timestamp ISO8601." },
+            valueNum: { type: "number", description: "Numeric value." },
+            valueText: { type: "string", description: "Text value if not numeric." },
+            quality: { type: "string", description: "Quality, default good." },
+            status: { type: "string", description: "Status, default ok." },
+            calculationRunId: { type: "string", description: "Optional calculation run id." },
+            sourceWindowStart: { type: "string", description: "Source data window start." },
+            sourceWindowEnd: { type: "string", description: "Source data window end." },
+            metadata: { type: "object", description: "Optional metadata." }
+          },
+          required: ["instanceId", "ts"]
+        }
+      },
+      async run(args, context) {
+        if (!derivedMetrics) {
+          return { error: "derived_metrics_unavailable" };
+        }
+        if (!context.canConfigure) {
+          return boundsViolationResult("derived_metric_record_sample requires project:configure.");
+        }
+        try {
+          const value = args.valueNum;
+          const sample = derivedMetrics.recordSample({
+            instanceId: textArg(args, "instanceId"),
+            ts: textArg(args, "ts"),
+            ...(typeof value === "number" && Number.isFinite(value) ? { valueNum: value } : {}),
+            ...(textArg(args, "valueText") ? { valueText: textArg(args, "valueText") } : {}),
+            ...(textArg(args, "quality") ? { quality: textArg(args, "quality") } : {}),
+            ...(textArg(args, "status") ? { status: textArg(args, "status") } : {}),
+            ...(textArg(args, "calculationRunId") ? { calculationRunId: textArg(args, "calculationRunId") } : {}),
+            ...(textArg(args, "sourceWindowStart") ? { sourceWindowStart: textArg(args, "sourceWindowStart") } : {}),
+            ...(textArg(args, "sourceWindowEnd") ? { sourceWindowEnd: textArg(args, "sourceWindowEnd") } : {}),
+            ...(isPlainRecord(args.metadata) ? { metadata: args.metadata } : {})
+          });
+          return { sample };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : "derived_metric_record_sample_failed" };
+        }
+      }
+    },
+    {
+      name: "derived_metric_read",
+      category: "building",
+      description: "Read a persisted derived metric instance with latest/history samples.",
+      schema: {
+        name: "derived_metric_read",
+        description:
+          "Read a derived metric by instanceId or by metricKey+entityId. Supports latest and history.",
+        parameters: {
+          type: "object",
+          properties: {
+            instanceId: { type: "string", description: "Metric instance id." },
+            metricKey: { type: "string", description: "Metric key if instanceId is unknown." },
+            entityId: { type: "string", description: "Entity id if instanceId is unknown." },
+            mode: { type: "string", enum: ["latest", "history", "both"], description: "Default latest." },
+            from: { type: "string", description: "History start ISO8601." },
+            to: { type: "string", description: "History end ISO8601." },
+            limit: { type: "number", description: "History limit." },
+            order: { type: "string", enum: ["asc", "desc"], description: "History order." }
+          }
+        }
+      },
+      async run(args, context) {
+        if (!derivedMetrics) {
+          return { error: "derived_metrics_unavailable" };
+        }
+        const instanceId = textArg(args, "instanceId");
+        const metricKey = textArg(args, "metricKey");
+        const entityId = textArg(args, "entityId");
+        if (!instanceId && (!metricKey || !entityId)) {
+          return { error: "instanceId or metricKey+entityId is required" };
+        }
+        const instance = instanceId
+          ? derivedMetrics.getInstance(instanceId)
+          : derivedMetrics.lookup({
+              projectId: context.projectId,
+              metricKey,
+              entityId,
+              limit: 1
+            })[0] ?? null;
+        if (!instance) {
+          return { error: "derived_metric_not_found" };
+        }
+        const mode = textArg(args, "mode") || "latest";
+        const includeHistory = mode === "history" || mode === "both";
+        const includeLatest = mode !== "history";
+        return {
+          instance,
+          ...(includeLatest ? { latest: derivedMetrics.readLatest(instance.instanceId) } : {}),
+          ...(includeHistory
+            ? {
+                history: derivedMetrics.readHistory(instance.instanceId, {
+                  ...(textArg(args, "from") ? { from: textArg(args, "from") } : {}),
+                  ...(textArg(args, "to") ? { to: textArg(args, "to") } : {}),
+                  limit: numArg(args, "limit", 720),
+                  order: textArg(args, "order") === "desc" ? "desc" : "asc"
+                })
+              }
+            : {})
+        };
+      }
+    },
     {
       name: "session_summary",
       category: "session",

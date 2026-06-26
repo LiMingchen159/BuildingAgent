@@ -6,6 +6,7 @@ export const RUNTIME_SKILL_IDS = [
   "environment-setup",
   "skill_tool_data_bridge",
   "skill_chart_quality",
+  "skill_derived_metrics",
   "skill_dashboard_generation"
 ] as const;
 

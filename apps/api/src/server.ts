@@ -64,6 +64,7 @@ import {
   restoreFeedbackSequence
 } from "./projectFeedback.js";
 import { createEmbeddingProvider } from "./embeddingProvider.js";
+import { DerivedMetricStore } from "./derivedMetrics.js";
 import { GroundingRuleIndex } from "./groundingRuleIndex.js";
 import { hasConfigurePermission, platformBoundsPayload } from "./platformBounds.js";
 import {
@@ -1484,6 +1485,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const embeddingProvider = createEmbeddingProvider(env, fetchProxy);
   const groundingRuleIndex = new GroundingRuleIndex(dataRoot(env), embeddingProvider);
   groundingRuleIndex.rebuildFromStore(store);
+  const derivedMetrics = new DerivedMetricStore(dataRoot(env));
   const skills = createGenericSkillRegistry();
   const projectSkillBindings = createProjectSkillBindings(store, persistSoon);
   const projectGroundingBindings = createProjectGroundingBindings(store, persistSoon, {
@@ -1611,7 +1613,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     projectGroundingBindings,
     projectFeedbackBindings,
     sessionIndex,
-    projectMemoryProposalBindings
+    projectMemoryProposalBindings,
+    derivedMetrics
   );
   tools.enableLogging(dataRoot(env));
   const agentRuntime = new AgentRuntime({

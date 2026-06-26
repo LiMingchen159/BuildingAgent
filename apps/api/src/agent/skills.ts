@@ -261,6 +261,14 @@ export function createGenericSkillRegistry(): AgentSkillRegistry {
       "BMS DATA ROUTING (always on): NAMES → KB_CATALOG_SUMMARY.md §1.1–§2 only (COP §2.3.1, Plant `WCC-L1-0n_COP` not `WCC_n_COP`); never bms_points_query×8 to build inventories. POINT PICK: match the question — running → Run_Status+TLKW; leaving CHW temp → Chilled_Water_Temp or SUWT; COP → Plant layer (e.g. WCC-L1-04_COP), not HL `WCC_n_COP`. TOOLS: history/trend/batch/>3 points or last_value → bms_timeseries_query / bms_points_query; ≤3 live/alarm → bms_live_read; unknown name → bms_points_query(q=, limit=20). Relative time → copy from/to from CURRENT TIME CALENDAR RANGES; re-fetch every turn. Local DB = one readings timeline (backfill + 15-min poll, no source param); last_value ~15 min lag unless live read. Parallel tool calls. Do not read_file API docs unless tools fail."
   });
   registry.register({
+    id: "skill_derived_metrics",
+    name: "Derived metrics registry",
+    domain: "building",
+    description: "Reuse persisted calculated metrics such as System COP, Delta T, FD scores, and KPIs.",
+    promptHint:
+      "DERIVED METRICS: For calculated/reusable values (System COP, Delta T, kW/RT, FD score, KPI), call derived_metric_lookup first using project/entity/metricKey. If found, use derived_metric_read and do NOT recalculate/register a duplicate. If missing and the user asks for a one-off calculation, calculate from source BMS points and ask whether to persist. Only after explicit persistence intent/approval and project:configure, call derived_metric_register with formula + dependencies, then derived_metric_record_sample for calculated values. Curated memory stores only the metric pointer; timeseries values live in derived metrics storage."
+  });
+  registry.register({
     id: "skill_dashboard_generation",
     name: "Dashboard generation",
     domain: "building",
