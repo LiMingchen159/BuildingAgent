@@ -2,11 +2,16 @@ export type DashboardVisibility = "private" | "project";
 export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart" | "stat_value" | "bar_comparison" | "note";
 export type DashboardSectionKind = "overview" | "comparison" | "trends" | "custom";
 export type DashboardNoteTone = "yellow" | "blue" | "green" | "pink" | "neutral";
+export type DashboardPointSource = "bms" | "derived_metric";
 
 export interface DashboardPointBinding {
   id?: string;
+  source?: DashboardPointSource;
   pointName?: string;
   objectRef?: string;
+  metricInstanceId?: string;
+  metricKey?: string;
+  entityId?: string;
   label?: string;
   role?: "supply" | "return" | "other";
   unit?: string;
@@ -99,15 +104,47 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function stringFrom(value: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const candidate = asString(value[key])?.trim();
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
+function normalizeBindingSource(value: unknown): DashboardPointSource | undefined {
+  if (value === "derived_metric" || value === "derived" || value === "metric") return "derived_metric";
+  if (value === "bms" || value === "raw_point" || value === "point") return "bms";
+  return undefined;
+}
+
 function sanitizeBinding(value: unknown): DashboardPointBinding | null {
   if (!isRecord(value)) return null;
   const pointName = asString(value.pointName)?.trim();
   const objectRef = asString(value.objectRef)?.trim();
-  if (!pointName && !objectRef) return null;
+  const metricInstanceId = stringFrom(value, ["metricInstanceId", "metric_instance_id", "instanceId", "instance_id"]);
+  const metricKey = stringFrom(value, ["metricKey", "metric_key"]);
+  const entityId = stringFrom(value, ["entityId", "entity_id"]);
+  const source = normalizeBindingSource(value.source) ?? (metricInstanceId || metricKey || entityId ? "derived_metric" : "bms");
   const role = asString(value.role);
   const normalizedRole = role === "supply" || role === "return" || role === "other" ? role : undefined;
+  if (source === "derived_metric") {
+    if (!metricInstanceId && (!metricKey || !entityId)) return null;
+    return {
+      ...(asString(value.id)?.trim() ? { id: asString(value.id)!.trim() } : {}),
+      source,
+      ...(metricInstanceId ? { metricInstanceId } : {}),
+      ...(metricKey ? { metricKey } : {}),
+      ...(entityId ? { entityId } : {}),
+      ...(asString(value.label)?.trim() ? { label: asString(value.label)!.trim() } : {}),
+      ...(normalizedRole ? { role: normalizedRole } : {}),
+      ...(asString(value.unit)?.trim() ? { unit: asString(value.unit)!.trim() } : {})
+    };
+  }
+  if (!pointName && !objectRef) return null;
   return {
     ...(asString(value.id)?.trim() ? { id: asString(value.id)!.trim() } : {}),
+    ...(source === "bms" && asString(value.source)?.trim() ? { source } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
     ...(asString(value.label)?.trim() ? { label: asString(value.label)!.trim() } : {}),

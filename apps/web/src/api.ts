@@ -110,11 +110,16 @@ export type DashboardVisibility = "private" | "project";
 export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart" | "stat_value" | "bar_comparison" | "note";
 export type DashboardSectionKind = "overview" | "comparison" | "trends" | "custom";
 export type DashboardNoteTone = "yellow" | "blue" | "green" | "pink" | "neutral";
+export type DashboardPointSource = "bms" | "derived_metric";
 
 export interface DashboardPointBinding {
   id?: string;
+  source?: DashboardPointSource;
   pointName?: string;
   objectRef?: string;
+  metricInstanceId?: string;
+  metricKey?: string;
+  entityId?: string;
   label?: string;
   role?: "supply" | "return" | "other";
   unit?: string;
@@ -1274,11 +1279,24 @@ function parseDashboardPointBinding(value: unknown): DashboardPointBinding | nul
   if (!isRecord(value)) return null;
   const pointName = typeof value.pointName === "string" ? value.pointName : undefined;
   const objectRef = typeof value.objectRef === "string" ? value.objectRef : undefined;
-  if (!pointName && !objectRef) return null;
+  const metricInstanceId = typeof value.metricInstanceId === "string" ? value.metricInstanceId : undefined;
+  const metricKey = typeof value.metricKey === "string" ? value.metricKey : undefined;
+  const entityId = typeof value.entityId === "string" ? value.entityId : undefined;
+  const source = value.source === "derived_metric" || metricInstanceId || metricKey || entityId
+    ? "derived_metric"
+    : value.source === "bms"
+      ? "bms"
+      : undefined;
+  if (source === "derived_metric" && !metricInstanceId && (!metricKey || !entityId)) return null;
+  if (source !== "derived_metric" && !pointName && !objectRef) return null;
   return {
     ...(typeof value.id === "string" ? { id: value.id } : {}),
+    ...(source ? { source } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
+    ...(metricInstanceId ? { metricInstanceId } : {}),
+    ...(metricKey ? { metricKey } : {}),
+    ...(entityId ? { entityId } : {}),
     ...(typeof value.label === "string" ? { label: value.label } : {}),
     ...(value.role === "supply" || value.role === "return" || value.role === "other" ? { role: value.role } : {}),
     ...(typeof value.unit === "string" ? { unit: value.unit } : {})

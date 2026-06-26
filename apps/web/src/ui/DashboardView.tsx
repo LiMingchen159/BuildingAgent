@@ -5,7 +5,7 @@ import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import "uplot/dist/uPlot.min.css";
 import type { DashboardLayoutItem, DashboardNoteTone, DashboardPointBinding, DashboardRecord, DashboardSection, DashboardVisibility } from "../api";
-import { getBmsCollectorLastValue, queryBmsDashboardHistoryBatch, type BmsCollectorPoint, type BmsCollectorTimeseriesRow } from "../bmsCollectorClient";
+import { queryBmsDashboardHistoryBatch, queryBmsDashboardLatestBatch, type BmsCollectorPoint, type BmsCollectorTimeseriesRow, type BmsDashboardHistoryBatchQuery, type BmsDashboardLatestBatchQuery } from "../bmsCollectorClient";
 import { Badge, EmptyState, Surface } from "./primitives";
 
 type DashboardWidget = DashboardRecord["widgets"][number];
@@ -191,10 +191,18 @@ function formatHktAxisTick(value: number, range: RangeKey): string {
 }
 
 function pointDisplayName(binding: DashboardPointBinding): string {
-  return binding.label || binding.pointName || binding.objectRef || "Point";
+  return binding.label || binding.pointName || binding.objectRef || [binding.entityId, binding.metricKey].filter(Boolean).join(" ") || binding.metricInstanceId || "Point";
+}
+
+function bindingIsDerivedMetric(binding: DashboardPointBinding): boolean {
+  return binding.source === "derived_metric" || Boolean(binding.metricInstanceId || binding.metricKey || binding.entityId);
 }
 
 function pointKey(binding: DashboardPointBinding): string {
+  if (bindingIsDerivedMetric(binding)) {
+    if (binding.metricInstanceId) return `derived:${binding.metricInstanceId}`;
+    if (binding.metricKey && binding.entityId) return `derived:${binding.entityId}:${binding.metricKey}`;
+  }
   return binding.pointName || binding.objectRef || "";
 }
 
@@ -622,8 +630,12 @@ function chartWidgetSignature(widget: DashboardWidget): string {
     widget.defaultTimeRange ?? "",
     widget.pointBindings.map((binding) => [
       binding.id ?? "",
+      binding.source ?? "",
       binding.pointName ?? "",
       binding.objectRef ?? "",
+      binding.metricInstanceId ?? "",
+      binding.metricKey ?? "",
+      binding.entityId ?? "",
       binding.label ?? "",
       binding.role ?? "",
       binding.unit ?? ""
@@ -634,7 +646,7 @@ function chartWidgetSignature(widget: DashboardWidget): string {
 function chartWidgetDataSignature(widget: DashboardWidget): string {
   return [
     widget.id,
-    widget.pointBindings.map((binding, index) => `${index}:${pointKey(binding) || binding.id || ""}`).join(";")
+    widget.pointBindings.map((binding, index) => `${index}:${pointKey(binding) || binding.id || ""}:${binding.source ?? ""}`).join(";")
   ].join(":");
 }
 
@@ -723,6 +735,63 @@ function toChartPoints(rows: BmsCollectorTimeseriesRow[]): Array<{ ts: string; v
       return Number.isFinite(numeric) ? { ts: row.ts, value: numeric } : null;
     })
     .filter((entry): entry is { ts: string; value: number } => entry !== null);
+}
+
+function historyQueryForBinding(
+  binding: DashboardPointBinding,
+  key: string,
+  from: string,
+  to: string,
+  range: RangeKey,
+  limit: string
+): BmsDashboardHistoryBatchQuery | null {
+  if (bindingIsDerivedMetric(binding)) {
+    if (!binding.metricInstanceId && (!binding.metricKey || !binding.entityId)) return null;
+    return {
+      key,
+      source: "derived_metric",
+      ...(binding.metricInstanceId ? { metric_instance_id: binding.metricInstanceId } : {}),
+      ...(binding.metricKey ? { metric_key: binding.metricKey } : {}),
+      ...(binding.entityId ? { entity_id: binding.entityId } : {}),
+      from,
+      to,
+      range,
+      limit,
+      order: "asc"
+    };
+  }
+  if (!binding.pointName && !binding.objectRef) return null;
+  return {
+    key,
+    source: "bms",
+    ...(binding.pointName ? { name: binding.pointName } : {}),
+    ...(binding.objectRef ? { object_ref: binding.objectRef } : {}),
+    from,
+    to,
+    range,
+    limit,
+    order: "asc"
+  };
+}
+
+function latestQueryForBinding(binding: DashboardPointBinding, key: string): BmsDashboardLatestBatchQuery | null {
+  if (bindingIsDerivedMetric(binding)) {
+    if (!binding.metricInstanceId && (!binding.metricKey || !binding.entityId)) return null;
+    return {
+      key,
+      source: "derived_metric",
+      ...(binding.metricInstanceId ? { metric_instance_id: binding.metricInstanceId } : {}),
+      ...(binding.metricKey ? { metric_key: binding.metricKey } : {}),
+      ...(binding.entityId ? { entity_id: binding.entityId } : {})
+    };
+  }
+  if (!binding.pointName && !binding.objectRef) return null;
+  return {
+    key,
+    source: "bms",
+    ...(binding.pointName ? { name: binding.pointName } : {}),
+    ...(binding.objectRef ? { object_ref: binding.objectRef } : {})
+  };
 }
 
 function widgetValues(
@@ -1892,17 +1961,7 @@ export function DashboardView({
         const from = new Date(now.getTime() - hoursForRange(job.range) * 60 * 60 * 1000);
         const limit = job.range === "7d" ? "1400" : "720";
         return job.widget.pointBindings.map((binding, index) => {
-          const pointName = pointKey(binding);
-          if (!pointName) return null;
-          return {
-            key: `${job.widget.id}:${index}`,
-            name: pointName,
-            from: from.toISOString(),
-            to: now.toISOString(),
-            range: job.range,
-            limit,
-            order: "asc" as const
-          };
+          return historyQueryForBinding(binding, `${job.widget.id}:${index}`, from.toISOString(), now.toISOString(), job.range, limit);
         }).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
       });
       const resultByKey = new Map<string, BmsCollectorTimeseriesRow[]>();
@@ -1985,20 +2044,38 @@ export function DashboardView({
     async function pollFallbackValues() {
       if (polling || abortController.signal.aborted) return;
       polling = true;
-      const pointNames = new Set(
-        dashboard.widgets.flatMap((widget) => widget.pointBindings.map((binding) => binding.pointName).filter((entry): entry is string => Boolean(entry)))
-      );
-      if (pointNames.size === 0) {
+      const queryByKey = new Map<string, BmsDashboardLatestBatchQuery>();
+      for (const widget of dashboard.widgets) {
+        for (const binding of widget.pointBindings) {
+          const key = pointKey(binding);
+          if (!key || queryByKey.has(key)) continue;
+          const query = latestQueryForBinding(binding, key);
+          if (query) queryByKey.set(key, query);
+        }
+      }
+      const queries = [...queryByKey.values()];
+      if (queries.length === 0) {
         polling = false;
         return;
       }
       try {
-        const values = await Promise.all([...pointNames].map(async (pointName) => [
-          pointName,
-          await getBmsCollectorLastValue(token, pointName, { signal: abortController.signal })
-        ] as const));
+        const batches = await Promise.all(
+          Array.from({ length: Math.ceil(queries.length / 64) }, (_value, index) =>
+            queryBmsDashboardLatestBatch(token, queries.slice(index * 64, index * 64 + 64), { signal: abortController.signal })
+          )
+        );
         if (cancelled || abortController.signal.aborted) return;
-        setFallbackLiveValues(Object.fromEntries(values.filter((entry): entry is [string, BmsCollectorPoint] => Boolean(entry[1]))));
+        const values = new Map<string, BmsCollectorPoint>();
+        for (const batch of batches) {
+          for (const result of batch.results) {
+            if (!result.ok || !result.point) continue;
+            values.set(result.key, {
+              ...result.point,
+              name: result.key
+            });
+          }
+        }
+        setFallbackLiveValues(Object.fromEntries(values));
       } catch (error) {
         if (!cancelled && !abortController.signal.aborted && !isAbortLikeError(error)) {
           setFallbackLiveValues({});

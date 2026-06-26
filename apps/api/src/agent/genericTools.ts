@@ -100,14 +100,28 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
 
   const pointName = stringValueFrom(value, ["pointName", "point_name", "name", "point"]);
   const objectRef = stringValueFrom(value, ["objectRef", "object_ref", "ref"]);
-  if (!pointName && !objectRef) return null;
+  const metricInstanceId = stringValueFrom(value, ["metricInstanceId", "metric_instance_id", "instanceId", "instance_id"]);
+  const metricKey = stringValueFrom(value, ["metricKey", "metric_key"]);
+  const entityId = stringValueFrom(value, ["entityId", "entity_id", "equipmentId", "equipment_id"]);
+  const sourceRaw = stringValueFrom(value, ["source", "sourceType", "source_type", "type"]);
+  const source = sourceRaw === "derived_metric" || sourceRaw === "derived" || sourceRaw === "metric" || metricInstanceId || metricKey || entityId
+    ? "derived_metric"
+    : sourceRaw === "bms" || sourceRaw === "raw_point" || sourceRaw === "point"
+      ? "bms"
+      : undefined;
+  if (source === "derived_metric" && !metricInstanceId && (!metricKey || !entityId)) return null;
+  if (source !== "derived_metric" && !pointName && !objectRef) return null;
 
   const label = stringValueFrom(value, ["label", "title", "name"]);
   const role = stringValue(value.role);
   const unit = stringValue(value.unit);
   return {
+    ...(source ? { source } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
+    ...(metricInstanceId ? { metricInstanceId } : {}),
+    ...(metricKey ? { metricKey } : {}),
+    ...(entityId ? { entityId } : {}),
     ...(label && label !== pointName ? { label } : {}),
     ...(role ? { role } : {}),
     ...(unit ? { unit } : {})
@@ -171,6 +185,7 @@ function normalizeDashboardWidget(value: unknown, index: number): Record<string,
 
 function equipmentLabelFromBinding(binding: Record<string, unknown>): string | null {
   const source = [
+    stringValue(binding.entityId),
     stringValue(binding.pointName),
     stringValue(binding.objectRef),
     stringValue(binding.label)
