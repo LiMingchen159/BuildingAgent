@@ -248,6 +248,9 @@ export class DerivedMetricStore {
         entity_name TEXT,
         display_name TEXT NOT NULL,
         unit TEXT,
+        formula_version TEXT,
+        formula TEXT,
+        formula_description TEXT,
         status TEXT NOT NULL,
         created_by TEXT,
         metadata_json TEXT,
@@ -314,6 +317,48 @@ export class DerivedMetricStore {
       CREATE INDEX IF NOT EXISTS idx_metric_latest_project
         ON metric_latest(project_id, ts);
     `);
+    this.ensureMetricInstanceLineageColumns();
+  }
+
+  private ensureMetricInstanceLineageColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(metric_instances)").all() as Array<{ name: string }>)
+        .map((column) => column.name)
+    );
+    const requiredColumns: Array<[name: string, type: string]> = [
+      ["formula_version", "TEXT"],
+      ["formula", "TEXT"],
+      ["formula_description", "TEXT"]
+    ];
+    for (const [name, type] of requiredColumns) {
+      if (!columns.has(name)) {
+        this.db.prepare(`ALTER TABLE metric_instances ADD COLUMN ${name} ${type}`).run();
+      }
+    }
+
+    // Existing databases stored formula lineage only on the shared metric version.
+    // Snapshot it onto each instance so later entities cannot overwrite it.
+    this.db.exec(`
+      UPDATE metric_instances
+      SET
+        formula_version = COALESCE(
+          formula_version,
+          (SELECT v.version FROM metric_versions v WHERE v.version_id = metric_instances.version_id)
+        ),
+        formula = COALESCE(
+          formula,
+          (SELECT v.formula FROM metric_versions v WHERE v.version_id = metric_instances.version_id)
+        ),
+        formula_description = CASE
+          WHEN formula IS NULL THEN COALESCE(
+            formula_description,
+            (SELECT v.formula_description FROM metric_versions v WHERE v.version_id = metric_instances.version_id)
+          )
+          ELSE formula_description
+        END
+      WHERE formula_version IS NULL
+         OR formula IS NULL
+    `);
   }
 
   registerMetric(input: DerivedMetricRegisterInput): DerivedMetricRegisterResult {
@@ -331,9 +376,9 @@ export class DerivedMetricStore {
     }
 
     const now = new Date().toISOString();
-    const definitionId = stableId("mdef", [projectId, metricKey], 18);
+    let definitionId = stableId("mdef", [projectId, metricKey], 18);
     const version = optional(input.formulaVersion) ?? "v1";
-    const versionId = stableId("mver", [definitionId, version], 18);
+    let versionId = stableId("mver", [definitionId, version], 18);
     const instanceId = stableId("minst", [projectId, entityId, metricKey], 22);
     const metricType = optional(input.metricType) ?? "derived";
     const displayName = optional(input.displayName) ?? `${entityId} ${metricKey}`;
@@ -363,6 +408,12 @@ export class DerivedMetricStore {
         created_at: now,
         updated_at: now
       });
+      const definitionRow = this.db.prepare(`
+        SELECT definition_id FROM metric_definitions
+        WHERE project_id = ? AND metric_key = ?
+      `).get(projectId, metricKey) as { definition_id: string } | undefined;
+      definitionId = definitionRow?.definition_id ?? definitionId;
+      versionId = stableId("mver", [definitionId, version], 18);
 
       this.db.prepare(`
         INSERT INTO metric_versions (
@@ -383,14 +434,21 @@ export class DerivedMetricStore {
         metadata_json: metadataJson,
         created_at: now
       });
+      const versionRow = this.db.prepare(`
+        SELECT version_id FROM metric_versions
+        WHERE definition_id = ? AND version = ?
+      `).get(definitionId, version) as { version_id: string } | undefined;
+      versionId = versionRow?.version_id ?? versionId;
 
       this.db.prepare(`
         INSERT INTO metric_instances (
           instance_id, project_id, definition_id, version_id, metric_key, entity_id, entity_name,
-          display_name, unit, status, created_by, metadata_json, created_at, updated_at
+          display_name, unit, formula_version, formula, formula_description, status, created_by,
+          metadata_json, created_at, updated_at
         ) VALUES (
           @instance_id, @project_id, @definition_id, @version_id, @metric_key, @entity_id, @entity_name,
-          @display_name, @unit, @status, @created_by, @metadata_json, @created_at, @updated_at
+          @display_name, @unit, @formula_version, @formula, @formula_description, @status, @created_by,
+          @metadata_json, @created_at, @updated_at
         )
       `).run({
         instance_id: instanceId,
@@ -402,6 +460,9 @@ export class DerivedMetricStore {
         entity_name: optional(input.entityName),
         display_name: displayName,
         unit: optional(input.unit),
+        formula_version: version,
+        formula,
+        formula_description: optional(input.formulaDescription),
         status: "active",
         created_by: optional(input.createdBy),
         metadata_json: metadataJson,
@@ -610,7 +671,9 @@ export class DerivedMetricStore {
       SELECT
         i.instance_id, i.project_id, i.definition_id, i.version_id, i.metric_key,
         d.metric_type, i.entity_id, i.entity_name, i.display_name, i.unit,
-        v.version AS formula_version, v.formula, v.formula_description,
+        COALESCE(i.formula_version, v.version) AS formula_version,
+        COALESCE(i.formula, v.formula) AS formula,
+        COALESCE(i.formula_description, v.formula_description) AS formula_description,
         i.status, i.created_by, i.created_at, i.updated_at, i.metadata_json
       FROM metric_instances i
       JOIN metric_definitions d ON d.definition_id = i.definition_id
