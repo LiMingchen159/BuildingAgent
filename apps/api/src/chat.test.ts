@@ -625,17 +625,7 @@ describe("project-scoped chat contract", () => {
                       kind: "live_value_grid",
                       title: "All chillers live temperatures",
                       points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp", "CH-02_Supply_Water_Temp", "CH-02_Return_Water_Temp"]
-                    },
-                    {
-                      kind: "timeseries_chart",
-                      title: "All chillers historical trend",
-                      defaultTimeRange: "24h",
-                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp", "CH-02_Supply_Water_Temp", "CH-02_Return_Water_Temp"]
                     }
-                  ],
-                  layout: [
-                    { widgetIndex: 0, row: 1, col: 1, colSpan: 1 },
-                    { widgetIndex: 1, row: 1, col: 2, colSpan: 2 }
                   ]
                 })
               }
@@ -687,24 +677,98 @@ describe("project-scoped chat contract", () => {
       expect(createdDashboards).toHaveLength(1);
       expect(createdDashboards[0]).toMatchObject({
         title: "Chiller supply/return monitor",
-        visibility: "project",
-        widgets: [
-          expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-01") }),
-          expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-02") }),
+          visibility: "project",
+          layoutVersion: 2,
+          widgets: [
+            expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-01") }),
+            expect.objectContaining({ kind: "live_value_grid", title: expect.stringContaining("CH-02") }),
           expect.objectContaining({ kind: "timeseries_chart", title: expect.stringContaining("CH-01") }),
           expect.objectContaining({ kind: "timeseries_chart", title: expect.stringContaining("CH-02") })
         ]
-      });
+        });
       expect(createdDashboards[0]?.widgets).toHaveLength(4);
+      expect(createdDashboards[0]?.widgets.some((widget) => widget.kind === "note")).toBe(false);
+      expect(createdDashboards[0]?.sections).toEqual([
+        expect.objectContaining({ id: "overview", title: "Overview", kind: "overview", widgetIds: [expect.stringContaining("ch_01"), expect.stringContaining("ch_02")] }),
+        expect.objectContaining({ id: "trends", title: "Trends", kind: "trends", widgetIds: [expect.stringContaining("ch_01"), expect.stringContaining("ch_02")] })
+      ]);
       expect(createdDashboards[0]?.layout).toEqual([
-        expect.objectContaining({ x: 0, y: 0, w: 1, h: 1 }),
-        expect.objectContaining({ x: 1, y: 0, w: 1, h: 1 }),
-        expect.objectContaining({ x: 2, y: 0, w: 2, h: 1 }),
-        expect.objectContaining({ x: 4, y: 0, w: 2, h: 1 })
+        expect.objectContaining({ x: 0, y: 0, w: 3, h: 2 }),
+        expect.objectContaining({ x: 3, y: 0, w: 3, h: 2 }),
+        expect.objectContaining({ x: 0, y: 2, w: 6, h: 4 }),
+        expect.objectContaining({ x: 6, y: 2, w: 6, h: 4 })
       ]);
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("places conditional dashboard notes in a Notes section without requiring layout input", async () => {
+    const store = createSeedStore();
+    const provider: ChatProvider = {
+      metadata: { id: "dashboard-note-real", mode: "real", model: "dashboard-model", status: "configured" },
+      async complete(request) {
+        const toolMessages = request.messages.filter((message) => message.role === "tool");
+        if (toolMessages.length === 0) {
+          return {
+            text: "",
+            provider: provider.metadata,
+            fallbackUsed: false,
+            toolCalls: [{
+              id: "call_dashboard_note",
+              type: "function",
+              function: {
+                name: "dashboard_create",
+                arguments: JSON.stringify({
+                  title: "Chiller watch with note",
+                  widgets: [
+                    {
+                      kind: "live_value_grid",
+                      title: "CH-01 live temperatures",
+                      points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp"]
+                    },
+                    {
+                      kind: "note",
+                      title: "Operator note",
+                      content: "Return temperature sensor coverage should be verified before handover.",
+                      tone: "yellow"
+                    }
+                  ]
+                })
+              }
+            }]
+          };
+        }
+        return {
+          text: "Dashboard created with an operator note.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+
+    const app = buildServer({ store, chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat",
+      headers: bearer(adaToken),
+      payload: { message: "Create a dashboard and add a note about incomplete sensor coverage" }
+    });
+
+    expect(response.statusCode).toBe(201);
+    const dashboard = store.dashboardsByProject.project_alpha?.[0];
+    expect(dashboard?.widgets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "live_value_grid" }),
+      expect.objectContaining({ kind: "timeseries_chart" }),
+      expect.objectContaining({ kind: "note", content: expect.stringContaining("sensor coverage") })
+    ]));
+    expect(dashboard?.sections).toEqual([
+      expect.objectContaining({ id: "overview" }),
+      expect.objectContaining({ id: "trends" }),
+      expect.objectContaining({ id: "notes", kind: "custom", widgetIds: [expect.stringContaining("operator_note")] })
+    ]);
   });
 
   it("serves repository image files when auth is supplied via query token", async () => {

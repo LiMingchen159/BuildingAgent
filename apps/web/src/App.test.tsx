@@ -1,7 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import type { DashboardRecord } from "./api";
+import { DashboardView } from "./ui/DashboardView";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -58,9 +61,10 @@ function dashboardRecord(overrides: Record<string, unknown> = {}) {
     visibility: "private",
     title: "Plant temperature dashboard",
     description: "Supply and return monitoring for active chillers.",
+    layoutVersion: 2,
     layout: [
-      { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 1 },
-      { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 1 }
+      { widgetId: "live_supply_return", x: 0, y: 0, w: 3, h: 2 },
+      { widgetId: "trend_supply_return", x: 3, y: 0, w: 6, h: 4 }
     ],
     widgets: [
       {
@@ -285,6 +289,7 @@ async function loginAndSelectProject(user = userEvent.setup()) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   window.localStorage.clear();
 });
@@ -305,10 +310,11 @@ describe("BuildingGPT Web flow", () => {
 
     render(<App />);
 
-    expect(screen.getByRole("status", { name: /project list bootstrap phase/i })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /preparing buildinggpt workspace/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /choose a project to get started/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/startup shell only/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/checking your saved buildinggpt session/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/loading authorized projects|loading projects/i)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/bearer\s+seed-token-ada|seed-token-ada/i);
 
     session.resolve(jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" }));
@@ -1066,7 +1072,21 @@ describe("BuildingGPT Web flow", () => {
   });
 
   it("shows dashboards in the right sidebar, opens one, updates live values from websocket, and saves drag reorders", async () => {
-    const dashboard = dashboardRecord();
+    const dashboard = dashboardRecord({
+      sections: [{ id: "overview", title: "Overview", kind: "overview", widgetIds: ["live_supply_return", "trend_supply_return"] }]
+    }) as DashboardRecord;
+    const generatedDashboard = dashboardRecord({
+      id: "dashboard_generated",
+      title: "Generated chiller dashboard",
+      sourceConversationId: "conv_dashboard_source",
+      sections: [{ id: "overview", title: "Overview", kind: "overview", widgetIds: ["live_supply_return", "trend_supply_return"] }]
+    }) as DashboardRecord;
+    const otherConversationDashboard = dashboardRecord({
+      id: "dashboard_other_generated",
+      title: "Other conversation dashboard",
+      sourceConversationId: "conv_elsewhere",
+      sections: [{ id: "overview", title: "Overview", kind: "overview", widgetIds: ["live_supply_return", "trend_supply_return"] }]
+    }) as DashboardRecord;
     const patchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
 
     class MockWebSocket {
@@ -1110,10 +1130,27 @@ describe("BuildingGPT Web flow", () => {
         return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
       }
       if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") {
-        return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+        return jsonResponse({ messages: [], activeConversationId: "conv_dashboard_source", limit: 50, requestId: "req_chat" });
       }
       if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") {
         return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      }
+      if (url === "/api/projects/project_alpha/conversations" && init?.method === "POST") {
+        return jsonResponse({ conversation: { id: "conv_dashboard_source", title: "New conversation", messageCount: 0, createdAt: "2026-06-24T01:00:00.000Z" }, requestId: "req_new_conversation" }, 201);
+      }
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        return streamingResponse([
+          "event: token\ndata: " + JSON.stringify({ content: "Dashboard request acknowledged." }),
+          "event: done\ndata: " + JSON.stringify({
+            message: { id: "msg_dashboard_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Create a dashboard" },
+            assistantMessage: { id: "msg_dashboard_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Dashboard request acknowledged." },
+            conversationId: "conv_dashboard_source",
+            conversationTitle: "Chiller monitoring request",
+            provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
+            fallbackUsed: false,
+            requestId: "req_dashboard_stream"
+          })
+        ]);
       }
       if (url === "/api/registry") return jsonResponse(registryBody());
       if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
@@ -1133,10 +1170,29 @@ describe("BuildingGPT Web flow", () => {
           projectId: "project_alpha",
           dashboard: dashboardRecord({
             layout: nextLayout,
+            sections: Array.isArray(body.sections) ? body.sections : dashboard.sections,
             visibility: typeof body.visibility === "string" ? body.visibility : dashboard.visibility,
             updatedAt: "2026-06-24T03:00:00.000Z"
           }),
           requestId: "req_patch_dashboard"
+        });
+      }
+      if (url === "/api/bms/dashboard/history-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string; name?: string }> };
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => {
+            const isReturn = query.name?.includes("Return");
+            return {
+              key: query.key,
+              ok: true,
+              total: 2,
+              items: [
+                { ts: "2026-06-24T01:00:00.000Z", value_num: isReturn ? 47.4 : 42.0, name: query.name },
+                { ts: "2026-06-24T02:00:00.000Z", value_num: isReturn ? 47.1 : 41.8, name: query.name }
+              ]
+            };
+          }),
+          requestId: "req_history_batch"
         });
       }
       if (url.startsWith("/api/bms/collector/api/v1/readings?")) {
@@ -1160,6 +1216,13 @@ describe("BuildingGPT Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
     await loginAndSelectProject(user);
+    expect(screen.getByText("Dashboards").closest("details")).toHaveAttribute("open");
+    expect(screen.getByText(/Scheduled & rule-based tasks/i).closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Skills").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Tools").closest("details")).not.toHaveAttribute("open");
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), "Create a dashboard");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    expect(await screen.findByText("Dashboard request acknowledged.")).toBeInTheDocument();
 
     expect(screen.getByText(/dashboards/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /plant temperature dashboard/i }));
@@ -1185,23 +1248,372 @@ describe("BuildingGPT Web flow", () => {
         })
       } as MessageEvent);
     });
-    expect(await screen.findByText(/42\.6 degF/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/42\.6 degF/i)).length).toBeGreaterThan(0);
 
     const liveCard = screen.getByText("Live temperatures").closest("article");
     const trendCard = screen.getByText("Temperature history").closest("article");
     expect(liveCard).not.toBeNull();
     expect(trendCard).not.toBeNull();
-    fireEvent.dragStart(trendCard!);
+    await user.click(screen.getByRole("button", { name: /edit layout/i }));
+    const trendDragHandle = trendCard!.querySelector(".dashboard-panel-drag-handle");
+    expect(trendDragHandle).not.toBeNull();
+    fireEvent.dragStart(trendDragHandle!);
     fireEvent.dragOver(liveCard!);
     fireEvent.drop(liveCard!);
 
     await waitFor(() => {
       expect(patchCalls.length).toBeGreaterThan(0);
     });
-    expect(patchCalls.at(-1)?.body.layout).toEqual([
-      expect.objectContaining({ widgetId: "trend_supply_return", x: 0, y: 0, w: 2, h: 1 }),
-      expect.objectContaining({ widgetId: "live_supply_return", x: 2, y: 0, w: 1, h: 1 })
+    expect(patchCalls.at(-1)?.body.layout).toEqual(expect.arrayContaining([
+      expect.objectContaining({ widgetId: "trend_supply_return", x: 0, y: 0, w: 6, h: 4 }),
+      expect.objectContaining({ widgetId: "live_supply_return", x: 6, y: 0, w: 3, h: 2 })
+    ]));
+    expect(patchCalls.at(-1)?.body.layoutVersion).toBe(2);
+    expect(patchCalls.at(-1)?.body.sections).toEqual([
+      expect.objectContaining({ id: "overview", widgetIds: ["live_supply_return", "trend_supply_return"] })
     ]);
+
+    await act(async () => {
+      socket?.onmessage?.({
+        data: JSON.stringify({ type: "dashboard_created", dashboard: generatedDashboard })
+      } as MessageEvent);
+    });
+    expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_generated");
+    expect(await screen.findByRole("heading", { name: /generated chiller dashboard/i })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Dashboard created");
+
+    await act(async () => {
+      socket?.onmessage?.({
+        data: JSON.stringify({ type: "dashboard_created", dashboard: otherConversationDashboard })
+      } as MessageEvent);
+    });
+    expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_generated");
+    expect(screen.getByRole("button", { name: /other conversation dashboard/i })).toBeInTheDocument();
+  });
+
+  it("does not reload completed trend charts when unchanged dashboard objects are rerendered", async () => {
+    const dashboard = dashboardRecord({
+      layout: [
+        { widgetId: "trend_supply_return_cache", x: 0, y: 0, w: 2, h: 4 },
+        { widgetId: "trend_secondary_cache", x: 2, y: 0, w: 2, h: 4 }
+      ],
+      widgets: [
+        {
+          id: "trend_supply_return_cache",
+          kind: "timeseries_chart",
+          title: "Temperature history",
+          defaultTimeRange: "24h",
+          pointBindings: [
+            { pointName: "CH-21_Supply_Water_Temp", label: "CH-21 Supply", role: "supply", unit: "degF" },
+            { pointName: "CH-21_Return_Water_Temp", label: "CH-21 Return", role: "return", unit: "degF" }
+          ]
+        },
+        {
+          id: "trend_secondary_cache",
+          kind: "timeseries_chart",
+          title: "Secondary history",
+          defaultTimeRange: "24h",
+          pointBindings: [
+            { pointName: "CH-22_Supply_Water_Temp", label: "CH-22 Supply", role: "supply", unit: "degF" },
+            { pointName: "CH-22_Return_Water_Temp", label: "CH-22 Return", role: "return", unit: "degF" }
+          ]
+        }
+      ]
+    }) as DashboardRecord;
+    let batchCalls = 0;
+    const batchQueryKeys: string[][] = [];
+
+    installFetch((url, init) => {
+      if (url === "/api/bms/dashboard/history-batch" && init?.method === "POST") {
+        batchCalls += 1;
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string; name?: string }> };
+        batchQueryKeys.push((body.queries ?? []).map((query) => query.key));
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => {
+            const name = query.name ?? "Unknown_Point";
+            const offset = name.includes("Return") ? 5 : 0;
+            return {
+              key: query.key,
+              ok: true,
+              total: 2,
+              items: [
+                { ts: "2026-06-24T01:00:00.000Z", value_num: 41.8 + offset, name },
+                { ts: "2026-06-24T02:00:00.000Z", value_num: 42.1 + offset, name }
+              ]
+            };
+          }),
+          requestId: "req_history_batch"
+        });
+      }
+      if (url.startsWith("/api/bms/collector/api/v1/points?")) {
+        const name = new URL(`http://test.local${url}`).searchParams.get("q") ?? "Unknown_Point";
+        return jsonResponse({
+          total: 1,
+          items: [{ id: 101, name, last_value: "42.1", last_polled_at: "2026-06-24T02:00:00.000Z" }]
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const props = {
+      token: "seed-token-ada",
+      liveValues: {},
+      stale: false,
+      onLayoutChange: vi.fn(async () => undefined),
+      onVisibilityChange: vi.fn(async () => undefined)
+    };
+    const { rerender } = render(<DashboardView {...props} dashboard={dashboard} />);
+
+    await waitFor(() => expect(batchCalls).toBe(1));
+    expect([...(batchQueryKeys[0] ?? [])].sort()).toEqual([
+      "trend_supply_return_cache:0",
+      "trend_supply_return_cache:1",
+      "trend_secondary_cache:0",
+      "trend_secondary_cache:1"
+    ].sort());
+    await waitFor(() => expect(screen.queryAllByText(/Loading trend/i)).toHaveLength(0));
+    const initialBatchCalls = batchCalls;
+
+    rerender(<DashboardView {...props} dashboard={JSON.parse(JSON.stringify(dashboard)) as DashboardRecord} />);
+    await act(async () => undefined);
+
+    expect(batchCalls).toBe(initialBatchCalls);
+    expect(screen.queryAllByText(/Loading trend/i)).toHaveLength(0);
+  });
+
+  it("does not reload trend history when note placement changes reorder dashboard widgets", async () => {
+    const dashboard = dashboardRecord({
+      layout: [
+        { widgetId: "trend_supply_return", x: 0, y: 0, w: 6, h: 4 },
+        { widgetId: "trend_secondary", x: 6, y: 0, w: 6, h: 4 }
+      ],
+      widgets: [
+        {
+          id: "trend_supply_return",
+          kind: "timeseries_chart",
+          title: "Temperature history",
+          defaultTimeRange: "24h",
+          pointBindings: [
+            { pointName: "CH-11_Supply_Water_Temp", label: "CH-11 Supply", role: "supply", unit: "degF" },
+            { pointName: "CH-11_Return_Water_Temp", label: "CH-11 Return", role: "return", unit: "degF" }
+          ]
+        },
+        {
+          id: "trend_secondary",
+          kind: "timeseries_chart",
+          title: "Secondary history",
+          defaultTimeRange: "24h",
+          pointBindings: [
+            { pointName: "CH-12_Supply_Water_Temp", label: "CH-12 Supply", role: "supply", unit: "degF" },
+            { pointName: "CH-12_Return_Water_Temp", label: "CH-12 Return", role: "return", unit: "degF" }
+          ]
+        }
+      ],
+      sections: [
+        { id: "trends", title: "Trends", kind: "trends", widgetIds: ["trend_supply_return", "trend_secondary"] }
+      ]
+    }) as DashboardRecord;
+    let batchCalls = 0;
+
+    installFetch((url, init) => {
+      if (url === "/api/bms/dashboard/history-batch" && init?.method === "POST") {
+        batchCalls += 1;
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string; name?: string }> };
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({
+            key: query.key,
+            ok: true,
+            total: 2,
+            items: [
+              { ts: "2026-06-24T01:00:00.000Z", value_num: 41.8, name: query.name },
+              { ts: "2026-06-24T02:00:00.000Z", value_num: 42.1, name: query.name }
+            ]
+          })),
+          requestId: "req_history_batch"
+        });
+      }
+      if (url.startsWith("/api/bms/collector/api/v1/points?")) {
+        const name = new URL(`http://test.local${url}`).searchParams.get("q") ?? "Unknown_Point";
+        return jsonResponse({
+          total: 1,
+          items: [{ id: 101, name, last_value: "42.1", last_polled_at: "2026-06-24T02:00:00.000Z" }]
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const props = {
+      token: "seed-token-ada",
+      liveValues: {},
+      stale: false,
+      onLayoutChange: vi.fn(async () => undefined),
+      onVisibilityChange: vi.fn(async () => undefined)
+    };
+    const { rerender } = render(<DashboardView {...props} dashboard={dashboard} />);
+
+    await waitFor(() => expect(batchCalls).toBe(1));
+    await waitFor(() => expect(screen.queryAllByText(/Loading trend/i)).toHaveLength(0));
+
+    rerender(
+      <DashboardView
+        {...props}
+        dashboard={{
+          ...dashboard,
+          layout: [
+            { widgetId: "note_copy", x: 0, y: 0, w: 3, h: 2 },
+            { widgetId: "trend_supply_return", x: 0, y: 0, w: 6, h: 4 },
+            { widgetId: "trend_secondary", x: 6, y: 0, w: 6, h: 4 }
+          ],
+          widgets: [
+            {
+              id: "note_copy",
+              kind: "note",
+              title: "Operator note",
+              content: "Moved into overview.",
+              tone: "yellow",
+              pointBindings: []
+            },
+            dashboard.widgets[1]!,
+            dashboard.widgets[0]!
+          ],
+          sections: [
+            { id: "overview", title: "Overview", kind: "overview", widgetIds: ["note_copy"] },
+            { id: "trends", title: "Trends", kind: "trends", widgetIds: ["trend_supply_return", "trend_secondary"] }
+          ],
+          updatedAt: "2026-06-24T04:00:00.000Z"
+        }}
+      />
+    );
+    await act(async () => undefined);
+
+    expect(batchCalls).toBe(1);
+    expect(screen.queryAllByText(/Loading trend/i)).toHaveLength(0);
+  });
+
+  it("synthesizes independent dashboard sections for legacy dashboard specs", async () => {
+    const dashboard = dashboardRecord({
+      layoutVersion: undefined,
+      layout: [
+        { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 1 },
+        { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 1 }
+      ]
+    }) as DashboardRecord;
+
+    installFetch((url, init) => {
+      if (url === "/api/bms/dashboard/history-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string; name?: string }> };
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({
+            key: query.key,
+            ok: true,
+            total: 1,
+            items: [{ ts: "2026-06-24T02:00:00.000Z", value_num: 42.1, name: query.name }]
+          })),
+          requestId: "req_history_batch"
+        });
+      }
+      if (url.startsWith("/api/bms/collector/api/v1/points?")) {
+        const name = new URL(`http://test.local${url}`).searchParams.get("q") ?? "Unknown_Point";
+        return jsonResponse({
+          total: 1,
+          items: [{ id: 101, name, last_value: "42.1", last_polled_at: "2026-06-24T02:00:00.000Z" }]
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const { container } = render(
+      <DashboardView
+        token="seed-token-ada"
+        dashboard={dashboard}
+        liveValues={{}}
+        stale={false}
+        onLayoutChange={vi.fn(async () => undefined)}
+        onVisibilityChange={vi.fn(async () => undefined)}
+      />
+    );
+
+    expect(screen.getByText("Overview")).toBeInTheDocument();
+    expect(screen.getByText("Trends")).toBeInTheDocument();
+    const sections = [...container.querySelectorAll(".dashboard-section")];
+    expect(sections).toHaveLength(2);
+    expect(within(sections[0] as HTMLElement).getByText("Live temperatures")).toBeInTheDocument();
+    expect(within(sections[1] as HTMLElement).getByText("Temperature history")).toBeInTheDocument();
+    expect(sections[0]?.querySelector(".dashboard-grid")).not.toBe(sections[1]?.querySelector(".dashboard-grid"));
+  });
+
+  it("adds notes into the selected section and supports direct title and content editing", async () => {
+    const initialDashboard = dashboardRecord({
+      layout: [],
+      widgets: [],
+      sections: []
+    }) as DashboardRecord;
+    const patchCalls: DashboardRecord[] = [];
+
+    function DashboardHarness() {
+      const [dashboard, setDashboard] = useState<DashboardRecord>(initialDashboard);
+      return (
+        <DashboardView
+          token="seed-token-ada"
+          dashboard={dashboard}
+          liveValues={{}}
+          stale={false}
+          onDashboardChange={async (next) => {
+            const updated = {
+              ...dashboard,
+              ...next,
+              updatedAt: "2026-06-24T03:00:00.000Z"
+            } as DashboardRecord;
+            patchCalls.push(updated);
+            setDashboard(updated);
+          }}
+          onLayoutChange={vi.fn(async () => undefined)}
+          onVisibilityChange={vi.fn(async () => undefined)}
+        />
+      );
+    }
+
+    const user = userEvent.setup();
+    const { container } = render(<DashboardHarness />);
+
+    await user.click(screen.getByLabelText(/add widget/i));
+    await user.click(screen.getByRole("button", { name: "Note" }));
+    expect(screen.getByLabelText("Choose note section")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+
+    const noteDragHandle = await screen.findByRole("button", { name: /drag new note/i });
+    const placementPanel = noteDragHandle.closest("article");
+    expect(placementPanel).toHaveClass("is-placement-target");
+    expect(placementPanel?.querySelector(".dashboard-placement-drag-layer")).toBeInTheDocument();
+
+    fireEvent.mouseUp(placementPanel!.querySelector(".dashboard-placement-drag-layer")!);
+
+    await waitFor(() => {
+      expect(container.querySelector(".dashboard-placement-drag-layer")).not.toBeInTheDocument();
+    });
+
+    const titleInput = await screen.findByDisplayValue("New note");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Shift handoff");
+    fireEvent.blur(titleInput);
+
+    const contentInput = await screen.findByPlaceholderText("Click to add a note");
+    await user.type(contentInput, "Check CHW delta before tomorrow.");
+    fireEvent.blur(contentInput);
+
+    await waitFor(() => {
+      expect(patchCalls.at(-1)?.widgets).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: "note",
+          title: "Shift handoff",
+          content: "Check CHW delta before tomorrow."
+        })
+      ]));
+    });
+    expect(patchCalls.at(-1)?.sections).toEqual([
+      expect.objectContaining({ id: "overview", title: "Overview", widgetIds: [expect.any(String)] })
+    ]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("shows the BMS workspace entry and syncs the bms path", async () => {

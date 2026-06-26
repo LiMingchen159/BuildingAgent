@@ -107,7 +107,9 @@ export interface RepositoryArtifact {
 }
 
 export type DashboardVisibility = "private" | "project";
-export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart";
+export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart" | "stat_value" | "bar_comparison" | "note";
+export type DashboardSectionKind = "overview" | "comparison" | "trends" | "custom";
+export type DashboardNoteTone = "yellow" | "blue" | "green" | "pink" | "neutral";
 
 export interface DashboardPointBinding {
   id?: string;
@@ -132,6 +134,16 @@ export interface DashboardWidget {
   title: string;
   pointBindings: DashboardPointBinding[];
   defaultTimeRange?: string;
+  content?: string;
+  tone?: DashboardNoteTone;
+}
+
+export interface DashboardSection {
+  id: string;
+  title: string;
+  kind: DashboardSectionKind;
+  widgetIds: string[];
+  collapsed?: boolean;
 }
 
 export interface DashboardRecord {
@@ -141,8 +153,10 @@ export interface DashboardRecord {
   visibility: DashboardVisibility;
   title: string;
   description?: string;
+  layoutVersion?: number;
   layout: DashboardLayoutItem[];
   widgets: DashboardWidget[];
+  sections?: DashboardSection[];
   createdAt: string;
   updatedAt: string;
   sourceConversationId?: string;
@@ -531,10 +545,27 @@ function unavailable(): ApiClientError {
 }
 
 async function readJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (text.trim() === "") {
+    if (!response.ok) {
+      throw new ApiClientError({
+        code: "api_empty_response",
+        message: `API returned HTTP ${response.status} with an empty response.`
+      }, response.status);
+    }
+    return null;
+  }
+
   try {
-    return await response.json();
+    return JSON.parse(text) as unknown;
   } catch {
-    throw malformed();
+    const contentType = response.headers.get("content-type") ?? "unknown content type";
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 180);
+    const statusLabel = response.statusText ? `${response.status} ${response.statusText}` : `${response.status}`;
+    throw new ApiClientError({
+      code: "api_non_json_response",
+      message: `API returned HTTP ${statusLabel} as ${contentType}${snippet ? `: ${snippet}` : "."}`
+    }, response.status);
   }
 }
 
@@ -1265,19 +1296,42 @@ function parseDashboardWidget(value: unknown): DashboardWidget | null {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string" || !Array.isArray(value.pointBindings)) {
     return null;
   }
-  if (value.kind !== "live_value_grid" && value.kind !== "timeseries_chart") {
+  if (value.kind !== "live_value_grid" && value.kind !== "timeseries_chart" && value.kind !== "stat_value" && value.kind !== "bar_comparison" && value.kind !== "note") {
     return null;
   }
   const pointBindings = value.pointBindings.map((entry) => parseDashboardPointBinding(entry)).filter((entry): entry is DashboardPointBinding => entry !== null);
-  if (pointBindings.length !== value.pointBindings.length || pointBindings.length === 0) {
+  if (pointBindings.length !== value.pointBindings.length || (pointBindings.length === 0 && value.kind !== "note")) {
     return null;
   }
+  const tone = value.tone === "yellow" || value.tone === "blue" || value.tone === "green" || value.tone === "pink" || value.tone === "neutral" ? value.tone : undefined;
   return {
     id: value.id,
     kind: value.kind,
     title: value.title,
     pointBindings,
-    ...(typeof value.defaultTimeRange === "string" ? { defaultTimeRange: value.defaultTimeRange } : {})
+    ...(typeof value.defaultTimeRange === "string" ? { defaultTimeRange: value.defaultTimeRange } : {}),
+    ...(typeof value.content === "string" ? { content: value.content } : {}),
+    ...(tone ? { tone } : {})
+  };
+}
+
+function parseDashboardSection(value: unknown): DashboardSection | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string" || !Array.isArray(value.widgetIds)) {
+    return null;
+  }
+  if (value.kind !== "overview" && value.kind !== "comparison" && value.kind !== "trends" && value.kind !== "custom") {
+    return null;
+  }
+  const widgetIds = value.widgetIds.filter((entry): entry is string => typeof entry === "string");
+  if (widgetIds.length !== value.widgetIds.length || widgetIds.length === 0) {
+    return null;
+  }
+  return {
+    id: value.id,
+    title: value.title,
+    kind: value.kind,
+    widgetIds,
+    ...(typeof value.collapsed === "boolean" ? { collapsed: value.collapsed } : {})
   };
 }
 
@@ -1296,7 +1350,13 @@ function parseDashboardRecord(value: unknown): DashboardRecord | null {
   }
   const layout = value.layout.map((entry) => parseDashboardLayoutItem(entry)).filter((entry): entry is DashboardLayoutItem => entry !== null);
   const widgets = value.widgets.map((entry) => parseDashboardWidget(entry)).filter((entry): entry is DashboardWidget => entry !== null);
+  const sections = Array.isArray(value.sections)
+    ? value.sections.map((entry) => parseDashboardSection(entry)).filter((entry): entry is DashboardSection => entry !== null)
+    : undefined;
   if (layout.length !== value.layout.length || widgets.length !== value.widgets.length) {
+    return null;
+  }
+  if (Array.isArray(value.sections) && sections?.length !== value.sections.length) {
     return null;
   }
   return {
@@ -1306,8 +1366,10 @@ function parseDashboardRecord(value: unknown): DashboardRecord | null {
     visibility: value.visibility,
     title: value.title,
     ...(typeof value.description === "string" ? { description: value.description } : {}),
+    ...(typeof value.layoutVersion === "number" && Number.isFinite(value.layoutVersion) ? { layoutVersion: Math.trunc(value.layoutVersion) } : {}),
     layout,
     widgets,
+    ...(sections ? { sections } : {}),
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     ...(typeof value.sourceConversationId === "string" ? { sourceConversationId: value.sourceConversationId } : {})
@@ -1495,6 +1557,22 @@ export async function getDashboard(token: string, projectId: string, dashboardId
   return { dashboard: parsed, requestId: payload.requestId };
 }
 
+export async function createDashboard(token: string, projectId: string, payload: Partial<DashboardRecord> & Pick<DashboardRecord, "title" | "layout" | "widgets">): Promise<{ dashboard: DashboardRecord; path: string; requestId: string }> {
+  const response = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/dashboards`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  });
+  if (!isRecord(response) || typeof response.requestId !== "string" || typeof response.path !== "string") {
+    throw malformed("Dashboard create returned an unexpected response.");
+  }
+  const parsed = parseDashboardRecord(response.dashboard);
+  if (!parsed) {
+    throw malformed("Dashboard create returned an unexpected dashboard.");
+  }
+  return { dashboard: parsed, path: response.path, requestId: response.requestId };
+}
+
 export async function updateDashboard(token: string, projectId: string, dashboardId: string, payload: Partial<DashboardRecord> & Pick<DashboardRecord, "title" | "layout" | "widgets">): Promise<{ dashboard: DashboardRecord; requestId: string }> {
   const response = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`, {
     method: "PATCH",
@@ -1509,6 +1587,17 @@ export async function updateDashboard(token: string, projectId: string, dashboar
     throw malformed("Dashboard update returned an unexpected dashboard.");
   }
   return { dashboard: parsed, requestId: response.requestId };
+}
+
+export async function deleteDashboard(token: string, projectId: string, dashboardId: string): Promise<{ deleted: boolean; dashboardId: string; requestId: string }> {
+  const response = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(response) || typeof response.deleted !== "boolean" || typeof response.dashboardId !== "string" || typeof response.requestId !== "string") {
+    throw malformed("Dashboard delete returned an unexpected response.");
+  }
+  return { deleted: response.deleted, dashboardId: response.dashboardId, requestId: response.requestId };
 }
 
 export async function resetChat(token: string, projectId: string, conversationId?: string): Promise<ResetChatResponse> {

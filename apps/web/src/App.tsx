@@ -30,6 +30,7 @@ import {
   selectProject,
   sendChatMessage,
   sendChatMessageStream,
+  createDashboard,
   createProject,
   createConversation,
   getConversations,
@@ -37,6 +38,7 @@ import {
   deleteConversation,
   renameConversation,
   updateDashboard,
+  deleteDashboard,
   deleteProject,
   type DashboardRecord,
   type DashboardVisibility,
@@ -64,6 +66,7 @@ import type { BmsCollectorPoint } from "./bmsCollectorClient";
 const STORAGE_KEY = "building-agent.session.v1";
 /** Set after explicit login so bootstrap shows project picker instead of restoring URL/storage project. */
 const SKIP_PROJECT_RESTORE_KEY = "building-agent.skip-project-restore";
+const STARTUP_BURST_SEGMENTS = Array.from({ length: 12 }, (_, index) => index);
 
 function consumeSkipProjectRestore(): boolean {
   if (typeof window === "undefined") {
@@ -536,7 +539,7 @@ function ProjectPickerCard({ project, conversationCount, assetCount, busy, onSel
       </div>
       <dl className="project-picker-metrics" aria-label={`${project.name} project metrics`}>
         <div><dt><Icon name="message" />Conversations</dt><dd>{conversationCount}</dd></div>
-        <div><dt><Icon name="folder" />Assets</dt><dd>{assetCount.toLocaleString()}</dd></div>
+        <div><dt><Icon name="folder" />Assets</dt><dd>{assetCount.toLocaleString("en-US")}</dd></div>
       </dl>
       <div className="project-picker-card-footer">
         <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
@@ -560,7 +563,7 @@ function ProjectPickerListRow({ project, conversationCount, assetCount, busy, on
       </span>
       <span className={`project-picker-status is-${metrics.status.toLowerCase()}`}>{metrics.status}</span>
       <span>{conversationCount} conversations</span>
-      <span>{assetCount.toLocaleString()} assets</span>
+      <span>{assetCount.toLocaleString("en-US")} assets</span>
       <Icon name="arrow-up" />
     </button>
   );
@@ -740,27 +743,25 @@ function ProjectScreen({ projects, onSelect, onSignOut, onCreate, user, busy }: 
     </main>
   );
 }
-function ProjectScreenSkeleton() {
+
+function StartupBurstLoader({ className }: { className?: string }) {
   return (
-    <main className="workspace-card project-screen project-screen-skeleton minimal-project-shell" aria-labelledby="projects-skeleton-title" aria-busy="true">
-      <ParticleField className="minimal-particle-field" density={36} connectionDistance={145} opacity={0.1} />
-      <div className="project-screen-header minimal-project-header">
-        <div>
-          <CubeLogo size={34} className="minimal-project-logo" />
-          <p className="eyebrow">Project boundary</p>
-          <h1 id="projects-skeleton-title">Loading authorized projects...</h1>
-          <p className="muted">Fetching your authorized projects.</p>
+    <div className={["workspace-restoring-surface", className].filter(Boolean).join(" ")} role="status" aria-live="polite" aria-label="Preparing BuildingGPT workspace">
+      <div className="workspace-restoring-card">
+        <div className="workspace-restoring-burst" aria-hidden="true">
+          {STARTUP_BURST_SEGMENTS.map((segment) => (
+            <span key={segment} style={{ "--i": segment } as CSSProperties} />
+          ))}
         </div>
       </div>
-      <p className="minimal-loading-status project-status" role="status" aria-label="Project list bootstrap phase">
-        <span className="spinner" aria-hidden="true" />
-        Loading projects...
-      </p>
-      <div className="project-grid" aria-hidden="true">
-        <ProjectCardSkeleton />
-        <ProjectCardSkeleton />
-        <ProjectCardSkeleton />
-      </div>
+    </div>
+  );
+}
+
+function ProjectScreenSkeleton() {
+  return (
+    <main className="workspace-card project-screen project-screen-skeleton project-screen-startup minimal-project-shell" aria-busy="true">
+      <StartupBurstLoader />
     </main>
   );
 }
@@ -903,10 +904,89 @@ function sortDashboardsByUpdatedAt(dashboards: DashboardRecord[]): DashboardReco
   });
 }
 
+function dashboardLayoutSignature(layout: DashboardRecord["layout"]): string {
+  return [...layout]
+    .sort((left, right) => (left.y - right.y) || (left.x - right.x) || left.widgetId.localeCompare(right.widgetId))
+    .map((item) => `${item.widgetId}:${item.x}:${item.y}:${item.w}:${item.h}`)
+    .join("|");
+}
+
+function dashboardWidgetSignature(widget: DashboardRecord["widgets"][number]): string {
+  const bindings = widget.pointBindings
+    .map((binding) => [
+      binding.id ?? "",
+      binding.pointName ?? "",
+      binding.objectRef ?? "",
+      binding.label ?? "",
+      binding.role ?? "",
+      binding.unit ?? ""
+    ].join(","))
+    .join(";");
+  return [
+    widget.id,
+    widget.kind,
+    widget.title,
+    widget.defaultTimeRange ?? "",
+    widget.content ?? "",
+    widget.tone ?? "",
+    bindings
+  ].join(":");
+}
+
+function dashboardSectionSignature(sections: DashboardRecord["sections"] | undefined): string {
+  return (sections ?? [])
+    .map((section) => `${section.id}:${section.title}:${section.kind}:${section.collapsed ? "1" : "0"}:${section.widgetIds.join(",")}`)
+    .join("|");
+}
+
+function dashboardRecordSignature(dashboard: DashboardRecord): string {
+  return [
+    dashboard.id,
+    dashboard.projectId,
+    dashboard.ownerUserId,
+    dashboard.visibility,
+    dashboard.title,
+    dashboard.description ?? "",
+    String(dashboard.layoutVersion ?? ""),
+    dashboard.createdAt,
+    dashboard.updatedAt,
+    dashboard.sourceConversationId ?? "",
+    dashboardLayoutSignature(dashboard.layout),
+    dashboard.widgets.map(dashboardWidgetSignature).join("|"),
+    dashboardSectionSignature(dashboard.sections)
+  ].join("||");
+}
+
+function sameDashboardRecord(left: DashboardRecord, right: DashboardRecord): boolean {
+  return dashboardRecordSignature(left) === dashboardRecordSignature(right);
+}
+
+function sameDashboardList(left: DashboardRecord[], right: DashboardRecord[]): boolean {
+  return left.length === right.length && left.every((dashboard, index) => dashboard === right[index]);
+}
+
 function upsertDashboardRecord(dashboards: DashboardRecord[], dashboard: DashboardRecord): DashboardRecord[] {
-  const next = dashboards.filter((entry) => entry.id !== dashboard.id);
-  next.unshift(dashboard);
-  return sortDashboardsByUpdatedAt(next);
+  let found = false;
+  const next = dashboards.map((entry) => {
+    if (entry.id !== dashboard.id) return entry;
+    found = true;
+    return sameDashboardRecord(entry, dashboard) ? entry : dashboard;
+  });
+  if (!found) {
+    next.unshift(dashboard);
+  }
+  const sorted = sortDashboardsByUpdatedAt(next);
+  return sameDashboardList(dashboards, sorted) ? dashboards : sorted;
+}
+
+function mergeDashboardList(current: DashboardRecord[], incoming: DashboardRecord[]): DashboardRecord[] {
+  const currentById = new Map(current.map((dashboard) => [dashboard.id, dashboard]));
+  const merged = incoming.map((dashboard) => {
+    const existing = currentById.get(dashboard.id);
+    return existing && sameDashboardRecord(existing, dashboard) ? existing : dashboard;
+  });
+  const sorted = sortDashboardsByUpdatedAt(merged);
+  return sameDashboardList(current, sorted) ? current : sorted;
 }
 
 function dashboardPointNames(dashboard: DashboardRecord | null): string[] {
@@ -915,7 +995,289 @@ function dashboardPointNames(dashboard: DashboardRecord | null): string[] {
     widget.pointBindings
       .map((binding) => binding.pointName)
       .filter((value): value is string => Boolean(value))
-  ))];
+  ))].sort((left, right) => left.localeCompare(right));
+}
+
+type AppDashboardWidget = DashboardRecord["widgets"][number];
+type AppDashboardSection = NonNullable<DashboardRecord["sections"]>[number];
+const DASHBOARD_LAYOUT_VERSION = 2;
+
+function dashboardWidgetSectionInfo(widget: AppDashboardWidget): Pick<AppDashboardSection, "id" | "title" | "kind"> {
+  if (widget.kind === "timeseries_chart") return { id: "trends", title: "Trends", kind: "trends" };
+  if (widget.kind === "bar_comparison") return { id: "comparison", title: "Comparison", kind: "comparison" };
+  if (widget.kind === "note") return { id: "notes", title: "Notes", kind: "custom" };
+  return { id: "overview", title: "Overview", kind: "overview" };
+}
+
+function sectionsForDashboardSpec(dashboard: DashboardRecord): AppDashboardSection[] {
+  const widgetIds = new Set(dashboard.widgets.map((widget) => widget.id));
+  const usedWidgetIds = new Set<string>();
+  const explicitSections = (dashboard.sections ?? [])
+    .map((section) => ({ ...section, widgetIds: section.widgetIds.filter((widgetId) => widgetIds.has(widgetId)) }))
+    .filter((section) => section.widgetIds.length > 0);
+  for (const section of explicitSections) {
+    for (const widgetId of section.widgetIds) usedWidgetIds.add(widgetId);
+  }
+  const fallbackById = new Map<string, AppDashboardSection>();
+  for (const widget of dashboard.widgets) {
+    if (usedWidgetIds.has(widget.id)) continue;
+    const info = dashboardWidgetSectionInfo(widget);
+    const section = fallbackById.get(info.id) ?? { ...info, widgetIds: [] };
+    section.widgetIds.push(widget.id);
+    fallbackById.set(info.id, section);
+  }
+  return [
+    ...explicitSections,
+    ...["overview", "comparison", "trends", "notes"].map((id) => fallbackById.get(id)).filter((section): section is AppDashboardSection => Boolean(section))
+  ];
+}
+
+function widgetSlug(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "widget";
+}
+
+function uniqueDashboardWidgetId(baseId: string, existingIds: Set<string>): string {
+  const base = widgetSlug(baseId);
+  let candidate = `${base}-copy`;
+  let index = 2;
+  while (existingIds.has(candidate)) {
+    candidate = `${base}-copy-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function cloneWidgetIntoDashboard(widget: AppDashboardWidget, existingIds: Set<string>, titleSuffix = " Copy"): AppDashboardWidget {
+  const id = uniqueDashboardWidgetId(widget.id, existingIds);
+  existingIds.add(id);
+  return {
+    ...widget,
+    id,
+    title: `${widget.title}${titleSuffix}`,
+    pointBindings: widget.pointBindings.map((binding, index) => ({
+      ...binding,
+      ...(binding.id ? { id: `${binding.id}-copy-${index}` } : {})
+    }))
+  };
+}
+
+function defaultLayoutForDashboardWidget(widget: AppDashboardWidget, y: number): DashboardRecord["layout"][number] {
+  if (widget.kind === "timeseries_chart") return { widgetId: widget.id, x: 0, y, w: 6, h: 4 };
+  if (widget.kind === "bar_comparison") return { widgetId: widget.id, x: 0, y, w: 6, h: 3 };
+  if (widget.kind === "live_value_grid") return { widgetId: widget.id, x: 0, y, w: 3, h: widget.pointBindings.length > 2 ? 3 : 2 };
+  if (widget.kind === "note") return { widgetId: widget.id, x: 0, y, w: 3, h: 2 };
+  return { widgetId: widget.id, x: 0, y, w: 3, h: 2 };
+}
+
+function layoutMaxY(layout: DashboardRecord["layout"], widgetIds: string[]): number {
+  const ids = new Set(widgetIds);
+  return layout
+    .filter((item) => ids.has(item.widgetId))
+    .reduce((max, item) => Math.max(max, item.y + item.h), 0);
+}
+
+function normalizeLayoutForDashboardSections(layout: DashboardRecord["layout"], sections: AppDashboardSection[]): DashboardRecord["layout"] {
+  const layoutByWidgetId = new Map(layout.map((item) => [item.widgetId, item]));
+  return sections.flatMap((section) => {
+    const items = section.widgetIds
+      .map((widgetId) => layoutByWidgetId.get(widgetId))
+      .filter((item): item is DashboardRecord["layout"][number] => Boolean(item));
+    const minY = items.length > 0 ? Math.min(...items.map((item) => item.y)) : 0;
+    return items.map((item) => ({ ...item, y: Math.max(0, item.y - minY) }));
+  });
+}
+
+function sectionMatchKey(section: AppDashboardSection): string {
+  return section.kind === "custom" ? `custom:${section.id}` : section.kind;
+}
+
+function uniqueSectionId(baseId: string, sections: AppDashboardSection[]): string {
+  const existing = new Set(sections.map((section) => section.id));
+  const base = widgetSlug(baseId);
+  let candidate = base;
+  let index = 2;
+  while (existing.has(candidate)) {
+    candidate = `${base}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function mergeDashboardIntoTarget(source: DashboardRecord, target: DashboardRecord): {
+  layout: DashboardRecord["layout"];
+  widgets: DashboardRecord["widgets"];
+  sections: AppDashboardSection[];
+} {
+  const nextWidgets = [...target.widgets];
+  const nextSections = sectionsForDashboardSpec(target).map((section) => ({ ...section, widgetIds: [...section.widgetIds] }));
+  const nextLayout = normalizeLayoutForDashboardSections(target.layout, nextSections);
+  const sourceSections = sectionsForDashboardSpec(source);
+  const sourceLayoutByWidgetId = new Map(source.layout.map((item) => [item.widgetId, item]));
+  const existingWidgetIds = new Set(nextWidgets.map((widget) => widget.id));
+
+  for (const sourceSection of sourceSections) {
+    let targetSection = nextSections.find((section) => sectionMatchKey(section) === sectionMatchKey(sourceSection));
+    if (!targetSection) {
+      targetSection = {
+        id: uniqueSectionId(sourceSection.id, nextSections),
+        title: sourceSection.title,
+        kind: sourceSection.kind,
+        widgetIds: []
+      };
+      nextSections.push(targetSection);
+    }
+
+    const sourceLayoutItems = sourceSection.widgetIds
+      .map((widgetId) => sourceLayoutByWidgetId.get(widgetId))
+      .filter((item): item is DashboardRecord["layout"][number] => Boolean(item));
+    const minSourceY = sourceLayoutItems.length > 0 ? Math.min(...sourceLayoutItems.map((item) => item.y)) : 0;
+    const targetBaseY = layoutMaxY(nextLayout, targetSection.widgetIds);
+
+    for (const sourceWidgetId of sourceSection.widgetIds) {
+      const sourceWidget = source.widgets.find((widget) => widget.id === sourceWidgetId);
+      if (!sourceWidget) continue;
+      const clonedWidget = cloneWidgetIntoDashboard(sourceWidget, existingWidgetIds);
+      const sourceItem = sourceLayoutByWidgetId.get(sourceWidgetId) ?? defaultLayoutForDashboardWidget(sourceWidget, 0);
+      nextWidgets.push(clonedWidget);
+      targetSection.widgetIds.push(clonedWidget.id);
+      nextLayout.push({
+        widgetId: clonedWidget.id,
+        x: sourceItem.x,
+        y: targetBaseY + Math.max(0, sourceItem.y - minSourceY),
+        w: sourceItem.w,
+        h: sourceItem.h
+      });
+    }
+  }
+
+  const validIds = new Set(nextWidgets.map((widget) => widget.id));
+  return {
+    widgets: nextWidgets,
+    layout: nextLayout.filter((item) => validIds.has(item.widgetId)),
+    sections: nextSections
+      .map((section) => ({ ...section, widgetIds: section.widgetIds.filter((widgetId) => validIds.has(widgetId)) }))
+      .filter((section) => section.widgetIds.length > 0)
+  };
+}
+
+function dashboardChoiceLines(dashboards: DashboardRecord[]): string {
+  return dashboards.map((dashboard, index) => {
+    const visibility = dashboard.visibility === "project" ? "Shared" : "Private";
+    return `${index + 1}. ${dashboard.title} - ${dashboard.widgets.length} widgets - ${visibility}`;
+  }).join("\n");
+}
+
+function findDashboardChoice(dashboards: DashboardRecord[], requested: string): DashboardRecord | undefined {
+  const trimmed = requested.trim();
+  const index = Number(trimmed);
+  if (Number.isInteger(index) && index >= 1 && index <= dashboards.length) {
+    return dashboards[index - 1];
+  }
+  const normalized = trimmed.toLowerCase();
+  return dashboards.find((dashboard) => (
+    dashboard.title.toLowerCase() === normalized
+    || dashboard.id === trimmed
+  ));
+}
+
+const AUTO_FLIP_DETAILS_MENU_SELECTOR = [
+  "details.dashboard-panel-menu",
+  "details.workspace-right-dashboard-menu",
+  "details.workspace-project-menu",
+  "details.workspace-sidebar-account-menu"
+].join(", ");
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/gu, "\\$&");
+}
+
+function shouldOpenMenuUp(triggerRect: DOMRect, menuHeight: number): boolean {
+  const viewportGap = 12;
+  const spaceBelow = window.innerHeight - triggerRect.bottom;
+  const spaceAbove = triggerRect.top;
+  return spaceBelow < menuHeight + viewportGap && spaceAbove > spaceBelow;
+}
+
+function isPopoverOpen(menu: HTMLElement): boolean {
+  try {
+    return menu.matches(":popover-open");
+  } catch {
+    return false;
+  }
+}
+
+function updateDetailsMenuDirection(details: HTMLDetailsElement): void {
+  if (!details.open) {
+    details.classList.remove("is-menu-up");
+    return;
+  }
+  const trigger = details.querySelector<HTMLElement>("summary");
+  const menu = details.querySelector<HTMLElement>(":scope > ul");
+  if (!trigger || !menu) {
+    details.classList.remove("is-menu-up");
+    return;
+  }
+  details.classList.toggle("is-menu-up", shouldOpenMenuUp(trigger.getBoundingClientRect(), menu.getBoundingClientRect().height));
+}
+
+function updatePopoverMenuPosition(menu: HTMLElement): void {
+  if (!menu.id || !isPopoverOpen(menu)) return;
+  const trigger = document.querySelector<HTMLElement>(`[popovertarget="${cssEscape(menu.id)}"]`);
+  if (!trigger) return;
+
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const gap = 6;
+  const viewportPadding = 8;
+  const menuHeight = menuRect.height;
+  const openUp = shouldOpenMenuUp(triggerRect, menuHeight);
+  const top = openUp
+    ? Math.max(viewportPadding, triggerRect.top - menuHeight - gap)
+    : Math.min(triggerRect.bottom + gap, window.innerHeight - menuHeight - viewportPadding);
+
+  menu.classList.toggle("is-menu-up", openUp);
+  menu.style.top = `${top}px`;
+  menu.style.right = `${Math.max(viewportPadding, window.innerWidth - triggerRect.right)}px`;
+  menu.style.bottom = "auto";
+  menu.style.left = "auto";
+}
+
+function updateOpenMenus(): void {
+  document.querySelectorAll<HTMLDetailsElement>(AUTO_FLIP_DETAILS_MENU_SELECTOR).forEach((details) => {
+    updateDetailsMenuDirection(details);
+  });
+  document.querySelectorAll<HTMLElement>(".conversation-menu-list[popover]").forEach((menu) => {
+    updatePopoverMenuPosition(menu);
+  });
+}
+
+function useAutoFlipMenus(): void {
+  useEffect(() => {
+    const scheduleUpdate = () => {
+      window.requestAnimationFrame(updateOpenMenus);
+    };
+    const handleToggle = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.matches(AUTO_FLIP_DETAILS_MENU_SELECTOR) || target.matches(".conversation-menu-list[popover]")) {
+        scheduleUpdate();
+      }
+    };
+
+    document.addEventListener("toggle", handleToggle, true);
+    document.addEventListener("click", scheduleUpdate, true);
+    document.addEventListener("scroll", scheduleUpdate, true);
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      document.removeEventListener("toggle", handleToggle, true);
+      document.removeEventListener("click", scheduleUpdate, true);
+      document.removeEventListener("scroll", scheduleUpdate, true);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, []);
 }
 
 function mergeMessagesWithStreamingState(
@@ -1879,7 +2241,11 @@ function WorkspaceRightPanel({
   dashboards,
   activeDashboardId,
   disabled,
-  onOpenDashboard
+  onOpenDashboard,
+  onRenameDashboard,
+  onDuplicateDashboard,
+  onDeleteDashboard,
+  onMergeDashboard
 }: {
   registry: RegistryResponse | null;
   management: ProjectManagementResponse | null;
@@ -1887,14 +2253,19 @@ function WorkspaceRightPanel({
   activeDashboardId: string | null;
   disabled?: boolean;
   onOpenDashboard: (dashboardId: string) => void;
+  onRenameDashboard: (dashboardId: string) => void;
+  onDuplicateDashboard: (dashboardId: string) => void;
+  onDeleteDashboard: (dashboardId: string) => void;
+  onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => void;
 }) {
   const taskCount = disabled ? 0 : 3;
   const skillCount = disabled ? 0 : (registry?.skills.length ?? 0);
   const toolCount = disabled ? 0 : (management?.tools.length ?? registry?.tools.length ?? 0);
   const dashboardCount = disabled ? 0 : dashboards.length;
+  const [dashboardsSectionOpen, setDashboardsSectionOpen] = useState(true);
   return (
     <div className={`workspace-right-block${disabled ? " is-disabled" : ""}`}>
-      <details className="workspace-right-section" open={!disabled}>
+      <details className="workspace-right-section">
         <summary>
           <span><Icon name="clock" />Scheduled &amp; rule-based tasks</span>
           <span className="right-section-meta">{taskCount}</span>
@@ -1915,7 +2286,7 @@ function WorkspaceRightPanel({
         </summary>
         {disabled ? <p className="right-section-empty">Select a project to view tools</p> : <Tools />}
       </details>
-      <details className="workspace-right-section" open={!disabled && dashboards.length > 0}>
+      <details className="workspace-right-section" open={dashboardsSectionOpen} onToggle={(event) => setDashboardsSectionOpen(event.currentTarget.open)}>
         <summary>
           <span><Icon name="grid" />Dashboards</span>
           <span className="right-section-meta">{dashboardCount}</span>
@@ -1928,19 +2299,32 @@ function WorkspaceRightPanel({
           <ul className="workspace-right-dashboard-list" aria-label="Project dashboards">
             {dashboards.map((dashboard) => (
               <li key={dashboard.id}>
-                <button
-                  type="button"
-                  className={`workspace-right-dashboard-item${dashboard.id === activeDashboardId ? " is-active" : ""}`}
-                  onClick={() => onOpenDashboard(dashboard.id)}
-                >
-                  <span className="workspace-right-dashboard-copy">
-                    <strong>{dashboard.title}</strong>
-                    <small>{dashboard.description || `${dashboard.widgets.length} widgets`}</small>
-                  </span>
-                  <Badge tone={dashboard.visibility === "project" ? "success" : "neutral"}>
-                    {dashboard.visibility === "project" ? "Shared" : "Private"}
-                  </Badge>
-                </button>
+                <div className={`workspace-right-dashboard-row${dashboard.id === activeDashboardId ? " is-active" : ""}`}>
+                  <button
+                    type="button"
+                    className="workspace-right-dashboard-item"
+                    onClick={() => onOpenDashboard(dashboard.id)}
+                  >
+                    <span className="workspace-right-dashboard-copy">
+                      <strong>{dashboard.title}</strong>
+                      <small>{dashboard.widgets.length} widgets</small>
+                    </span>
+                    <Badge tone={dashboard.visibility === "project" ? "success" : "neutral"}>
+                      {dashboard.visibility === "project" ? "Shared" : "Private"}
+                    </Badge>
+                  </button>
+                  <details className="workspace-right-dashboard-menu">
+                    <summary aria-label="Dashboard actions">
+                      <Icon name="more" />
+                    </summary>
+                    <ul>
+                      <li><button type="button" onClick={() => onRenameDashboard(dashboard.id)}>Rename</button></li>
+                      <li><button type="button" onClick={() => onDuplicateDashboard(dashboard.id)}>Duplicate</button></li>
+                      <li><button type="button" onClick={() => onMergeDashboard(dashboard.id)}>Merge into...</button></li>
+                      <li><button type="button" className="is-danger" onClick={() => onDeleteDashboard(dashboard.id)}>Delete</button></li>
+                    </ul>
+                  </details>
+                </div>
               </li>
             ))}
           </ul>
@@ -1987,8 +2371,14 @@ function Workspace({
   onDeleteConversation,
   onRenameConversation,
   onDeleteProject,
+  onDashboardSpecChange,
   onDashboardLayoutChange,
   onDashboardVisibilityChange,
+  onRenameDashboard,
+  onDuplicateDashboard,
+  onDeleteDashboard,
+  onMergeDashboard,
+  onCopyWidgetToDashboard,
   onStop,
   streamingActivity,
   streamOutputStarted,
@@ -2036,8 +2426,14 @@ function Workspace({
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
-  onDashboardLayoutChange: (layout: DashboardRecord["layout"]) => Promise<void>;
+  onDashboardSpecChange: (next: Pick<DashboardRecord, "title" | "visibility" | "layout" | "widgets"> & Partial<DashboardRecord>) => Promise<void>;
+  onDashboardLayoutChange: (layout: DashboardRecord["layout"], sections?: DashboardRecord["sections"]) => Promise<void>;
   onDashboardVisibilityChange: (visibility: DashboardVisibility) => Promise<void>;
+  onRenameDashboard: (dashboardId: string) => Promise<void>;
+  onDuplicateDashboard: (dashboardId: string) => Promise<void>;
+  onDeleteDashboard: (dashboardId: string) => Promise<void>;
+  onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => Promise<void>;
+  onCopyWidgetToDashboard: (widgetId: string, targetDashboardId: string) => Promise<void>;
   streamingActivity?: ChatStreamActivityEvent[];
   streamOutputStarted: boolean;
   streamAnswerPhase?: boolean;
@@ -2104,10 +2500,19 @@ function Workspace({
       {activeTab === "dashboards" ? (
         activeDashboard ? (
           <DashboardView
+            key={activeDashboard.id}
             token={token}
             dashboard={activeDashboard}
+            dashboards={dashboards}
             liveValues={dashboardLiveValues}
             stale={dashboardRealtimeStale}
+            forceCompactLayout={leftOpen || rightOpen}
+            onDashboardChange={onDashboardSpecChange}
+            onDashboardRename={() => { void onRenameDashboard(activeDashboard.id); }}
+            onDashboardDuplicate={() => { void onDuplicateDashboard(activeDashboard.id); }}
+            onDashboardDelete={() => { void onDeleteDashboard(activeDashboard.id); }}
+            onDashboardMerge={() => { void onMergeDashboard(activeDashboard.id); }}
+            onCopyWidgetToDashboard={onCopyWidgetToDashboard}
             onLayoutChange={onDashboardLayoutChange}
             onVisibilityChange={onDashboardVisibilityChange}
           />
@@ -2132,9 +2537,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">Workspace</h1>
-      <div className="workspace-restoring-surface" role="status" aria-live="polite" aria-label="Saved-session bootstrap phase">
-        <span className="spinner" aria-hidden="true" />
-      </div>
+      <StartupBurstLoader />
     </div>
   ) : (
     <div className="workspace-center-block workspace-center-empty" aria-labelledby="workspace-title">
@@ -2188,6 +2591,10 @@ function Workspace({
             activeDashboardId={activeDashboard?.id ?? null}
             disabled={!project}
             onOpenDashboard={onOpenDashboard}
+            onRenameDashboard={(dashboardId) => { void onRenameDashboard(dashboardId); }}
+            onDuplicateDashboard={(dashboardId) => { void onDuplicateDashboard(dashboardId); }}
+            onDeleteDashboard={(dashboardId) => { void onDeleteDashboard(dashboardId); }}
+            onMergeDashboard={(sourceDashboardId, targetDashboardId) => { void onMergeDashboard(sourceDashboardId, targetDashboardId); }}
           />
         )}
         className={shellClass}
@@ -2197,6 +2604,7 @@ function Workspace({
 }
 
 export default function App() {
+  useAutoFlipMenus();
   const initial = useMemo(readStoredSession, []);
   const [token, setToken] = useState(initial.token);
   const [user, setUser] = useState<UserSummary | null>(initial.user);
@@ -2233,9 +2641,13 @@ export default function App() {
   const streamingTurnRef = useRef<StreamingTurnState | null>(null);
   const projectSocketRef = useRef<ReturnType<typeof createProjectSocket> | null>(null);
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
+  const conversationStreamsRef = useRef<Record<string, ConversationStreamState>>({});
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+  useEffect(() => {
+    conversationStreamsRef.current = conversationStreams;
+  }, [conversationStreams]);
 
   useEffect(() => {
     if (!selectedProject) {
@@ -2281,6 +2693,7 @@ export default function App() {
     () => dashboardPointNames(activeDashboard),
     [activeDashboard]
   );
+  const activeDashboardPointNamesSignature = activeDashboardPointNames.join("|");
   const dashboardRealtimeStale = activeDashboardPointNames.length > 0
     && (dashboardRealtimeAt === null || (Date.now() - dashboardRealtimeAt) > 70_000);
   const visibleMessages = useMemo(
@@ -2340,7 +2753,7 @@ export default function App() {
     setManagement(managementResponse);
     setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
     if (dashboardResponse) {
-      setDashboards(dashboardResponse.dashboards);
+      setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
     }
     const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
     const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
@@ -2423,7 +2836,7 @@ export default function App() {
             setManagement(managementResponse);
             setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
             if (dashboardResponse) {
-              setDashboards(dashboardResponse.dashboards);
+              setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
             }
             setRepositoryItems(visibleRepoItems);
             setKbTotalCount(kbResponse.totalCount);
@@ -2491,7 +2904,7 @@ export default function App() {
 
   // Poll for proactive messages (scheduler-fired reminders) in the active conversation
   useEffect(() => {
-    if (!token || !selectedProject || !activeConversationId) return;
+    if (!token || !selectedProject || !activeConversationId || activeTab !== "chat") return;
 
     const POLL_INTERVAL_MS = 5000;
     let active = true;
@@ -2524,7 +2937,7 @@ export default function App() {
       active = false;
       clearInterval(interval);
     };
-  }, [token, selectedProject?.id ?? null, activeConversationId, busy]);
+  }, [token, selectedProject?.id ?? null, activeConversationId, activeTab, busy]);
 
   // Re-render once per second only while a Working-for segment is active
   useEffect(() => {
@@ -2542,13 +2955,16 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!token || !selectedProject) return;
+    if (!token || !selectedProject || activeTab === "dashboards") return;
 
-    const POLL_INTERVAL_MS = 5000;
+    const POLL_INTERVAL_MS = 15_000;
     const projectId = selectedProject.id;
     let active = true;
+    let inFlight = false;
 
     async function refreshSidebar() {
+      if (inFlight || busy) return;
+      inFlight = true;
       try {
         const [convResponse, kbResponse, repoResponse, dashboardResponse] = await Promise.all([
           getConversations(token, projectId).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
@@ -2559,10 +2975,10 @@ export default function App() {
         if (!active) return;
         const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
         const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
-        setConversations((current) => mergeConversationSummaries(convResponse.conversations, current, conversationStreams));
+        setConversations((current) => mergeConversationSummaries(convResponse.conversations, current, conversationStreamsRef.current));
         setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
         if (dashboardResponse) {
-          setDashboards(dashboardResponse.dashboards);
+          setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
         }
         setRepositoryItems((current) => {
           const incomingIds = new Set(visibleRepoItems.map((item) => item.id));
@@ -2574,10 +2990,11 @@ export default function App() {
         setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + visibleRepoCount }));
       } catch {
         // Sidebar refresh is best-effort.
+      } finally {
+        inFlight = false;
       }
     }
 
-    void refreshSidebar();
     const interval = setInterval(() => {
       void refreshSidebar();
     }, POLL_INTERVAL_MS);
@@ -2585,7 +3002,7 @@ export default function App() {
       active = false;
       clearInterval(interval);
     };
-  }, [token, selectedProject?.id ?? null, conversationStreams]);
+  }, [token, selectedProject?.id ?? null, activeTab, busy]);
 
   // WebSocket connection for real-time reminder/message delivery
   useEffect(() => {
@@ -2662,7 +3079,14 @@ export default function App() {
         }
       }
       if (data.type === "dashboard_created" && typeof data.dashboard === "object" && data.dashboard !== null) {
-        setDashboards((current) => upsertDashboardRecord(current, data.dashboard as DashboardRecord));
+        const dashboard = data.dashboard as DashboardRecord;
+        setDashboards((current) => upsertDashboardRecord(current, dashboard));
+        if (dashboard.sourceConversationId && dashboard.sourceConversationId === activeConversationIdRef.current) {
+          setDashboardLiveValues({});
+          setDashboardRealtimeAt(null);
+          applyWorkspacePath(selectedProject.id, "dashboards", dashboard.id);
+          setBanner({ tone: "success", title: "Dashboard created", message: dashboard.title });
+        }
       }
       if (data.type === "dashboard_updated" && typeof data.dashboard === "object" && data.dashboard !== null) {
         setDashboards((current) => upsertDashboardRecord(current, data.dashboard as DashboardRecord));
@@ -2681,12 +3105,12 @@ export default function App() {
       }
       socket.close();
     };
-  }, [activeDashboardId, activeDashboardPointNames, selectedProject?.id ?? null, token]);
+  }, [activeDashboardId, activeDashboardPointNamesSignature, selectedProject?.id ?? null, token]);
 
   useEffect(() => {
     projectSocketRef.current?.send({ type: "dashboard_subscribe", pointNames: activeDashboardPointNames });
     setDashboardRealtimeAt(null);
-  }, [activeDashboardPointNames]);
+  }, [activeDashboardPointNamesSignature]);
 
   async function handleLogin(email: string, password: string) {
     setBusy(true);
@@ -2819,18 +3243,19 @@ export default function App() {
 
   async function handleOpenDashboard(dashboardId: string) {
     if (!token || !selectedProject) return;
-    setBusy(true);
+    const cachedDashboard = dashboards.find((dashboard) => dashboard.id === dashboardId);
+    setDashboardLiveValues({});
+    setDashboardRealtimeAt(null);
+    applyWorkspacePath(selectedProject.id, "dashboards", dashboardId);
+    setBanner(null);
+    setBusy(!cachedDashboard);
     try {
       const response = await getDashboard(token, selectedProject.id, dashboardId);
       setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
-      setDashboardLiveValues({});
-      setDashboardRealtimeAt(null);
-      applyWorkspacePath(selectedProject.id, "dashboards", dashboardId);
-      setBanner(null);
     } catch (error) {
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
-      } else {
+      } else if (!cachedDashboard) {
         setBanner(errorBanner(error, "Could not open dashboard"));
       }
     } finally {
@@ -2838,26 +3263,35 @@ export default function App() {
     }
   }
 
-  async function handleDashboardLayoutChange(layout: DashboardRecord["layout"]) {
+  async function handleDashboardSpecChange(next: Pick<DashboardRecord, "title" | "visibility" | "layout" | "widgets"> & Partial<DashboardRecord>) {
     if (!token || !selectedProject || !activeDashboard) return;
     try {
       const response = await updateDashboard(token, selectedProject.id, activeDashboard.id, {
-        title: activeDashboard.title,
-        ...(activeDashboard.description ? { description: activeDashboard.description } : {}),
-        visibility: activeDashboard.visibility,
-        layout,
-        widgets: activeDashboard.widgets
+        ...next,
+        layoutVersion: next.layoutVersion ?? activeDashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION
       });
       setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
-      setBanner({ tone: "success", title: "Dashboard updated", message: "Widget layout saved.", requestId: response.requestId });
+      setBanner({ tone: "success", title: "Dashboard updated", message: `${response.dashboard.title} saved.`, requestId: response.requestId });
     } catch (error) {
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
       } else {
-        setBanner(errorBanner(error, "Could not save dashboard layout"));
+        setBanner(errorBanner(error, "Could not save dashboard"));
       }
       throw error;
     }
+  }
+
+  async function handleDashboardLayoutChange(layout: DashboardRecord["layout"], sections?: DashboardRecord["sections"]) {
+    if (!activeDashboard) return;
+    await handleDashboardSpecChange({
+      title: activeDashboard.title,
+      ...(activeDashboard.description ? { description: activeDashboard.description } : {}),
+      visibility: activeDashboard.visibility,
+      layout,
+      widgets: activeDashboard.widgets,
+      ...(sections ? { sections } : activeDashboard.sections ? { sections: activeDashboard.sections } : {})
+    });
   }
 
   async function handleDashboardVisibilityChange(visibility: DashboardVisibility) {
@@ -2867,8 +3301,10 @@ export default function App() {
         title: activeDashboard.title,
         ...(activeDashboard.description ? { description: activeDashboard.description } : {}),
         visibility,
+        layoutVersion: activeDashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
         layout: activeDashboard.layout,
-        widgets: activeDashboard.widgets
+        widgets: activeDashboard.widgets,
+        ...(activeDashboard.sections ? { sections: activeDashboard.sections } : {})
       });
       setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
       setBanner({
@@ -2884,6 +3320,163 @@ export default function App() {
         setBanner(errorBanner(error, "Could not update dashboard visibility"));
       }
       throw error;
+    }
+  }
+
+  async function handleRenameDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    const dashboard = dashboards.find((entry) => entry.id === dashboardId);
+    if (!dashboard) return;
+    const title = window.prompt("Dashboard name", dashboard.title)?.trim();
+    if (!title || title === dashboard.title) return;
+    const description = window.prompt("Dashboard description", dashboard.description ?? "")?.trim();
+    try {
+      const response = await updateDashboard(token, selectedProject.id, dashboard.id, {
+        title,
+        ...(description ? { description } : dashboard.description ? { description: dashboard.description } : {}),
+        visibility: dashboard.visibility,
+        layoutVersion: dashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: dashboard.layout,
+        widgets: dashboard.widgets,
+        ...(dashboard.sections ? { sections: dashboard.sections } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({ tone: "success", title: "Dashboard renamed", message: response.dashboard.title, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not rename dashboard"));
+      }
+    }
+  }
+
+  async function handleDuplicateDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    const dashboard = dashboards.find((entry) => entry.id === dashboardId);
+    if (!dashboard) return;
+    try {
+      const response = await createDashboard(token, selectedProject.id, {
+        title: `${dashboard.title} Copy`,
+        ...(dashboard.description ? { description: dashboard.description } : {}),
+        visibility: dashboard.visibility,
+        layoutVersion: dashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: dashboard.layout,
+        widgets: dashboard.widgets,
+        ...(dashboard.sections ? { sections: dashboard.sections } : {}),
+        ...(dashboard.sourceConversationId ? { sourceConversationId: dashboard.sourceConversationId } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      applyWorkspacePath(selectedProject.id, "dashboards", response.dashboard.id);
+      setBanner({ tone: "success", title: "Dashboard duplicated", message: response.dashboard.title, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not duplicate dashboard"));
+      }
+    }
+  }
+
+  async function handleDeleteDashboard(dashboardId: string) {
+    if (!token || !selectedProject) return;
+    const dashboard = dashboards.find((entry) => entry.id === dashboardId);
+    if (!dashboard || !window.confirm(`Delete "${dashboard.title}"? This removes the dashboard only, not BMS data.`)) return;
+    try {
+      const response = await deleteDashboard(token, selectedProject.id, dashboard.id);
+      setDashboards((current) => current.filter((entry) => entry.id !== dashboard.id));
+      if (dashboard.id === activeDashboardId) {
+        applyWorkspacePath(selectedProject.id, "dashboards");
+      }
+      setBanner({ tone: "success", title: "Dashboard deleted", message: dashboard.title, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not delete dashboard"));
+      }
+    }
+  }
+
+  async function handleMergeDashboard(sourceDashboardId: string, targetDashboardId?: string) {
+    if (!token || !selectedProject) return;
+    const source = dashboards.find((entry) => entry.id === sourceDashboardId);
+    if (!source) return;
+    const candidates = dashboards.filter((entry) => entry.id !== sourceDashboardId);
+    if (candidates.length === 0) {
+      setBanner({ tone: "warning", title: "No target dashboard", message: "Create another dashboard before merging." });
+      return;
+    }
+    const requested = targetDashboardId ?? window.prompt(
+      `Merge "${source.title}" into dashboard:\n${dashboardChoiceLines(candidates)}\n\nType a dashboard name or number.`,
+      candidates[0]?.title
+    )?.trim();
+    if (!requested) return;
+    const target = targetDashboardId
+      ? candidates.find((entry) => entry.id === targetDashboardId)
+      : findDashboardChoice(candidates, requested);
+    if (!target) {
+      setBanner({ tone: "error", title: "Dashboard not found", message: "Choose an existing target dashboard." });
+      return;
+    }
+    const merged = mergeDashboardIntoTarget(source, target);
+    try {
+      const response = await updateDashboard(token, selectedProject.id, target.id, {
+        title: target.title,
+        ...(target.description ? { description: target.description } : {}),
+        visibility: target.visibility,
+        layoutVersion: target.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: merged.layout,
+        widgets: merged.widgets,
+        sections: merged.sections,
+        ...(target.sourceConversationId ? { sourceConversationId: target.sourceConversationId } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      applyWorkspacePath(selectedProject.id, "dashboards", response.dashboard.id);
+      setBanner({ tone: "success", title: "Dashboard merged", message: `${source.title} copied into ${response.dashboard.title}.`, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not merge dashboards"));
+      }
+    }
+  }
+
+  async function handleCopyWidgetToDashboard(widgetId: string, targetDashboardId: string) {
+    if (!token || !selectedProject || !activeDashboard) return;
+    const sourceWidget = activeDashboard.widgets.find((widget) => widget.id === widgetId);
+    const target = dashboards.find((dashboard) => dashboard.id === targetDashboardId);
+    if (!sourceWidget || !target) return;
+    const sourceSection = sectionsForDashboardSpec(activeDashboard).find((section) => section.widgetIds.includes(widgetId));
+    const sourceLayout = activeDashboard.layout.find((item) => item.widgetId === widgetId) ?? defaultLayoutForDashboardWidget(sourceWidget, 0);
+    const miniSource: DashboardRecord = {
+      ...activeDashboard,
+      layoutVersion: activeDashboard.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+      widgets: [sourceWidget],
+      layout: [sourceLayout],
+      sections: [{ ...(sourceSection ?? { ...dashboardWidgetSectionInfo(sourceWidget), widgetIds: [widgetId] }), widgetIds: [widgetId] }]
+    };
+    const merged = mergeDashboardIntoTarget(miniSource, target);
+    try {
+      const response = await updateDashboard(token, selectedProject.id, target.id, {
+        title: target.title,
+        ...(target.description ? { description: target.description } : {}),
+        visibility: target.visibility,
+        layoutVersion: target.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
+        layout: merged.layout,
+        widgets: merged.widgets,
+        sections: merged.sections,
+        ...(target.sourceConversationId ? { sourceConversationId: target.sourceConversationId } : {})
+      });
+      setDashboards((current) => upsertDashboardRecord(current, response.dashboard));
+      setBanner({ tone: "success", title: "Widget copied", message: `${sourceWidget.title} copied to ${response.dashboard.title}.`, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not copy widget"));
+      }
     }
   }
 
@@ -3578,8 +4171,14 @@ export default function App() {
           onDeleteConversation={(convId) => { void handleDeleteConversation(convId); }}
           onRenameConversation={(convId, title) => { void handleRenameConversation(convId, title); }}
           onDeleteProject={(projectId) => { void handleDeleteProject(projectId); }}
+          onDashboardSpecChange={handleDashboardSpecChange}
           onDashboardLayoutChange={handleDashboardLayoutChange}
           onDashboardVisibilityChange={handleDashboardVisibilityChange}
+          onRenameDashboard={handleRenameDashboard}
+          onDuplicateDashboard={handleDuplicateDashboard}
+          onDeleteDashboard={handleDeleteDashboard}
+          onMergeDashboard={handleMergeDashboard}
+          onCopyWidgetToDashboard={handleCopyWidgetToDashboard}
           onStop={handleStop}
           streamingActivity={visibleStreamingActivity}
           streamOutputStarted={streamShowsWorkedFor(visibleStreamState)}

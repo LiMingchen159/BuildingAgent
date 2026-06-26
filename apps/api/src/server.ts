@@ -86,14 +86,28 @@ import { randomUUID } from "node:crypto";
 import { BmsDatabaseBridge } from "./bmsDatabaseBridge.js";
 import { proxyBmsCollector } from "./bmsCollectorProxy.js";
 import { bmsCollectorBaseUrl } from "./bmsCollectorUrl.js";
+import { fetchTimeseries, type BmsTimeseriesRow } from "./bmsTimeseries.js";
 import {
   canManageDashboard,
   canReadDashboard,
+  DASHBOARD_LAYOUT_VERSION,
   dashboardPath,
   parseDashboardMutationInput,
   type DashboardMutationInput,
   type DashboardRecord
 } from "./dashboards.js";
+
+interface BmsDashboardHistoryBatchQuery {
+  key: string;
+  name?: string;
+  point_id?: string;
+  object_ref?: string;
+  from: string;
+  to?: string;
+  range?: string;
+  limit?: string;
+  order?: string;
+}
 
 interface BuildServerOptions {
   store?: SeedStore;
@@ -140,6 +154,44 @@ function tryLoadEnv(): void {
       // try next candidate
     }
   }
+}
+
+function resolveConfiguredDataDir(value: string | undefined, fallbackBase = process.cwd()): string | null {
+  const configured = value?.trim();
+  if (!configured) return null;
+  return path.isAbsolute(configured) ? configured : path.resolve(fallbackBase, configured);
+}
+
+function repositoryFileRootsForProject(projectId: string, env: ProviderEnv): string[] {
+  const currentRoot = path.resolve(repoRootForProject(projectId, env));
+  const legacyDataRoots = [
+    resolveConfiguredDataDir(env.BUILDING_AGENT_LEGACY_DATA_DIR),
+    path.resolve(process.cwd(), "../data"),
+    "/root/data"
+  ].filter((entry): entry is string => Boolean(entry));
+  const roots = [currentRoot];
+  const seen = new Set([currentRoot]);
+  for (const dataDir of legacyDataRoots) {
+    const legacyRoot = path.resolve(dataDir, projectId, "repository");
+    if (seen.has(legacyRoot) || !existsSync(legacyRoot)) continue;
+    roots.push(legacyRoot);
+    seen.add(legacyRoot);
+  }
+  return roots;
+}
+
+function resolveRepositoryFileForRead(projectId: string, requestedPath: string, env: ProviderEnv): string | null {
+  for (const repoRoot of repositoryFileRootsForProject(projectId, env)) {
+    const resolvedRoot = path.resolve(repoRoot);
+    const absolutePath = path.resolve(resolvedRoot, requestedPath);
+    if (!absolutePath.startsWith(resolvedRoot + path.sep) && absolutePath !== resolvedRoot) {
+      continue;
+    }
+    if (existsSync(absolutePath)) {
+      return absolutePath;
+    }
+  }
+  return null;
 }
 
 interface ProjectParams {
@@ -563,11 +615,18 @@ function createDashboardRecord(input: DashboardMutationInput, projectId: string,
     visibility: input.visibility ?? "private",
     title: input.title,
     ...(input.description ? { description: input.description } : {}),
+    layoutVersion: input.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
     layout: input.layout.map((item) => ({ ...item })),
     widgets: input.widgets.map((widget) => ({
       ...widget,
       pointBindings: widget.pointBindings.map((binding) => ({ ...binding }))
     })),
+    ...(input.sections ? {
+      sections: input.sections.map((section) => ({
+        ...section,
+        widgetIds: [...section.widgetIds]
+      }))
+    } : {}),
     createdAt: now,
     updatedAt: now,
     ...(input.sourceConversationId ? { sourceConversationId: input.sourceConversationId } : {})
@@ -579,15 +638,149 @@ function updateDashboardRecord(existing: DashboardRecord, input: DashboardMutati
     ...existing,
     title: input.title,
     visibility: input.visibility ?? existing.visibility,
+    layoutVersion: input.layoutVersion ?? existing.layoutVersion ?? DASHBOARD_LAYOUT_VERSION,
     layout: input.layout.map((item) => ({ ...item })),
     widgets: input.widgets.map((widget) => ({
       ...widget,
       pointBindings: widget.pointBindings.map((binding) => ({ ...binding }))
     })),
+    ...(input.sections ? {
+      sections: input.sections.map((section) => ({
+        ...section,
+        widgetIds: [...section.widgetIds]
+      }))
+    } : existing.sections ? {
+      sections: existing.sections.map((section) => ({
+        ...section,
+        widgetIds: [...section.widgetIds]
+      }))
+    } : {}),
     updatedAt: new Date().toISOString(),
     ...(input.description ? { description: input.description } : existing.description ? { description: existing.description } : {}),
     ...(input.sourceConversationId ? { sourceConversationId: input.sourceConversationId } : {})
   };
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseBmsDashboardHistoryBatchQuery(value: unknown): BmsDashboardHistoryBatchQuery | null {
+  if (!isRecordValue(value)) return null;
+  const key = stringField(value, "key");
+  const from = stringField(value, "from");
+  const name = stringField(value, "name");
+  const pointId = stringField(value, "point_id") ?? stringField(value, "pointId");
+  const objectRef = stringField(value, "object_ref") ?? stringField(value, "objectRef");
+  const to = stringField(value, "to");
+  const range = stringField(value, "range");
+  const limit = stringField(value, "limit");
+  if (!key || !from || (!name && !pointId && !objectRef)) return null;
+  return {
+    key,
+    from,
+    ...(name ? { name } : {}),
+    ...(pointId ? { point_id: pointId } : {}),
+    ...(objectRef ? { object_ref: objectRef } : {}),
+    ...(to ? { to } : {}),
+    ...(range ? { range } : {}),
+    ...(limit ? { limit } : {}),
+    ...(stringField(value, "order") === "desc" ? { order: "desc" } : { order: "asc" })
+  };
+}
+
+function paramsForBmsDashboardHistoryBatchQuery(query: BmsDashboardHistoryBatchQuery): Record<string, string> {
+  const params: Record<string, string> = {
+    from: query.from,
+    limit: String(Math.min(Math.max(1, Number.parseInt(query.limit ?? "720", 10) || 720), 20000)),
+    order: query.order === "desc" ? "desc" : "asc"
+  };
+  if (query.name) params.name = query.name;
+  if (query.point_id) params.point_id = query.point_id;
+  if (query.object_ref) params.object_ref = query.object_ref;
+  if (query.to) params.to = query.to;
+  return params;
+}
+
+const BMS_DASHBOARD_HISTORY_BATCH_CONCURRENCY = 8;
+const BMS_DASHBOARD_POINT_CACHE_TTL_MS = 10 * 60_000;
+const BMS_DASHBOARD_POINT_CACHE_MAX_ENTRIES = 2048;
+
+const bmsDashboardPointIdCache = new Map<string, { savedAt: number; pointId: string }>();
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index]!, index);
+    }
+  }
+
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+function rememberBmsDashboardPointId(key: string, pointId: string): void {
+  bmsDashboardPointIdCache.set(key, { savedAt: Date.now(), pointId });
+  while (bmsDashboardPointIdCache.size > BMS_DASHBOARD_POINT_CACHE_MAX_ENTRIES) {
+    const oldestKey = bmsDashboardPointIdCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    bmsDashboardPointIdCache.delete(oldestKey);
+  }
+}
+
+async function resolveBmsDashboardPointId(
+  baseUrl: string,
+  query: BmsDashboardHistoryBatchQuery,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal
+): Promise<string | undefined> {
+  if (query.point_id) return query.point_id;
+  const lookupKind = query.name ? "name" : query.object_ref ? "object_ref" : null;
+  const lookupValue = query.name ?? query.object_ref;
+  if (!lookupKind || !lookupValue) return undefined;
+
+  const cacheKey = `${lookupKind}:${lookupValue}`;
+  const cached = bmsDashboardPointIdCache.get(cacheKey);
+  if (cached && Date.now() - cached.savedAt < BMS_DASHBOARD_POINT_CACHE_TTL_MS) {
+    return cached.pointId;
+  }
+  if (cached) {
+    bmsDashboardPointIdCache.delete(cacheKey);
+  }
+
+  try {
+    const url = `${baseUrl.replace(/\/+$/, "")}/api/v1/points?${new URLSearchParams({ q: lookupValue, limit: "20" }).toString()}`;
+    const response = await fetchImpl(url, { signal });
+    if (!response.ok) return undefined;
+    const payload = await response.json() as { items?: Array<{ id?: unknown; name?: unknown; object_ref?: unknown }> };
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    const match = items.find((item) => lookupKind === "name" ? item.name === lookupValue : item.object_ref === lookupValue);
+    const rawId = match?.id;
+    const pointId = typeof rawId === "number" || typeof rawId === "string" ? String(rawId) : undefined;
+    if (!pointId) return undefined;
+    rememberBmsDashboardPointId(cacheKey, pointId);
+    return pointId;
+  } catch (error) {
+    if (signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+      throw error;
+    }
+    return undefined;
+  }
 }
 
 async function transcribeAudioViaParaformer(apiKey: string, _model: string, audioBuffer: Buffer): Promise<string> {
@@ -1626,6 +1819,85 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   app.get("/api/bms/collector/*", forwardBmsCollector);
   app.get("/api/bms/collector", async (request, reply) => forwardBmsCollector({ url: "/api/bms/collector/health", method: "GET" }, reply));
 
+  app.post<{ Body: unknown }>("/api/bms/dashboard/history-batch", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    if (!session.projectId) {
+      return sendError(request, reply, 403, "project_not_selected", "Select a project before querying dashboard history.");
+    }
+    const membership = requireProjectMembership(request, reply, store, session, session.projectId);
+    if (isReply(membership)) return membership;
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const body = isRecordValue(request.body) ? request.body : {};
+    const rawQueries = Array.isArray(body.queries) ? body.queries : [];
+    if (rawQueries.length === 0) {
+      return sendError(request, reply, 422, "bms_history_batch_invalid", "queries must be a non-empty array.");
+    }
+    if (rawQueries.length > 32) {
+      return sendError(request, reply, 422, "bms_history_batch_too_large", "Dashboard history batch supports at most 32 queries.");
+    }
+    const queries = rawQueries.map((entry) => parseBmsDashboardHistoryBatchQuery(entry));
+    if (queries.some((entry) => entry === null)) {
+      return sendError(request, reply, 422, "bms_history_batch_invalid", "Each query requires key, from, and name/point_id/object_ref.");
+    }
+
+    const baseUrl = bmsCollectorBaseUrl(env);
+    const abortController = new AbortController();
+    const abortIfClientClosed = () => {
+      if (!reply.raw.writableEnded) {
+        abortController.abort();
+      }
+    };
+    reply.raw.on("close", abortIfClientClosed);
+
+    try {
+      const results = await mapWithConcurrency(
+        queries as BmsDashboardHistoryBatchQuery[],
+        BMS_DASHBOARD_HISTORY_BATCH_CONCURRENCY,
+        async (query) => {
+          try {
+            const params = paramsForBmsDashboardHistoryBatchQuery(query);
+            const pointId = await resolveBmsDashboardPointId(baseUrl, query, fetchProxy as typeof fetch, abortController.signal);
+            if (pointId) {
+              params.point_id = pointId;
+              delete params.name;
+              delete params.object_ref;
+            }
+            const result = await fetchTimeseries(
+              baseUrl,
+              params,
+              fetchProxy as typeof fetch,
+              { signal: abortController.signal, preferReadings: true }
+            );
+            return {
+              key: query.key,
+              ok: true,
+              total: result.total,
+              items: result.items as BmsTimeseriesRow[]
+            };
+          } catch (error) {
+            return {
+              key: query.key,
+              ok: false,
+              total: 0,
+              items: [] as BmsTimeseriesRow[],
+              error: error instanceof Error ? error.message : "bms_history_query_failed"
+            };
+          }
+        }
+      );
+
+      return {
+        results,
+        requestId: requestIdFor(request)
+      };
+    } finally {
+      reply.raw.off("close", abortIfClientClosed);
+    }
+  });
+
   app.post<{ Body: BmsTempUploadPayload }>("/api/bms/temp-upload", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
@@ -2580,18 +2852,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const readable = requirePermission(request, reply, membership, "chat:read");
     if (isReply(readable)) return readable;
 
-    const repoRoot = path.resolve(repoRootForProject(request.params.projectId));
     const requestedPath = (request.params["*"] ?? "").replace(/\\/g, "/");
     if (!requestedPath || requestedPath.includes("..") || requestedPath.startsWith("/")) {
       return sendError(request, reply, 400, "repo_invalid_path", "Invalid file path.");
     }
 
-    const absolutePath = path.resolve(repoRoot, requestedPath);
-    if (!absolutePath.startsWith(repoRoot + path.sep) && absolutePath !== repoRoot) {
-      return sendError(request, reply, 403, "repo_path_traversal", "Path traversal is not allowed.");
-    }
-
-    if (!existsSync(absolutePath)) {
+    const absolutePath = resolveRepositoryFileForRead(request.params.projectId, requestedPath, env);
+    if (!absolutePath || !existsSync(absolutePath)) {
       return sendError(request, reply, 404, "repo_file_not_found", "File not found.");
     }
 
@@ -3347,6 +3614,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         if (toolName === "project_grounding") {
           return groundingToolLabel(state, metadata);
         }
+        if (toolName === "bms_points_query") return state === "running" ? "Finding BMS points" : "Found BMS points";
+        if (toolName === "dashboard_create") return state === "running" ? "Creating dashboard" : "Created dashboard";
         const lower = toolName.toLowerCase();
         if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
         if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";
@@ -3492,6 +3761,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             if (toolName === "project_grounding") {
               return fallbackGroundingToolLabel(state, metadata);
             }
+            if (toolName === "bms_points_query") return state === "running" ? "Finding BMS points" : "Found BMS points";
+            if (toolName === "dashboard_create") return state === "running" ? "Creating dashboard" : "Created dashboard";
             const lower = toolName.toLowerCase();
             if (lower.includes("search") || lower.includes("grep") || lower.includes("glob")) return state === "running" ? "Searching files" : "Searched files";
             if (lower.includes("edit") || lower.includes("write")) return state === "running" ? "Editing file" : "Edited file";

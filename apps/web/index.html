@@ -4,9 +4,108 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BuildingGPT</title>
+    <style>
+      :root {
+        color: #111827;
+        background: #f8f8f7;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      .startup-fallback-shell {
+        align-items: center;
+        background:
+          radial-gradient(circle at 50% 46%, rgba(15, 23, 42, 0.05), transparent 18rem),
+          linear-gradient(180deg, #fbfbfa 0%, #f5f5f4 100%);
+        color: #111827;
+        display: grid;
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        min-height: 100vh;
+        overflow: hidden;
+        place-items: center;
+      }
+
+      .startup-fallback-core {
+        display: grid;
+        gap: 0.8rem;
+        justify-items: center;
+      }
+
+      .startup-fallback-burst {
+        animation: startup-fallback-turn 2.8s linear infinite;
+        height: 5rem;
+        position: relative;
+        width: 5rem;
+      }
+
+      .startup-fallback-burst span {
+        --angle: calc(var(--i) * 30deg);
+        animation: startup-fallback-spark 1.2s linear infinite;
+        animation-delay: calc(var(--i) * -0.1s);
+        background: #111827;
+        border-radius: 999px;
+        height: 0.92rem;
+        left: 50%;
+        opacity: 0.14;
+        position: absolute;
+        top: 50%;
+        transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-1.42rem) scaleY(0.68);
+        width: 2px;
+      }
+
+      @keyframes startup-fallback-spark {
+        0%,
+        100% {
+          opacity: 0.12;
+          transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-1.35rem) scaleY(0.62);
+        }
+
+        14% {
+          opacity: 0.92;
+          transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-2.05rem) scaleY(1.16);
+        }
+
+        34% {
+          opacity: 0.28;
+          transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-1.75rem) scaleY(0.82);
+        }
+      }
+
+      @keyframes startup-fallback-turn {
+        to { transform: rotate(360deg); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .startup-fallback-burst,
+        .startup-fallback-burst span {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"><div data-static-fallback class="html-fallback-skeleton"><p>BuildingGPT safe startup mode</p><p>Preparing workspace loading state.</p></div></div>
+    <div id="root">
+      <div data-static-fallback class="startup-fallback-shell" role="status" aria-label="Preparing BuildingGPT workspace">
+        <div class="startup-fallback-core">
+          <div class="startup-fallback-burst" aria-hidden="true">
+            <span style="--i: 0"></span>
+            <span style="--i: 1"></span>
+            <span style="--i: 2"></span>
+            <span style="--i: 3"></span>
+            <span style="--i: 4"></span>
+            <span style="--i: 5"></span>
+            <span style="--i: 6"></span>
+            <span style="--i: 7"></span>
+            <span style="--i: 8"></span>
+            <span style="--i: 9"></span>
+            <span style="--i: 10"></span>
+            <span style="--i: 11"></span>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -14,6 +14,7 @@ function dashboardPayload(overrides: Record<string, unknown> = {}) {
     title: "Chiller temperature watch",
     description: "Supply and return temperatures across active chillers.",
     visibility: "private",
+    layoutVersion: 2,
     widgets: [
       {
         id: "live_supply_return",
@@ -36,8 +37,8 @@ function dashboardPayload(overrides: Record<string, unknown> = {}) {
       }
     ],
     layout: [
-      { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 1 },
-      { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 1 }
+      { widgetId: "live_supply_return", x: 0, y: 0, w: 3, h: 2 },
+      { widgetId: "trend_supply_return", x: 3, y: 0, w: 6, h: 4 }
     ],
     ...overrides
   };
@@ -63,6 +64,7 @@ describe("dashboard project APIs", () => {
       dashboard: expect.objectContaining({
         title: "Chiller temperature watch",
         visibility: "private",
+        layoutVersion: 2,
         widgets: expect.arrayContaining([
           expect.objectContaining({ kind: "live_value_grid" }),
           expect.objectContaining({ kind: "timeseries_chart" })
@@ -185,6 +187,227 @@ describe("dashboard project APIs", () => {
       code: "dashboard_invalid",
       message: expect.stringContaining("widgets")
     });
+
+    const tooTall = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        layout: [
+          { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 2 },
+          { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 49 }
+        ]
+      })
+    });
+
+    expect(tooTall.statusCode).toBe(422);
+    expect(tooTall.json().error).toMatchObject({
+      code: "dashboard_invalid",
+      message: expect.stringContaining("layout")
+    });
+  });
+
+  it("accepts valid dashboard sections and rejects invalid section references", async () => {
+    const app = buildServer({ store: createSeedStore() });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const valid = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        sections: [
+          { id: "overview", title: "Overview", kind: "overview", widgetIds: ["live_supply_return"] },
+          { id: "trends", title: "Trends", kind: "trends", widgetIds: ["trend_supply_return"] }
+        ]
+      })
+    });
+    expect(valid.statusCode).toBe(201);
+    expect(valid.json().dashboard.sections).toEqual([
+      expect.objectContaining({ id: "overview", widgetIds: ["live_supply_return"] }),
+      expect.objectContaining({ id: "trends", widgetIds: ["trend_supply_return"] })
+    ]);
+
+    const duplicateWidget = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        sections: [
+          { id: "overview", title: "Overview", kind: "overview", widgetIds: ["live_supply_return", "trend_supply_return"] },
+          { id: "trends", title: "Trends", kind: "trends", widgetIds: ["trend_supply_return"] }
+        ]
+      })
+    });
+    expect(duplicateWidget.statusCode).toBe(422);
+    expect(duplicateWidget.json().error).toMatchObject({
+      code: "dashboard_invalid",
+      message: expect.stringContaining("multiple sections")
+    });
+
+    const unknownWidget = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        sections: [
+          { id: "overview", title: "Overview", kind: "overview", widgetIds: ["live_supply_return"] },
+          { id: "trends", title: "Trends", kind: "trends", widgetIds: ["missing_widget"] }
+        ]
+      })
+    });
+    expect(unknownWidget.statusCode).toBe(422);
+    expect(unknownWidget.json().error).toMatchObject({
+      code: "dashboard_invalid",
+      message: expect.stringContaining("unknown widget")
+    });
+
+    const duplicateSection = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        sections: [
+          { id: "overview", title: "Overview", kind: "overview", widgetIds: ["live_supply_return"] },
+          { id: "overview", title: "Overview copy", kind: "overview", widgetIds: ["trend_supply_return"] }
+        ]
+      })
+    });
+    expect(duplicateSection.statusCode).toBe(422);
+    expect(duplicateSection.json().error).toMatchObject({
+      code: "dashboard_invalid",
+      message: expect.stringContaining("unique")
+    });
+  });
+
+  it("accepts current-value and bar-comparison dashboard widgets", async () => {
+    const app = buildServer({ store: createSeedStore() });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        widgets: [
+          {
+            id: "plant_cop_stat",
+            kind: "stat_value",
+            title: "Plant COP",
+            pointBindings: [{ pointName: "WCC-L1-04_COP", label: "COP", unit: "" }]
+          },
+          {
+            id: "chiller_load_compare",
+            kind: "bar_comparison",
+            title: "Chiller load comparison",
+            pointBindings: [
+              { pointName: "WCC-L1-04_TLKW", label: "WCC-04", unit: "kW" },
+              { pointName: "WCC-L1-05_TLKW", label: "WCC-05", unit: "kW" }
+            ]
+          }
+        ],
+        layout: [
+          { widgetId: "plant_cop_stat", x: 0, y: 0, w: 1, h: 1 },
+          { widgetId: "chiller_load_compare", x: 1, y: 0, w: 2, h: 1 }
+        ]
+      })
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().dashboard.widgets).toEqual([
+      expect.objectContaining({ kind: "stat_value", id: "plant_cop_stat" }),
+      expect.objectContaining({ kind: "bar_comparison", id: "chiller_load_compare" })
+    ]);
+  });
+
+  it("accepts note dashboard widgets without point bindings", async () => {
+    const app = buildServer({ store: createSeedStore() });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        widgets: [
+          {
+            id: "operator_note",
+            kind: "note",
+            title: "Operator note",
+            content: "Check valve position after morning startup.",
+            tone: "yellow",
+            pointBindings: []
+          }
+        ],
+        layout: [
+          { widgetId: "operator_note", x: 0, y: 0, w: 3, h: 2 }
+        ],
+        sections: [
+          { id: "notes", title: "Notes", kind: "custom", widgetIds: ["operator_note"] }
+        ]
+      })
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().dashboard).toEqual(expect.objectContaining({
+      widgets: [
+        expect.objectContaining({
+          id: "operator_note",
+          kind: "note",
+          content: "Check valve position after morning startup.",
+          pointBindings: []
+        })
+      ],
+      sections: [
+        expect.objectContaining({ id: "notes", widgetIds: ["operator_note"] })
+      ]
+    }));
+  });
+
+  it("accepts taller dashboard widgets for resizable chart panels", async () => {
+    const app = buildServer({ store: createSeedStore() });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        layout: [
+          { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 2 },
+          { widgetId: "trend_supply_return", x: 1, y: 0, w: 2, h: 4 }
+        ]
+      })
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().dashboard.layout).toEqual([
+      expect.objectContaining({ widgetId: "live_supply_return", h: 2 }),
+      expect.objectContaining({ widgetId: "trend_supply_return", h: 4 })
+    ]);
+
+    const dashboardId = created.json().dashboard.id as string;
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/project_element/dashboards/${dashboardId}`,
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        layout: [
+          { widgetId: "live_supply_return", x: 0, y: 0, w: 1, h: 2 },
+          { widgetId: "trend_supply_return", x: 1, y: 0, w: 3, h: 6 }
+        ]
+      })
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().dashboard.layout).toEqual([
+      expect.objectContaining({ widgetId: "live_supply_return", h: 2 }),
+      expect.objectContaining({ widgetId: "trend_supply_return", w: 3, h: 6 })
+    ]);
   });
 
   it("backfills dashboard storage for persisted stores created before dashboards existed", async () => {
