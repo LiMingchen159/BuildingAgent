@@ -885,6 +885,17 @@ function calculateAlignedDerivedMetricSamples(
   return { samples, skipped };
 }
 
+function latestDerivedMetricPreview(samples: DerivedMetricCalculationSample[]): DerivedMetricCalculationSample | null {
+  return samples.at(-1) ?? null;
+}
+
+function limitedDerivedMetricPreviewSamples(
+  samples: DerivedMetricCalculationSample[],
+  limit = 50
+): DerivedMetricCalculationSample[] {
+  return samples.slice(-Math.max(1, limit));
+}
+
 function derivedMetricPointerContent(instance: {
   instanceId: string;
   metricKey: string;
@@ -1159,6 +1170,189 @@ export function createGenericToolRegistry(
             ? "Reuse an existing metric_instance_id with derived_metric_read instead of recalculating/registering a duplicate."
             : "No persisted derived metric matched; calculate only if needed, then ask whether to persist/register it."
         };
+      }
+    },
+    {
+      name: "derived_metric_preview",
+      category: "building",
+      description: "Calculate a safe ratio/difference derived metric without persisting it, then return save-ready arguments.",
+      schema: {
+        name: "derived_metric_preview",
+        description:
+          "Preview a one-off derived metric calculation without writing metric definitions, samples, latest values, or memory. Use before asking the user whether to persist Delta T, COP, kW/RT, or similar reusable metrics.",
+        parameters: {
+          type: "object",
+          properties: {
+            metricKey: { type: "string", description: "Optional stable metric key if this preview might be saved, e.g. delta_t." },
+            entityId: { type: "string", description: "Optional entity/equipment id if this preview might be saved." },
+            entityName: { type: "string", description: "Human-readable entity name." },
+            displayName: { type: "string", description: "Metric display name." },
+            unit: { type: "string", description: "Metric unit." },
+            metricType: { type: "string", description: "derived, kpi, fd_score, etc." },
+            formulaKind: { type: "string", enum: ["ratio", "difference"], description: "ratio computes left/right; difference computes left-right." },
+            formulaVersion: { type: "string", description: "Formula version, default v1." },
+            formula: { type: "string", description: "Optional formula string stored if the user later saves this metric." },
+            formulaDescription: { type: "string", description: "Plain-language formula description." },
+            leftRole: { type: "string", description: "Role for left/numerator/minuend dependency." },
+            rightRole: { type: "string", description: "Role for right/denominator/subtrahend dependency." },
+            numeratorRole: { type: "string", description: "Alias for leftRole in ratio formulas." },
+            denominatorRole: { type: "string", description: "Alias for rightRole in ratio formulas." },
+            minuendRole: { type: "string", description: "Alias for leftRole in difference formulas." },
+            subtrahendRole: { type: "string", description: "Alias for rightRole in difference formulas." },
+            dependencies: {
+              type: "array",
+              description:
+                "Dependencies [{role, sourceType: raw_point|metric, sourceId, pointName?, objectRef?, unit?, label?}]. Required unless metricKey+entityId resolves an existing metric with dependencies."
+            },
+            from: { type: "string", description: "Source window start UTC ISO8601." },
+            to: { type: "string", description: "Source window end UTC ISO8601; defaults to now." },
+            limit: { type: "number", description: "Max source samples per dependency, default 2000." },
+            previewLimit: { type: "number", description: "Max preview samples returned, default 50." },
+            metadata: { type: "object", description: "Optional metadata copied into persistCandidate args." }
+          },
+          required: ["formulaKind", "from"]
+        }
+      },
+      async run(args, context) {
+        if (!derivedMetrics) {
+          return { error: "derived_metrics_unavailable" };
+        }
+
+        const metricKey = textArg(args, "metricKey");
+        const entityId = textArg(args, "entityId");
+        const kind = normalizeDerivedMetricFormulaKind(textArg(args, "formulaKind"));
+        const from = textArg(args, "from");
+        const to = textArg(args, "to") || new Date().toISOString();
+        if (!kind) {
+          return { error: "formulaKind must be ratio or difference" };
+        }
+        if (!from) {
+          return { error: "from is required" };
+        }
+
+        const existing = metricKey && entityId
+          ? derivedMetrics.lookup({
+              projectId: context.projectId,
+              metricKey,
+              entityId,
+              limit: 1
+            })[0] ?? null
+          : null;
+        const existingLatest = existing ? derivedMetrics.readLatest(existing.instanceId) : null;
+        const dashboardBinding = (instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string }) => ({
+          source: "derived_metric",
+          metricInstanceId: instance.instanceId,
+          metricKey: instance.metricKey,
+          entityId: instance.entityId,
+          label: instance.displayName,
+          unit: instance.unit ?? textArg(args, "unit")
+        });
+
+        if (existing && existingLatest) {
+          return {
+            reused: true,
+            preview: false,
+            persisted: true,
+            calculated: false,
+            instance: existing,
+            latest: existingLatest,
+            dashboardBinding: dashboardBinding(existing),
+            reuseHint: "A persisted derived metric already exists. Use derived_metric_read/dashboard binding instead of recalculating or saving a duplicate."
+          };
+        }
+
+        const inputDependencies = Array.isArray(args.dependencies)
+          ? args.dependencies.map((entry) => normalizeDerivedMetricDependency(entry)).filter((entry): entry is DerivedMetricDependencyInput => entry !== null)
+          : [];
+        const existingDependencies: DerivedMetricDependencyInput[] = existing?.dependencies.map((dependency) => ({
+          role: dependency.role,
+          sourceType: dependency.sourceType,
+          sourceId: dependency.sourceId,
+          ...(dependency.pointName ? { pointName: dependency.pointName } : {}),
+          ...(dependency.objectRef ? { objectRef: dependency.objectRef } : {}),
+          ...(dependency.unit ? { unit: dependency.unit } : {}),
+          ...(dependency.label ? { label: dependency.label } : {}),
+          ...(dependency.metadata ? { metadata: dependency.metadata } : {})
+        })) ?? [];
+        const dependencies = inputDependencies.length > 0 ? inputDependencies : existingDependencies;
+        if (dependencies.length < 2) {
+          return { error: "At least two dependencies are required to preview a derived metric." };
+        }
+
+        const leftRole = roleOrFallback(
+          args,
+          kind === "ratio" ? ["leftRole", "numeratorRole"] : ["leftRole", "minuendRole"],
+          dependencies[0]?.role ?? "left"
+        );
+        const rightRole = roleOrFallback(
+          args,
+          kind === "ratio" ? ["rightRole", "denominatorRole"] : ["rightRole", "subtrahendRole"],
+          dependencies[1]?.role ?? "right"
+        );
+        const leftDependency = dependencyForRole(dependencies, leftRole, 0);
+        const rightDependency = dependencyForRole(dependencies, rightRole, 1);
+        if (!leftDependency || !rightDependency) {
+          return { error: "Unable to resolve left/right dependencies for preview." };
+        }
+
+        try {
+          const limit = Math.min(Math.max(1, numArg(args, "limit", 2000)), 20_000);
+          const [leftSeries, rightSeries] = await Promise.all([
+            readDerivedMetricDependencySeries(derivedMetrics, leftDependency, from, to, limit),
+            readDerivedMetricDependencySeries(derivedMetrics, rightDependency, from, to, limit)
+          ]);
+          const calculated = calculateAlignedDerivedMetricSamples(kind, leftRole, rightRole, leftSeries, rightSeries);
+          if (calculated.samples.length === 0) {
+            return {
+              error: "no_aligned_samples",
+              inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
+              skipped: calculated.skipped,
+              message: "No aligned numeric samples were available for the requested source window."
+            };
+          }
+
+          const metadata = isPlainRecord(args.metadata) ? args.metadata : undefined;
+          const formula = textArg(args, "formula") || formulaForDerivedMetric(kind, leftRole, rightRole);
+          const persistArgs = {
+            ...(metricKey ? { metricKey } : {}),
+            ...(entityId ? { entityId } : {}),
+            formulaKind: kind,
+            leftRole,
+            rightRole,
+            from,
+            to,
+            dependencies,
+            formula,
+            ...(textArg(args, "entityName") ? { entityName: textArg(args, "entityName") } : {}),
+            ...(textArg(args, "displayName") ? { displayName: textArg(args, "displayName") } : {}),
+            ...(textArg(args, "unit") ? { unit: textArg(args, "unit") } : {}),
+            ...(textArg(args, "metricType") ? { metricType: textArg(args, "metricType") } : {}),
+            ...(textArg(args, "formulaVersion") ? { formulaVersion: textArg(args, "formulaVersion") } : {}),
+            ...(textArg(args, "formulaDescription") ? { formulaDescription: textArg(args, "formulaDescription") } : {}),
+            ...(metadata ? { metadata } : {})
+          };
+          return {
+            reused: false,
+            preview: true,
+            persisted: false,
+            calculated: true,
+            formulaKind: kind,
+            formula,
+            latestPreview: latestDerivedMetricPreview(calculated.samples),
+            samples: limitedDerivedMetricPreviewSamples(calculated.samples, numArg(args, "previewLimit", 50)),
+            sampleCount: calculated.samples.length,
+            skipped: calculated.skipped,
+            inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
+            persistCandidate: metricKey && entityId
+              ? { tool: "derived_metric_calculate", args: persistArgs }
+              : null,
+            savePrompt: metricKey && entityId
+              ? "Ask the user whether to save this calculated metric. If they approve, call derived_metric_calculate with persistCandidate.args."
+              : "Ask the user for a stable metricKey and entityId before saving this preview as a reusable derived metric."
+          };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : "derived_metric_preview_failed" };
+        }
       }
     },
     {
