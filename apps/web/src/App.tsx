@@ -203,6 +203,14 @@ function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?
   return `/projects/${encodeURIComponent(projectId)}/${section}`;
 }
 
+function dashboardSoloPath(projectId: string, dashboardId: string): string {
+  return `${workspacePathFromTab(projectId, "dashboards", dashboardId)}?view=solo`;
+}
+
+function isSoloDashboardSearch(search: string): boolean {
+  return new URLSearchParams(search).get("view") === "solo";
+}
+
 function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab; dashboardId?: string } | null {
   const dashboardMatch = pathname.match(/^\/projects\/([^/]+)\/dashboards\/([^/]+)$/);
   if (dashboardMatch) {
@@ -260,6 +268,44 @@ function dedupeMessageImages(images: ChatMessageImage[] | undefined, content: st
     src: normalizeChatImagePath(image.src)
   }));
   return deduped.length > 0 ? deduped : undefined;
+}
+
+interface MessageDashboardReference {
+  id: string;
+  title: string;
+  subtitle: string;
+  dashboard?: DashboardRecord;
+}
+
+function extractDashboardReferences(content: string, dashboards: DashboardRecord[]): MessageDashboardReference[] {
+  const dashboardsById = new Map(dashboards.map((dashboard) => [dashboard.id, dashboard]));
+  const titlesById = new Map<string, string>();
+  for (const match of content.matchAll(/###\s+\*\*(.+?)\*\*\s+—\s+`(dash_\d+)`/g)) {
+    const title = match[1]?.trim();
+    const id = match[2]?.trim();
+    if (title && id) {
+      titlesById.set(id, title);
+    }
+  }
+
+  const ids = new Set<string>();
+  for (const match of content.matchAll(/\/projects\/[^/\s`]+\/dashboards\/(dash_\d+)/g)) {
+    const id = match[1]?.trim();
+    if (id) ids.add(id);
+  }
+  for (const id of titlesById.keys()) {
+    ids.add(id);
+  }
+
+  return [...ids].map((id) => {
+    const dashboard = dashboardsById.get(id);
+    const title = dashboard?.title ?? titlesById.get(id) ?? id;
+    const visibilityLabel = dashboard?.visibility === "project" ? "Shared" : "Private";
+    const subtitle = dashboard
+      ? `${visibilityLabel} dashboard · ${dashboard.widgets.length} widget${dashboard.widgets.length === 1 ? "" : "s"}`
+      : "Dashboard artifact";
+    return { id, title, subtitle, ...(dashboard ? { dashboard } : {}) };
+  });
 }
 
 function Icon({ name, className = "", ...props }: { name: IconName; className?: string } & SVGProps<SVGSVGElement>) {
@@ -321,6 +367,60 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     zap: <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
   };
   return <svg {...common}>{paths[name]}</svg>;
+}
+
+function DashboardArtifactCard({
+  reference,
+  projectId,
+  onOpenDashboard
+}: {
+  reference: MessageDashboardReference;
+  projectId: string;
+  onOpenDashboard: (dashboardId: string) => void;
+}) {
+  return (
+    <section className="dashboard-artifact-card" aria-label={`Dashboard artifact ${reference.title}`}>
+      <button
+        type="button"
+        className="dashboard-artifact-surface"
+        onClick={() => onOpenDashboard(reference.id)}
+        disabled={!reference.dashboard}
+      >
+        <div className="dashboard-artifact-icon" aria-hidden="true">
+          <Icon name="grid" />
+        </div>
+        <div className="dashboard-artifact-copy">
+          <strong>{reference.title}</strong>
+          <span>{reference.subtitle}</span>
+        </div>
+      </button>
+      <details className="dashboard-artifact-menu" onClick={(event) => event.stopPropagation()}>
+        <summary className="dashboard-artifact-action" aria-label="Open dashboard options">
+          <span>Open in</span>
+          <Icon name="chevron-down" />
+        </summary>
+        <ul>
+          <li>
+            <button type="button" onClick={() => onOpenDashboard(reference.id)} disabled={!reference.dashboard}>
+              This page
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              onClick={() => {
+                if (!reference.dashboard) return;
+                window.open(dashboardSoloPath(projectId, reference.id), "_blank", "noopener,noreferrer");
+              }}
+              disabled={!reference.dashboard}
+            >
+              New page
+            </button>
+          </li>
+        </ul>
+      </details>
+    </section>
+  );
 }
 
 function ThinkDetails({
@@ -1182,6 +1282,7 @@ function findDashboardChoice(dashboards: DashboardRecord[], requested: string): 
 
 const AUTO_FLIP_DETAILS_MENU_SELECTOR = [
   "details.dashboard-panel-menu",
+  "details.dashboard-artifact-menu",
   "details.workspace-right-dashboard-menu",
   "details.workspace-project-menu",
   "details.workspace-sidebar-account-menu"
@@ -1195,8 +1296,15 @@ function cssEscape(value: string): string {
 }
 
 function shouldOpenMenuUp(triggerRect: DOMRect, menuHeight: number): boolean {
-  const viewportGap = 12;
-  const spaceBelow = window.innerHeight - triggerRect.bottom;
+  const viewportGap = 18;
+  const composer = triggerRect.bottom < window.innerHeight
+    ? document.querySelector<HTMLElement>(".chat-shell .composer")
+    : null;
+  const composerRect = composer?.getBoundingClientRect();
+  const effectiveViewportBottom = composerRect
+    ? Math.min(window.innerHeight, Math.max(0, composerRect.top - 10))
+    : window.innerHeight;
+  const spaceBelow = effectiveViewportBottom - triggerRect.bottom;
   const spaceAbove = triggerRect.top;
   return spaceBelow < menuHeight + viewportGap && spaceAbove > spaceBelow;
 }
@@ -1259,6 +1367,13 @@ function useAutoFlipMenus(): void {
     const scheduleUpdate = () => {
       window.requestAnimationFrame(updateOpenMenus);
     };
+    const closeDetailsMenus = (target: EventTarget | null) => {
+      document.querySelectorAll<HTMLDetailsElement>(`${AUTO_FLIP_DETAILS_MENU_SELECTOR}[open]`).forEach((details) => {
+        if (target instanceof Node && details.contains(target)) return;
+        details.open = false;
+        details.classList.remove("is-menu-up");
+      });
+    };
     const handleToggle = (event: Event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
@@ -1266,15 +1381,26 @@ function useAutoFlipMenus(): void {
         scheduleUpdate();
       }
     };
+    const handlePointerDown = (event: Event) => {
+      closeDetailsMenus(event.target);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeDetailsMenus(null);
+    };
 
     document.addEventListener("toggle", handleToggle, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
     document.addEventListener("click", scheduleUpdate, true);
     document.addEventListener("scroll", scheduleUpdate, true);
+    document.addEventListener("keydown", handleKeyDown, true);
     window.addEventListener("resize", scheduleUpdate);
     return () => {
       document.removeEventListener("toggle", handleToggle, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
       document.removeEventListener("click", scheduleUpdate, true);
       document.removeEventListener("scroll", scheduleUpdate, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("resize", scheduleUpdate);
     };
   }, []);
@@ -1415,7 +1541,7 @@ function ActivityRow({ activity, streaming, isLast }: { activity: ChatStreamActi
   );
 }
 
-function ChatWorkspace({ project, user, token, messages, activeConversationId, onSend, busy, provider, requestId, streamingActivity, streamInterimNarration, streamWorkElapsedMs = 0, streamWorkSegmentStartedAt = null, streamOutputStarted, streamAnswerPhase = false, streamTick = 0, onStop }: { project: ProjectSummary; user: UserSummary | null; token: string; messages: ChatMessage[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamInterimNarration?: string; streamWorkElapsedMs?: number; streamWorkSegmentStartedAt?: number | null; streamOutputStarted: boolean; streamAnswerPhase?: boolean; streamTick?: number; onStop: () => void }) {
+function ChatWorkspace({ project, user, token, messages, dashboards, activeConversationId, onSend, onOpenDashboard, busy, provider, requestId, streamingActivity, streamInterimNarration, streamWorkElapsedMs = 0, streamWorkSegmentStartedAt = null, streamOutputStarted, streamAnswerPhase = false, streamTick = 0, onStop }: { project: ProjectSummary; user: UserSummary | null; token: string; messages: ChatMessage[]; dashboards: DashboardRecord[]; activeConversationId: string | null; onSend: (message: string) => Promise<void>; onOpenDashboard: (dashboardId: string) => void; busy: boolean; provider: ChatProviderDiagnostics | null; requestId?: string | undefined; streamingActivity?: ChatStreamActivityEvent[]; streamInterimNarration?: string; streamWorkElapsedMs?: number; streamWorkSegmentStartedAt?: number | null; streamOutputStarted: boolean; streamAnswerPhase?: boolean; streamTick?: number; onStop: () => void }) {
   const [draft, setDraft] = useState("");
   const [leavingEmptyState, setLeavingEmptyState] = useState(false);
   const [timelineCollapsed, setTimelineCollapsed] = useState<Record<string, boolean>>({});
@@ -1822,6 +1948,9 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
             ? (isStreaming ? message.content : stripThinkingFromAnswer(message.content))
             : message.content;
           const liveInterimNarration = isStreaming && !streamAnswerPhase ? (streamInterimNarration ?? "") : "";
+          const dashboardReferences = message.role === "assistant"
+            ? extractDashboardReferences(answerText, dashboards)
+            : [];
 
           return (
             <article className={`message message-${message.role}${isThinking ? " message-thinking" : ""}${isStreaming ? " message-streaming" : ""}`} key={message.id} aria-label={`${message.role === "assistant" ? "Assistant" : "You"} message`}>
@@ -1902,6 +2031,18 @@ function ChatWorkspace({ project, user, token, messages, activeConversationId, o
                       <div className="final-answer-placeholder">
                         <span className="spinner" aria-hidden="true" />
                         <span>Thinking...</span>
+                      </div>
+                    ) : null}
+                    {dashboardReferences.length > 0 ? (
+                      <div className="dashboard-artifact-list">
+                        {dashboardReferences.map((reference) => (
+                          <DashboardArtifactCard
+                            key={`${message.id}-${reference.id}`}
+                            reference={reference}
+                            projectId={project.id}
+                            onOpenDashboard={onOpenDashboard}
+                          />
+                        ))}
                       </div>
                     ) : null}
                   </>
@@ -2380,6 +2521,7 @@ function Workspace({
   onMergeDashboard,
   onCopyWidgetToDashboard,
   onStop,
+  soloDashboardView,
   streamingActivity,
   streamOutputStarted,
   streamAnswerPhase,
@@ -2442,6 +2584,7 @@ function Workspace({
   streamWorkSegmentStartedAt?: number | null;
   streamTick?: number;
   restoringSession?: boolean;
+  soloDashboardView?: boolean;
 }) {
   const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: "chat", label: "Chat" },
@@ -2493,7 +2636,7 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} activeConversationId={activeConversationId} onSend={onSend} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamOutputStarted={streamOutputStarted} {...(streamAnswerPhase !== undefined ? { streamAnswerPhase } : {})} {...(streamInterimNarration !== undefined ? { streamInterimNarration } : {})} {...(streamWorkElapsedMs !== undefined ? { streamWorkElapsedMs } : {})} {...(streamWorkSegmentStartedAt !== undefined ? { streamWorkSegmentStartedAt } : {})} {...(streamTick !== undefined ? { streamTick } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
+      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} dashboards={dashboards} activeConversationId={activeConversationId} onSend={onSend} onOpenDashboard={onOpenDashboard} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamOutputStarted={streamOutputStarted} {...(streamAnswerPhase !== undefined ? { streamAnswerPhase } : {})} {...(streamInterimNarration !== undefined ? { streamInterimNarration } : {})} {...(streamWorkElapsedMs !== undefined ? { streamWorkElapsedMs } : {})} {...(streamWorkSegmentStartedAt !== undefined ? { streamWorkSegmentStartedAt } : {})} {...(streamTick !== undefined ? { streamTick } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
       {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
@@ -2552,6 +2695,38 @@ function Workspace({
       <ProjectPicker projects={projects} user={user} busy={busy} onSelect={onSelectProject} onCreate={onCreateProject} onSignOut={onSignOut} conversationCounts={projectConversationCounts} assetCounts={projectAssetCounts} showChrome={false} />
     </div>
   );
+
+  if (project && soloDashboardView && activeTab === "dashboards") {
+    return (
+      <div className="workspace-card workspace-management cgpt-workspace dashboard-solo-workspace">
+        <div className="dashboard-solo-shell">
+          {activeDashboard ? (
+            <DashboardView
+              key={activeDashboard.id}
+              token={token}
+              dashboard={activeDashboard}
+              dashboards={dashboards}
+              liveValues={dashboardLiveValues}
+              stale={dashboardRealtimeStale}
+              forceCompactLayout={false}
+              onDashboardChange={onDashboardSpecChange}
+              onDashboardRename={() => { void onRenameDashboard(activeDashboard.id); }}
+              onDashboardDuplicate={() => { void onDuplicateDashboard(activeDashboard.id); }}
+              onDashboardDelete={() => { void onDeleteDashboard(activeDashboard.id); }}
+              onDashboardMerge={() => { void onMergeDashboard(activeDashboard.id); }}
+              onCopyWidgetToDashboard={onCopyWidgetToDashboard}
+              onLayoutChange={onDashboardLayoutChange}
+              onVisibilityChange={onDashboardVisibilityChange}
+            />
+          ) : (
+            <Surface className="dashboard-empty-surface">
+              <EmptyState title="Loading dashboard">This dashboard will open here as soon as it is available.</EmptyState>
+            </Surface>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="workspace-card workspace-management cgpt-workspace">
@@ -2631,12 +2806,14 @@ export default function App() {
   const [management, setManagement] = useState<ProjectManagementResponse | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
   const [pathnameProjectId, setPathnameProjectId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.projectId ?? null);
+  const [locationSearch, setLocationSearch] = useState(() => window.location.search);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
   const [conversationStreams, setConversationStreams] = useState<Record<string, ConversationStreamState>>({});
   const [streamElapsedTick, setStreamElapsedTick] = useState(0);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
+  const soloDashboardView = isSoloDashboardSearch(locationSearch);
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingTurnRef = useRef<StreamingTurnState | null>(null);
   const projectSocketRef = useRef<ReturnType<typeof createProjectSocket> | null>(null);
@@ -2658,10 +2835,14 @@ export default function App() {
       activeTab,
       activeTab === "dashboards" ? activeDashboardId : null
     );
-    if (window.location.pathname !== targetPath) {
-      window.history.pushState({}, "", targetPath);
+    const targetUrl = soloDashboardView && activeTab === "dashboards" && activeDashboardId
+      ? dashboardSoloPath(selectedProject.id, activeDashboardId)
+      : targetPath;
+    if (`${window.location.pathname}${window.location.search}` !== targetUrl) {
+      window.history.pushState({}, "", targetUrl);
+      setLocationSearch(soloDashboardView && activeTab === "dashboards" && activeDashboardId ? "?view=solo" : "");
     }
-  }, [activeDashboardId, activeTab, selectedProject?.id ?? null]);
+  }, [activeDashboardId, activeTab, selectedProject?.id ?? null, soloDashboardView]);
 
   useEffect(() => {
     const parsed = parseWorkspacePath(window.location.pathname);
@@ -2670,9 +2851,11 @@ export default function App() {
       setActiveTab(parsed.tab);
       setActiveDashboardId(parsed.dashboardId ?? null);
     }
+    setLocationSearch(window.location.search);
     const handlePopState = () => {
       const next = parseWorkspacePath(window.location.pathname);
       setPathnameProjectId(next?.projectId ?? null);
+      setLocationSearch(window.location.search);
       if (next) {
         setActiveTab(next.tab);
         setActiveDashboardId(next.dashboardId ?? null);
@@ -2733,9 +2916,10 @@ export default function App() {
     abortControllerRef.current = null;
     storeSession({ token: "", user: null, projectId: null });
     window.sessionStorage.removeItem(SKIP_PROJECT_RESTORE_KEY);
-    if (window.location.pathname !== "/") {
+    if (window.location.pathname !== "/" || window.location.search) {
       window.history.replaceState({}, "", "/");
     }
+    setLocationSearch("");
     setBanner(nextBanner ?? { tone: "info", title: "Signed out", message: "Sign in again to continue." });
   }
 
@@ -2766,12 +2950,13 @@ export default function App() {
 
   function applyWorkspacePath(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): void {
     const nextPath = workspacePathFromTab(projectId, tab, dashboardId);
-    if (window.location.pathname !== nextPath) {
+    if (window.location.pathname !== nextPath || window.location.search) {
       window.history.pushState({}, "", nextPath);
     }
     setPathnameProjectId(projectId);
     setActiveTab(tab);
     setActiveDashboardId(tab === "dashboards" ? (dashboardId ?? null) : null);
+    setLocationSearch("");
   }
 
   useEffect(() => {
@@ -4187,6 +4372,7 @@ export default function App() {
           {...(visibleStreamState ? { streamInterimNarration: visibleStreamState.interimNarration } : {})}
           {...(visibleStreamState ? { streamWorkElapsedMs: visibleStreamState.workElapsedMs } : {})}
           {...(visibleStreamState ? { streamWorkSegmentStartedAt: visibleStreamState.workSegmentStartedAt } : {})}
+          soloDashboardView={soloDashboardView}
           restoringSession={bootstrapping}
         />
       ) : null}
