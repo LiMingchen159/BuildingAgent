@@ -4285,6 +4285,47 @@ p {
   font-size: var(--font-size-xs);
 }
 
+.autoreport-intent-grid {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.autoreport-intent-grid button {
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  display: grid;
+  gap: 0.2rem;
+  letter-spacing: 0;
+  padding: var(--space-3);
+  text-align: left;
+}
+
+.autoreport-intent-grid button:hover,
+.autoreport-intent-grid button:focus-visible {
+  border-color: rgba(15, 118, 110, 0.42);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.08);
+  outline: none;
+}
+
+.autoreport-intent-grid button.is-active {
+  background: #ecfdf5;
+  border-color: rgba(15, 118, 110, 0.48);
+}
+
+.autoreport-intent-grid strong {
+  font-size: var(--font-size-sm);
+}
+
+.autoreport-intent-grid span,
+.autoreport-intent-grid small {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
 .autoreport-segmented {
   background: #eef2f7;
   border: 1px solid rgba(148, 163, 184, 0.24);
@@ -4497,6 +4538,30 @@ p {
   padding-bottom: var(--space-2);
 }
 
+.autoreport-bilingual-summary {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.autoreport-bilingual-summary p,
+.autoreport-source-note {
+  line-height: 1.65;
+  margin: 0;
+}
+
+.autoreport-bilingual-summary p {
+  color: var(--color-text-primary);
+}
+
+.autoreport-source-note {
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: var(--space-3);
+}
+
 .autoreport-priority-list {
   display: grid;
   gap: var(--space-2);
@@ -4514,6 +4579,17 @@ p {
   border: 1px solid rgba(180, 83, 9, 0.22);
   border-radius: 8px;
   color: #334155;
+  line-height: 1.6;
+  margin: 0;
+  padding: var(--space-3);
+  white-space: pre-wrap;
+}
+
+.autoreport-verification-note {
+  background: #eff6ff;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 8px;
+  color: #1e3a8a;
   line-height: 1.6;
   margin: 0;
   padding: var(--space-3);
@@ -4591,6 +4667,33 @@ p {
   padding: var(--space-2) var(--space-3);
 }
 
+.autoreport-trend-evidence {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.autoreport-trend-evidence div {
+  background: #fbfdff;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+  padding: var(--space-3);
+}
+
+.autoreport-trend-evidence strong {
+  color: var(--color-text-primary);
+}
+
+.autoreport-trend-evidence span,
+.autoreport-trend-evidence small {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
 .autoreport-point-table {
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 8px;
@@ -4626,6 +4729,21 @@ p {
   overflow-wrap: anywhere;
 }
 
+.autoreport-point-name {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.autoreport-point-name strong {
+  color: var(--color-text-primary);
+  font-weight: 800;
+}
+
+.autoreport-point-name small {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
 @media (max-width: 1180px) {
   .autoreport-builder-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -4640,6 +4758,10 @@ p {
 
   .autoreport-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .autoreport-trend-evidence {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
