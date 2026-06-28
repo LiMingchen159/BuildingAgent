@@ -3364,7 +3364,7 @@ function Workspace({
             kbCount={project ? kbTotalCount : 0}
             repoCount={project ? repoTotalCount : 0}
             conversations={project ? conversations : []}
-            activeConversationId={project ? activeConversationId : null}
+            activeConversationId={project && activeTab === "chat" ? activeConversationId : null}
             busy={busy}
             onSwitchProject={onSwitchProject}
             onSelectProject={onSelectProject}
