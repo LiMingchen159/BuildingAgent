@@ -330,6 +330,74 @@ describe("dashboard project APIs", () => {
     ]);
   });
 
+  it("preserves generic binding metadata for raw and derived analytics", async () => {
+    const app = buildServer({ store: createSeedStore() });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        widgets: [
+          {
+            id: "analytics_trend",
+            kind: "timeseries_chart",
+            title: "Derived analytics trend",
+            pointBindings: [
+              {
+                source: "derived_metric",
+                metricInstanceId: "minst_system_cop_04",
+                metricKey: "system_cop",
+                entityId: "WCC_04",
+                groupId: "WCC_04",
+                label: "System COP",
+                role: "output",
+                dependencyRole: "output",
+                defaultVisible: true,
+                unit: "ratio"
+              },
+              {
+                source: "bms",
+                pointName: "WCC-L1-04_Q",
+                entityId: "WCC_04",
+                groupId: "WCC_04",
+                label: "Cooling load",
+                role: "cooling_load_kw",
+                dependencyRole: "input",
+                defaultVisible: false,
+                unit: "kW"
+              }
+            ]
+          }
+        ],
+        layout: [{ widgetId: "analytics_trend", x: 0, y: 0, w: 6, h: 4 }]
+      })
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json().dashboard.widgets[0].pointBindings).toEqual([
+      expect.objectContaining({
+        source: "derived_metric",
+        entityId: "WCC_04",
+        groupId: "WCC_04",
+        role: "output",
+        dependencyRole: "output",
+        defaultVisible: true
+      }),
+      expect.objectContaining({
+        source: "bms",
+        pointName: "WCC-L1-04_Q",
+        entityId: "WCC_04",
+        groupId: "WCC_04",
+        role: "cooling_load_kw",
+        dependencyRole: "input",
+        defaultVisible: false
+      })
+    ]);
+  });
+
   it("accepts derived metric bindings and serves derived latest/history batches", async () => {
     const env = isolatedDataEnv();
     const metrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
@@ -452,6 +520,84 @@ describe("dashboard project APIs", () => {
         expect.objectContaining({ value_num: 4.6, object_ref: metric.instance.instanceId }),
         expect.objectContaining({ value_num: 4.8, object_ref: metric.instance.instanceId })
       ]
+    });
+  });
+
+  it("lists derived KPI/FDD assets with linked dashboards and toggles materialization", async () => {
+    const env = { ...isolatedDataEnv(), DERIVED_METRIC_MATERIALIZER_DISABLED: "1" };
+    const metrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    const metric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_06",
+      displayName: "WCC-06 System COP",
+      formula: "cooling_load_kw / power_kw",
+      dependencies: [
+        { role: "cooling_load_kw", sourceId: "WCC-L1-06_Q" },
+        { role: "power_kw", sourceId: "WCC-L1-06_TLKW" }
+      ]
+    });
+    metrics.configureMaterialization({
+      instanceId: metric.instance.instanceId,
+      enabled: true,
+      formulaKind: "ratio",
+      leftRole: "cooling_load_kw",
+      rightRole: "power_kw",
+      invalidValuePolicy: "null"
+    });
+
+    const app = buildServer({ store: createSeedStore(), env });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/dashboards",
+      headers: bearer(adaToken),
+      payload: dashboardPayload({
+        title: "WCC-06 COP",
+        widgets: [{
+          id: "wcc_06_system_cop",
+          kind: "stat_value",
+          title: "WCC-06 System COP",
+          pointBindings: [{
+            source: "derived_metric",
+            metricInstanceId: metric.instance.instanceId,
+            label: "System COP"
+          }]
+        }],
+        layout: [{ widgetId: "wcc_06_system_cop", x: 0, y: 0, w: 2, h: 2 }]
+      })
+    });
+    expect(created.statusCode).toBe(201);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_element/derived-metrics",
+      headers: bearer(adaToken)
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      projectId: "project_element",
+      totalCount: 1,
+      metrics: [
+        expect.objectContaining({
+          instance: expect.objectContaining({ instanceId: metric.instance.instanceId, displayName: "WCC-06 System COP" }),
+          materialization: expect.objectContaining({ enabled: true, formulaKind: "ratio" }),
+          linkedDashboards: [expect.objectContaining({ id: created.json().dashboard.id, title: "WCC-06 COP" })]
+        })
+      ]
+    });
+
+    const toggled = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/project_element/derived-metrics/${metric.instance.instanceId}/materialization`,
+      headers: bearer(adaToken),
+      payload: { enabled: false }
+    });
+    expect(toggled.statusCode).toBe(200);
+    expect(toggled.json().metric.materialization).toMatchObject({
+      enabled: false,
+      status: "paused"
     });
   });
 

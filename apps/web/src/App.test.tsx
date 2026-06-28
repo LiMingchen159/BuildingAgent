@@ -8,7 +8,26 @@ import { DashboardView } from "./ui/DashboardView";
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   window.history.replaceState({}, "", "/");
+  class InertWebSocket {
+    static OPEN = 1;
+    readyState = InertWebSocket.OPEN;
+    onopen: (() => void) | null = null;
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor() {
+      queueMicrotask(() => this.onopen?.());
+    }
+    send() {
+      // no-op default socket for tests that do not inspect realtime traffic
+    }
+    close() {
+      this.onclose?.();
+    }
+  }
+  vi.stubGlobal("WebSocket", InertWebSocket as unknown as typeof WebSocket);
   if (!HTMLElement.prototype.scrollIntoView) {
     HTMLElement.prototype.scrollIntoView = vi.fn();
   }
@@ -188,7 +207,15 @@ function hangingStreamingResponse(chunks: string[], signal?: AbortSignal) {
   }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
 
-function installBaseFetch(options: { registry?: Response; management?: Response; project?: typeof alphaProject | typeof betaProject; chatMessages?: unknown[]; artifacts?: unknown[]; documents?: unknown[] } = {}) {
+function installBaseFetch(options: {
+  registry?: Response;
+  management?: Response;
+  project?: typeof alphaProject | typeof betaProject;
+  chatMessages?: unknown[];
+  activeStreams?: unknown[];
+  artifacts?: unknown[];
+  documents?: unknown[];
+} = {}) {
   const project = options.project ?? alphaProject;
   return installFetch((url, init) => {
     if (url === "/api/login") {
@@ -210,6 +237,9 @@ function installBaseFetch(options: { registry?: Response; management?: Response;
     }
     if (url === `/api/projects/${project.id}/chat` && init?.method !== "POST") {
       return jsonResponse({ messages: options.chatMessages ?? [], limit: 50, requestId: "req_chat" });
+    }
+    if (url === `/api/projects/${project.id}/chat/active-streams`) {
+      return jsonResponse({ projectId: project.id, streams: options.activeStreams ?? [], requestId: "req_active_streams" });
     }
     if (url === `/api/projects/${project.id}/chat` && init?.method === "POST") {
       return jsonResponse({
@@ -283,15 +313,21 @@ async function signIn(user = userEvent.setup()) {
 
 async function loginAndSelectProject(user = userEvent.setup()) {
   await signIn(user);
-  await screen.findByRole("heading", { name: /choose a project to get started/i });
-  await user.click(screen.getByRole("button", { name: /open/i }));
+  await user.click(await screen.findByRole("button", { name: /open/i }));
   await screen.findByRole("textbox", { name: /^message$/i });
 }
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup();
   vi.useRealTimers();
+  await act(async () => {
+    await Promise.resolve();
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
   vi.unstubAllGlobals();
   window.localStorage.clear();
+  window.sessionStorage.clear();
+  window.history.replaceState({}, "", "/");
 });
 
 describe("BuildingGPT Web flow", () => {
@@ -321,6 +357,60 @@ describe("BuildingGPT Web flow", () => {
     expect(await screen.findByRole("heading", { name: /choose a project to get started/i })).toBeInTheDocument();
   });
 
+  it("restores an in-progress chat stream after refreshing a saved project session", async () => {
+    window.localStorage.setItem("building-agent.session.v1", JSON.stringify({
+      token: "seed-token-ada",
+      user: { id: "user_ada", name: "Ada Lovelace" },
+      projectId: "project_alpha"
+    }));
+    installBaseFetch({
+      activeStreams: [{
+        projectId: "project_alpha",
+        conversationId: "conv_active_stream",
+        requestId: "req_stream",
+        startedAt: Date.parse("2026-05-12T00:00:00.000Z"),
+        updatedAt: Date.parse("2026-05-12T00:00:03.000Z"),
+        userMessage: {
+          id: "msg_active_user",
+          projectId: "project_alpha",
+          userId: "user_ada",
+          role: "user",
+          content: "Create a COP comparison dashboard"
+        },
+        assistantMessage: {
+          id: "streaming_req_stream",
+          projectId: "project_alpha",
+          userId: "user_ada",
+          role: "assistant",
+          content: "Drafting the dashboard"
+        },
+        activities: [{
+          id: "act_dashboard",
+          label: "Creating dashboard",
+          kind: "tool",
+          tool: "dashboard_create",
+          status: "running",
+          requestId: "req_stream",
+          at: Date.parse("2026-05-12T00:00:02.000Z")
+        }],
+        interimNarration: "",
+        answerPhase: true,
+        workElapsedMs: 2000,
+        workSegmentStartedAt: null,
+        workTimelinePaused: true,
+        streamTimelineFinalized: false
+      }]
+    });
+
+    render(<App />);
+
+    const messageList = await screen.findByLabelText(/alpha build messages/i);
+    expect(within(messageList).getByText("Create a COP comparison dashboard")).toBeInTheDocument();
+    expect(within(messageList).getByText(/Drafting the dashboard/)).toBeInTheDocument();
+    expect(within(messageList).getByText(/Worked for/)).toBeInTheDocument();
+    expect(within(messageList).getByText(/Creating dashboard/)).toBeInTheDocument();
+  });
+
   it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
     const fetchMock = installBaseFetch();
 
@@ -328,22 +418,21 @@ describe("BuildingGPT Web flow", () => {
     render(<App />);
 
     await signIn(user);
-    await screen.findByRole("heading", { name: /choose a project to get started/i });
-
-    await user.click(screen.getByRole("button", { name: /open/i }));
+    await user.click(await screen.findByRole("button", { name: /open/i }));
     expect(await screen.findByRole("textbox", { name: /^message$/i })).toBeInTheDocument();
-    expect(screen.getByText("Energy Baseline Analysis")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/live building operation|repository action|control route/i);
-    expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/Energy Baseline/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Space Summary/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 files/i)).toBeInTheDocument();
+    expect(screen.getByText("FDD Tasks")).toBeInTheDocument();
+    expect(screen.queryByText("Skills")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tools")).not.toBeInTheDocument();
+    expect(screen.getByText("BMS Data Config")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge Base")).toBeInTheDocument();
+    expect(screen.getByText("Repository")).toBeInTheDocument();
 
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "What should we build first?");
     await user.click(screen.getByRole("button", { name: /send message/i }));
 
-    const messageList = screen.getByLabelText(/alpha build messages/i);
-    expect(within(messageList).getByText("What should we build first?")).toBeInTheDocument();
+    const messageList = await screen.findByLabelText(/alpha build messages/i);
+    expect(await within(messageList).findByText("What should we build first?")).toBeInTheDocument();
     const assistantMessage = screen.getByRole("article", { name: /assistant message/i });
     expect(assistantMessage).toHaveTextContent(/I am checking related tools and data\./);
     expect(assistantMessage).toHaveTextContent(/Final answer ready/);
@@ -657,6 +746,130 @@ describe("BuildingGPT Web flow", () => {
     expect(screen.getByText(/Partial answer/i)).toBeInTheDocument();
   });
 
+  it("keeps local chat generation stable when stale socket stream snapshots arrive", async () => {
+    let releaseDone!: () => void;
+    const doneGate = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+
+    class MockWebSocket {
+      static OPEN = 1;
+      static instances: MockWebSocket[] = [];
+      readyState = MockWebSocket.OPEN;
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      sent: string[] = [];
+
+      constructor() {
+        MockWebSocket.instances.push(this);
+        queueMicrotask(() => this.onopen?.({} as Event));
+      }
+
+      send(payload: string) {
+        this.sent.push(payload);
+      }
+
+      close() {
+        this.onclose?.({} as CloseEvent);
+      }
+    }
+
+    vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
+
+    installFetch(async (url, init) => {
+      if (url === "/api/login") return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      if (url === "/api/session") return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      if (url === "/api/projects") return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      if (url === "/api/projects/project_alpha/select") return jsonResponse({ session: { userId: "user_ada", projectId: "project_alpha", permissions: alphaProject.permissions }, requestId: "req_select" });
+      if (url === "/api/projects/project_alpha/chat" && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === "/api/projects/project_alpha/chat/active-streams") return jsonResponse({ projectId: "project_alpha", streams: [], requestId: "req_active_streams" });
+      if (url === "/api/projects/project_alpha/conversations" && init?.method !== "POST") {
+        return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      }
+      if (url === "/api/projects/project_alpha/conversations" && init?.method === "POST") {
+        return jsonResponse({ conversation: { id: "conv_streaming", title: "New conversation", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_new_conv" }, 201);
+      }
+      if (url === "/api/projects/project_alpha/chat/stream" && init?.method === "POST") {
+        const encoder = new TextEncoder();
+        return new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("event: activity\ndata: " + JSON.stringify({ id: "act_1", label: "Retrieving site rules", kind: "context", requestId: "req_stream" }) + "\n\n"));
+            controller.enqueue(encoder.encode("event: final_answer_start\ndata: " + JSON.stringify({ requestId: "req_stream" }) + "\n\n"));
+            controller.enqueue(encoder.encode("event: answer_token\ndata: " + JSON.stringify({ content: "Partial answer" }) + "\n\n"));
+            void doneGate.then(() => {
+              controller.enqueue(encoder.encode("event: done\ndata: " + JSON.stringify({
+                message: { id: "msg_000001", projectId: "project_alpha", userId: "user_ada", role: "user", content: "timeline please" },
+                assistantMessage: { id: "msg_000002", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Partial answer\n\nFinal answer ready." },
+                conversationId: "conv_streaming",
+                conversationTitle: "Timeline please",
+                provider: { id: "provider-not-configured", mode: "real", model: "gpt-4o-mini", status: "unconfigured" },
+                fallbackUsed: false,
+                requestId: "req_stream"
+              }) + "\n\n"));
+              controller.close();
+            });
+          }
+        }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === "/api/projects/project_alpha/management") return jsonResponse(managementBody());
+      if (url === "/api/projects/project_alpha/knowledge-base") return jsonResponse({ documents: [], requestId: "req_kb" });
+      if (url === "/api/projects/project_alpha/repository") return jsonResponse({ artifacts: [], requestId: "req_repo" });
+      if (url === "/api/projects/project_alpha/dashboards") return jsonResponse({ dashboards: [], requestId: "req_dashboards" });
+      if (url === "/api/projects/project_alpha/derived-metrics") return jsonResponse({ metrics: [], totalCount: 0, requestId: "req_metrics" });
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), "timeline please");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+
+    expect(await screen.findByText(/Partial answer/i)).toBeInTheDocument();
+    const socket = MockWebSocket.instances.at(-1);
+    await act(async () => {
+      socket?.onmessage?.({
+        data: JSON.stringify({
+          type: "chat_stream_updated",
+          stream: {
+            conversationId: "conv_streaming",
+            requestId: "req_stream",
+            userMessage: { id: "msg_socket_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "timeline please" },
+            assistantMessage: { id: "streaming_req_stream", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Older socket snapshot" },
+            activities: [{ id: "act_1", label: "Retrieving site rules", kind: "context", requestId: "req_stream" }],
+            startedAt: Date.now() - 40_000,
+            interimNarration: "",
+            answerPhase: true,
+            workElapsedMs: 40_000,
+            workSegmentStartedAt: null,
+            workTimelinePaused: true,
+            streamTimelineFinalized: false
+          }
+        })
+      } as MessageEvent);
+    });
+    expect(screen.getByText(/Partial answer/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Older socket snapshot/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      socket?.onmessage?.({
+        data: JSON.stringify({ type: "chat_stream_finished", conversationId: "conv_streaming" })
+      } as MessageEvent);
+    });
+    expect(screen.getByText(/Partial answer/i)).toBeInTheDocument();
+
+    releaseDone();
+    expect(await screen.findByText(/Final answer ready/i)).toBeInTheDocument();
+    const articles = within(screen.getByLabelText("Alpha Build messages")).getAllByRole("article");
+    expect(articles.at(-2)).toHaveAttribute("aria-label", "You message");
+    expect(articles.at(-2)).toHaveTextContent("timeline please");
+    expect(articles.at(-1)).toHaveAttribute("aria-label", "Assistant message");
+    expect(articles.at(-1)).toHaveTextContent("Final answer ready");
+  });
+
   it("removes the running workflow immediately when generation is stopped", async () => {
     const abortSignals: AbortSignal[] = [];
     installFetch(async (url, init) => {
@@ -737,8 +950,7 @@ describe("BuildingGPT Web flow", () => {
     render(<App />);
 
     await signIn(user);
-    await screen.findByRole("heading", { name: /choose a project to get started/i });
-    await user.click(screen.getByRole("button", { name: /open/i }));
+    await user.click(await screen.findByRole("button", { name: /open/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
@@ -834,8 +1046,7 @@ describe("BuildingGPT Web flow", () => {
     await user.type(screen.getByLabelText(/email/i), "ada@example.test");
     await user.type(screen.getByLabelText(/password/i), "local-dev-password");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
-    await screen.findByRole("heading", { name: /choose a project to get started/i });
-    await user.click(screen.getByRole("button", { name: /open/i }));
+    await user.click(await screen.findByRole("button", { name: /open/i }));
     expect(await screen.findByRole("textbox", { name: /^message$/i })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
@@ -875,7 +1086,7 @@ describe("BuildingGPT Web flow", () => {
     render(<App />);
     await signIn(user);
     await screen.findByText("Beta Build");
-    await user.click(screen.getByRole("button", { name: /open/i }));
+    await user.click(await screen.findByRole("button", { name: /open/i }));
 
     expect(await screen.findByRole("textbox", { name: /^message$/i })).toBeInTheDocument();
     expect(within(screen.getByRole("main")).getByRole("textbox", { name: /^message$/i })).toBeDisabled();
@@ -893,8 +1104,7 @@ describe("BuildingGPT Web flow", () => {
     const user = userEvent.setup();
     render(<App />);
     await signIn(user);
-    await screen.findByRole("heading", { name: /choose a project to get started/i });
-    await user.click(screen.getByRole("button", { name: /open/i }));
+    await user.click(await screen.findByRole("button", { name: /open/i }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("project_forbidden");
@@ -907,8 +1117,7 @@ describe("BuildingGPT Web flow", () => {
     const user = userEvent.setup();
     const { unmount } = render(<App />);
     await signIn(user);
-    await screen.findByRole("heading", { name: /choose a project to get started/i });
-    await user.click(screen.getByRole("button", { name: /open/i }));
+    await user.click(await screen.findByRole("button", { name: /open/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
     unmount();
 
@@ -918,8 +1127,7 @@ describe("BuildingGPT Web flow", () => {
     const user2 = userEvent.setup();
     render(<App />);
     await signIn(user2);
-    await screen.findByRole("heading", { name: /choose a project to get started/i });
-    await user2.click(screen.getByRole("button", { name: /open/i }));
+    await user2.click(await screen.findByRole("button", { name: /open/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("api_malformed");
 
     vi.unstubAllGlobals();
@@ -929,10 +1137,9 @@ describe("BuildingGPT Web flow", () => {
     const user3 = userEvent.setup();
     render(<App />);
     await signIn(user3);
-    await screen.findByRole("heading", { name: /choose a project to get started/i });
-    await user3.click(screen.getByRole("button", { name: /open/i }));
+    await user3.click(await screen.findByRole("button", { name: /open/i }));
     await screen.findByRole("textbox", { name: /^message$/i });
-    expect(screen.getByText(/scheduled & rule-based tasks/i)).toBeInTheDocument();
+    expect(screen.getByText("FDD Tasks")).toBeInTheDocument();
   });
 
   it("fails closed on malformed S04 chat responses without appending user or assistant messages", async () => {
@@ -1217,9 +1424,9 @@ describe("BuildingGPT Web flow", () => {
     render(<App />);
     await loginAndSelectProject(user);
     expect(screen.getByText("Dashboards").closest("details")).toHaveAttribute("open");
-    expect(screen.getByText(/Scheduled & rule-based tasks/i).closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText("Skills").closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText("Tools").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("FDD Tasks").closest("details")).not.toHaveAttribute("open");
+    expect(screen.queryByText("Skills")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tools")).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "Create a dashboard");
     await user.click(screen.getByRole("button", { name: /send message/i }));
     expect(await screen.findByText("Dashboard request acknowledged.")).toBeInTheDocument();
@@ -1278,8 +1485,9 @@ describe("BuildingGPT Web flow", () => {
         data: JSON.stringify({ type: "dashboard_created", dashboard: generatedDashboard })
       } as MessageEvent);
     });
-    expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_generated");
-    expect(await screen.findByRole("heading", { name: /generated chiller dashboard/i })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_temp_watch");
+    expect(screen.getByRole("heading", { name: /plant temperature dashboard/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /generated chiller dashboard/i })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Dashboard created");
 
     await act(async () => {
@@ -1287,7 +1495,7 @@ describe("BuildingGPT Web flow", () => {
         data: JSON.stringify({ type: "dashboard_created", dashboard: otherConversationDashboard })
       } as MessageEvent);
     });
-    expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_generated");
+    expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_temp_watch");
     expect(screen.getByRole("button", { name: /other conversation dashboard/i })).toBeInTheDocument();
   });
 
@@ -1414,6 +1622,16 @@ describe("BuildingGPT Web flow", () => {
               entityId: "WCC_04",
               label: "System COP",
               unit: ""
+            },
+            {
+              source: "bms",
+              pointName: "WCC-L1-04_Q",
+              entityId: "WCC_04",
+              label: "Cooling load",
+              role: "cooling_load_kw",
+              dependencyRole: "input",
+              defaultVisible: false,
+              unit: "kW"
             }
           ]
         }
@@ -1449,9 +1667,10 @@ describe("BuildingGPT Web flow", () => {
           results: (body.queries ?? []).map((query) => ({
             key: (query as { key?: string }).key ?? "unknown",
             ok: true,
-            total: 2,
+            total: 3,
             items: [
               { ts: "2026-06-26T01:00:00.000Z", value_num: 4.6, name: "System COP" },
+              { ts: "2026-06-26T01:07:00.000Z", value_num: null, value_text: "N/A", name: "System COP" },
               { ts: "2026-06-26T01:15:00.000Z", value_num: 4.8, name: "System COP" }
             ]
           })),
@@ -1475,6 +1694,11 @@ describe("BuildingGPT Web flow", () => {
     expect((await screen.findAllByText(/4\.8/i)).length).toBeGreaterThan(0);
     await waitFor(() => expect(historyQueries.length).toBeGreaterThan(0));
     await waitFor(() => expect(latestQueries.length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByText("Min 4.6")).toBeInTheDocument());
+    expect(screen.queryByText("Min 0.0")).not.toBeInTheDocument();
+    const inputSeriesRow = await screen.findByRole("button", { name: /Cooling load/i });
+    expect(inputSeriesRow).toHaveClass("is-hidden");
+    expect(screen.getByText("input")).toBeInTheDocument();
     expect(latestQueries).toEqual([
       expect.objectContaining({
         source: "derived_metric",
@@ -1484,6 +1708,10 @@ describe("BuildingGPT Web flow", () => {
         source: "derived_metric",
         metric_key: "system_cop",
         entity_id: "WCC_04"
+      }),
+      expect.objectContaining({
+        source: "bms",
+        name: "WCC-L1-04_Q"
       })
     ]);
     expect(historyQueries).toEqual([
@@ -1495,6 +1723,10 @@ describe("BuildingGPT Web flow", () => {
         source: "derived_metric",
         metric_key: "system_cop",
         entity_id: "WCC_04"
+      }),
+      expect.objectContaining({
+        source: "bms",
+        name: "WCC-L1-04_Q"
       })
     ]);
   });

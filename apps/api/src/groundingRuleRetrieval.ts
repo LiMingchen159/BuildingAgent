@@ -31,7 +31,7 @@ export interface RuleScoreBreakdown {
 }
 
 export interface GroundingRetrievalDiagnostics {
-  mode: "hybrid" | "hybrid_skip_dense" | "topic_fallback";
+  mode: "hybrid" | "hybrid_skip_dense" | "topic_fallback" | "skipped_low_signal";
   ftsHitCount: number;
   denseHitCount: number;
   skippedDense: boolean;
@@ -103,6 +103,65 @@ function emptyDiagnostics(): GroundingRetrievalDiagnostics {
     ftsHitCount: 0,
     denseHitCount: 0,
     skippedDense: false,
+    selectedRuleIds: [],
+    scoreBreakdown: []
+  };
+}
+
+const LOW_SIGNAL_CHAT_TOKENS = new Set([
+  "hello",
+  "hi",
+  "hey",
+  "yo",
+  "thanks",
+  "thank",
+  "ok",
+  "okay",
+  "yes",
+  "no",
+  "sure",
+  "bye"
+]);
+
+const LOW_SIGNAL_CHAT_PATTERNS = [
+  /^(hi|hello|hey|yo|thanks?|thank you|ok|okay|yes|no|sure|bye)[\s!.?]*$/i,
+  /^(你好|您好|嗨|哈喽|谢谢|多谢|好的|好|行|嗯|拜拜)[！。,.，\s]*$/u
+];
+
+export function alwaysOnGroundingRules(allRules: ProjectGroundingRule[]): ProjectGroundingRule[] {
+  return allRules.filter((rule) => isOperatorRule(rule) || isPlaybookRule(rule));
+}
+
+export function shouldAttemptGroundingRuleRetrieval(userMessage: string): boolean {
+  const trimmed = userMessage.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (LOW_SIGNAL_CHAT_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return false;
+  }
+  const context = extractQueryContext(trimmed);
+  const exactIds = extractExactIdentifiers(trimmed, context.entities);
+  if (context.intent !== "other" || context.entities.length > 0 || exactIds.size > 0) {
+    return true;
+  }
+  const tokens = tokenizeForFts(trimmed);
+  if (tokens.length === 0) {
+    return false;
+  }
+  if (tokens.every((token) => LOW_SIGNAL_CHAT_TOKENS.has(token))) {
+    return false;
+  }
+  return tokens.length >= 2;
+}
+
+function lowSignalDiagnostics(): GroundingRetrievalDiagnostics {
+  return {
+    mode: "skipped_low_signal",
+    ftsHitCount: 0,
+    denseHitCount: 0,
+    skippedDense: true,
+    skipReason: "low_signal_message",
     selectedRuleIds: [],
     scoreBreakdown: []
   };
@@ -285,7 +344,12 @@ export async function retrieveGroundingRules(
   allRules: ProjectGroundingRule[]
 ): Promise<GroundingRetrievalResult> {
   const config = resolveGroundingRetrievalConfig();
-  const alwaysOn = allRules.filter((rule) => isOperatorRule(rule) || isPlaybookRule(rule));
+  const alwaysOn = alwaysOnGroundingRules(allRules);
+  if (!shouldAttemptGroundingRuleRetrieval(userMessage)) {
+    const diagnostics = lowSignalDiagnostics();
+    logDiagnostics(diagnostics, config.debug);
+    return { alwaysOn, retrieved: [], scores: {}, diagnostics };
+  }
   const retrievable = allRules.filter((rule) => isRetrievableUserRule(rule));
   if (retrievable.length === 0) {
     const diagnostics = emptyDiagnostics();

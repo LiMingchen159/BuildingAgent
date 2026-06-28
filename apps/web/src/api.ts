@@ -121,7 +121,10 @@ export interface DashboardPointBinding {
   metricKey?: string;
   entityId?: string;
   label?: string;
-  role?: "supply" | "return" | "other";
+  role?: string;
+  dependencyRole?: string;
+  defaultVisible?: boolean;
+  groupId?: string;
   unit?: string;
 }
 
@@ -165,6 +168,96 @@ export interface DashboardRecord {
   createdAt: string;
   updatedAt: string;
   sourceConversationId?: string;
+}
+
+export type DerivedMetricFormulaKind = "ratio" | "difference";
+export type DerivedMetricInvalidValuePolicy = "null" | "zero";
+export type DerivedMetricAlignmentPolicy = "exact" | "nearest";
+
+export interface DerivedMetricDependency {
+  dependencyId: string;
+  instanceId: string;
+  role: string;
+  sourceType: "raw_point" | "metric";
+  sourceId: string;
+  pointName?: string;
+  objectRef?: string;
+  unit?: string;
+  label?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DerivedMetricInstance {
+  instanceId: string;
+  projectId: string;
+  definitionId: string;
+  versionId: string;
+  metricKey: string;
+  metricType: string;
+  entityId: string;
+  entityName?: string;
+  displayName: string;
+  unit?: string;
+  formulaVersion: string;
+  formula: string;
+  formulaDescription?: string;
+  status: string;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+  dependencies: DerivedMetricDependency[];
+}
+
+export interface DerivedMetricSample {
+  sampleId: string;
+  instanceId: string;
+  projectId: string;
+  ts: string;
+  valueNum?: number;
+  valueText?: string;
+  quality: string;
+  status: string;
+  formulaVersionId: string;
+  calculationRunId?: string;
+  sourceWindowStart?: string;
+  sourceWindowEnd?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface DerivedMetricMaterialization {
+  instanceId: string;
+  projectId: string;
+  enabled: boolean;
+  intervalSeconds: number;
+  lookbackSeconds: number;
+  formulaKind?: DerivedMetricFormulaKind;
+  leftRole?: string;
+  rightRole?: string;
+  invalidValuePolicy?: DerivedMetricInvalidValuePolicy;
+  alignmentPolicy?: DerivedMetricAlignmentPolicy;
+  alignmentToleranceSeconds?: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  watermarkTs?: string;
+  status: string;
+  lastError?: string;
+  updatedAt: string;
+}
+
+export interface DerivedMetricDashboardLink {
+  id: string;
+  title: string;
+  widgetCount: number;
+  path: string;
+}
+
+export interface DerivedMetricAsset {
+  instance: DerivedMetricInstance;
+  latest: DerivedMetricSample | null;
+  materialization: DerivedMetricMaterialization | null;
+  linkedDashboards: DerivedMetricDashboardLink[];
 }
 
 export interface ChatProviderDiagnostics {
@@ -212,6 +305,29 @@ export interface SendChatResponse {
   provider: ChatProviderDiagnostics;
   fallbackUsed: boolean;
   lifecycle?: ChatLifecycleEvent[] | undefined;
+  requestId: string;
+}
+
+export interface ActiveChatStreamSnapshot {
+  projectId: string;
+  conversationId: string;
+  requestId: string;
+  startedAt: number;
+  updatedAt: number;
+  userMessage: ChatMessage;
+  assistantMessage: ChatMessage;
+  activities: ChatStreamActivityEvent[];
+  interimNarration: string;
+  answerPhase: boolean;
+  workElapsedMs: number;
+  workSegmentStartedAt: number | null;
+  workTimelinePaused: boolean;
+  streamTimelineFinalized: boolean;
+}
+
+export interface ActiveChatStreamsResponse {
+  projectId: string;
+  streams: ActiveChatStreamSnapshot[];
   requestId: string;
 }
 
@@ -1140,6 +1256,61 @@ export async function getChat(token: string, projectId: string, conversationId?:
   return result;
 }
 
+export function parseActiveChatStreamSnapshot(value: unknown): ActiveChatStreamSnapshot | null {
+  if (
+    !isRecord(value)
+    || typeof value.projectId !== "string"
+    || typeof value.conversationId !== "string"
+    || typeof value.requestId !== "string"
+    || typeof value.startedAt !== "number"
+    || typeof value.updatedAt !== "number"
+    || typeof value.interimNarration !== "string"
+    || typeof value.answerPhase !== "boolean"
+    || typeof value.workElapsedMs !== "number"
+    || !(typeof value.workSegmentStartedAt === "number" || value.workSegmentStartedAt === null)
+    || typeof value.workTimelinePaused !== "boolean"
+    || typeof value.streamTimelineFinalized !== "boolean"
+  ) {
+    return null;
+  }
+  try {
+    return {
+      projectId: value.projectId,
+      conversationId: value.conversationId,
+      requestId: value.requestId,
+      startedAt: value.startedAt,
+      updatedAt: value.updatedAt,
+      userMessage: parseChatMessage(value.userMessage, "Active stream returned an unexpected user message."),
+      assistantMessage: parseChatMessage(value.assistantMessage, "Active stream returned an unexpected assistant message."),
+      activities: parseChatMessageActivities(value.activities) ?? [],
+      interimNarration: value.interimNarration,
+      answerPhase: value.answerPhase,
+      workElapsedMs: value.workElapsedMs,
+      workSegmentStartedAt: value.workSegmentStartedAt,
+      workTimelinePaused: value.workTimelinePaused,
+      streamTimelineFinalized: value.streamTimelineFinalized
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getActiveChatStreams(token: string, projectId: string): Promise<ActiveChatStreamsResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/chat/active-streams`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.projectId !== "string" || !Array.isArray(payload.streams) || typeof payload.requestId !== "string") {
+    throw malformed("Active streams returned an unexpected response.");
+  }
+  const streams = payload.streams.map(parseActiveChatStreamSnapshot);
+  if (streams.some((stream) => stream === null)) {
+    throw malformed("Active streams returned an unexpected stream.");
+  }
+  return {
+    projectId: payload.projectId,
+    streams: streams as ActiveChatStreamSnapshot[],
+    requestId: payload.requestId
+  };
+}
+
 export async function getRegistry(token: string): Promise<RegistryResponse> {
   const payload = await requestJson("/api/registry", { headers: authHeaders(token) });
   if (!isRecord(payload)) {
@@ -1282,7 +1453,7 @@ function parseDashboardPointBinding(value: unknown): DashboardPointBinding | nul
   const metricInstanceId = typeof value.metricInstanceId === "string" ? value.metricInstanceId : undefined;
   const metricKey = typeof value.metricKey === "string" ? value.metricKey : undefined;
   const entityId = typeof value.entityId === "string" ? value.entityId : undefined;
-  const source = value.source === "derived_metric" || metricInstanceId || metricKey || entityId
+  const source = value.source === "derived_metric" || metricInstanceId || metricKey
     ? "derived_metric"
     : value.source === "bms"
       ? "bms"
@@ -1298,7 +1469,10 @@ function parseDashboardPointBinding(value: unknown): DashboardPointBinding | nul
     ...(metricKey ? { metricKey } : {}),
     ...(entityId ? { entityId } : {}),
     ...(typeof value.label === "string" ? { label: value.label } : {}),
-    ...(value.role === "supply" || value.role === "return" || value.role === "other" ? { role: value.role } : {}),
+    ...(typeof value.role === "string" ? { role: value.role } : {}),
+    ...(typeof value.dependencyRole === "string" ? { dependencyRole: value.dependencyRole } : {}),
+    ...(typeof value.defaultVisible === "boolean" ? { defaultVisible: value.defaultVisible } : {}),
+    ...(typeof value.groupId === "string" ? { groupId: value.groupId } : {}),
     ...(typeof value.unit === "string" ? { unit: value.unit } : {})
   };
 }
@@ -1392,6 +1566,171 @@ function parseDashboardRecord(value: unknown): DashboardRecord | null {
     updatedAt: value.updatedAt,
     ...(typeof value.sourceConversationId === "string" ? { sourceConversationId: value.sourceConversationId } : {})
   };
+}
+
+function parseDerivedMetricDependency(value: unknown): DerivedMetricDependency | null {
+  if (!isRecord(value)
+    || typeof value.dependencyId !== "string"
+    || typeof value.instanceId !== "string"
+    || typeof value.role !== "string"
+    || (value.sourceType !== "raw_point" && value.sourceType !== "metric")
+    || typeof value.sourceId !== "string") {
+    return null;
+  }
+  return {
+    dependencyId: value.dependencyId,
+    instanceId: value.instanceId,
+    role: value.role,
+    sourceType: value.sourceType,
+    sourceId: value.sourceId,
+    ...(typeof value.pointName === "string" ? { pointName: value.pointName } : {}),
+    ...(typeof value.objectRef === "string" ? { objectRef: value.objectRef } : {}),
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {}),
+    ...(typeof value.label === "string" ? { label: value.label } : {}),
+    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {})
+  };
+}
+
+function parseDerivedMetricInstance(value: unknown): DerivedMetricInstance | null {
+  if (!isRecord(value)
+    || typeof value.instanceId !== "string"
+    || typeof value.projectId !== "string"
+    || typeof value.definitionId !== "string"
+    || typeof value.versionId !== "string"
+    || typeof value.metricKey !== "string"
+    || typeof value.metricType !== "string"
+    || typeof value.entityId !== "string"
+    || typeof value.displayName !== "string"
+    || typeof value.formulaVersion !== "string"
+    || typeof value.formula !== "string"
+    || typeof value.status !== "string"
+    || typeof value.createdAt !== "string"
+    || typeof value.updatedAt !== "string"
+    || !Array.isArray(value.dependencies)) {
+    return null;
+  }
+  const dependencies = value.dependencies
+    .map((entry) => parseDerivedMetricDependency(entry))
+    .filter((entry): entry is DerivedMetricDependency => entry !== null);
+  if (dependencies.length !== value.dependencies.length) {
+    return null;
+  }
+  return {
+    instanceId: value.instanceId,
+    projectId: value.projectId,
+    definitionId: value.definitionId,
+    versionId: value.versionId,
+    metricKey: value.metricKey,
+    metricType: value.metricType,
+    entityId: value.entityId,
+    displayName: value.displayName,
+    formulaVersion: value.formulaVersion,
+    formula: value.formula,
+    status: value.status,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    dependencies,
+    ...(typeof value.entityName === "string" ? { entityName: value.entityName } : {}),
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {}),
+    ...(typeof value.formulaDescription === "string" ? { formulaDescription: value.formulaDescription } : {}),
+    ...(typeof value.createdBy === "string" ? { createdBy: value.createdBy } : {}),
+    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {})
+  };
+}
+
+function parseDerivedMetricSample(value: unknown): DerivedMetricSample | null {
+  if (!isRecord(value)
+    || typeof value.sampleId !== "string"
+    || typeof value.instanceId !== "string"
+    || typeof value.projectId !== "string"
+    || typeof value.ts !== "string"
+    || typeof value.quality !== "string"
+    || typeof value.status !== "string"
+    || typeof value.formulaVersionId !== "string"
+    || typeof value.createdAt !== "string") {
+    return null;
+  }
+  return {
+    sampleId: value.sampleId,
+    instanceId: value.instanceId,
+    projectId: value.projectId,
+    ts: value.ts,
+    quality: value.quality,
+    status: value.status,
+    formulaVersionId: value.formulaVersionId,
+    createdAt: value.createdAt,
+    ...(typeof value.valueNum === "number" && Number.isFinite(value.valueNum) ? { valueNum: value.valueNum } : {}),
+    ...(typeof value.valueText === "string" ? { valueText: value.valueText } : {}),
+    ...(typeof value.calculationRunId === "string" ? { calculationRunId: value.calculationRunId } : {}),
+    ...(typeof value.sourceWindowStart === "string" ? { sourceWindowStart: value.sourceWindowStart } : {}),
+    ...(typeof value.sourceWindowEnd === "string" ? { sourceWindowEnd: value.sourceWindowEnd } : {}),
+    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {})
+  };
+}
+
+function parseDerivedMetricMaterialization(value: unknown): DerivedMetricMaterialization | null {
+  if (!isRecord(value)
+    || typeof value.instanceId !== "string"
+    || typeof value.projectId !== "string"
+    || typeof value.enabled !== "boolean"
+    || typeof value.intervalSeconds !== "number"
+    || typeof value.lookbackSeconds !== "number"
+    || typeof value.status !== "string"
+    || typeof value.updatedAt !== "string") {
+    return null;
+  }
+  const formulaKind = value.formulaKind === "ratio" || value.formulaKind === "difference" ? value.formulaKind : undefined;
+  const invalidValuePolicy = value.invalidValuePolicy === "zero" || value.invalidValuePolicy === "null" ? value.invalidValuePolicy : undefined;
+  const alignmentPolicy = value.alignmentPolicy === "exact" || value.alignmentPolicy === "nearest" ? value.alignmentPolicy : undefined;
+  return {
+    instanceId: value.instanceId,
+    projectId: value.projectId,
+    enabled: value.enabled,
+    intervalSeconds: value.intervalSeconds,
+    lookbackSeconds: value.lookbackSeconds,
+    status: value.status,
+    updatedAt: value.updatedAt,
+    ...(formulaKind ? { formulaKind } : {}),
+    ...(typeof value.leftRole === "string" ? { leftRole: value.leftRole } : {}),
+    ...(typeof value.rightRole === "string" ? { rightRole: value.rightRole } : {}),
+    ...(invalidValuePolicy ? { invalidValuePolicy } : {}),
+    ...(alignmentPolicy ? { alignmentPolicy } : {}),
+    ...(typeof value.alignmentToleranceSeconds === "number" ? { alignmentToleranceSeconds: value.alignmentToleranceSeconds } : {}),
+    ...(typeof value.lastRunAt === "string" ? { lastRunAt: value.lastRunAt } : {}),
+    ...(typeof value.nextRunAt === "string" ? { nextRunAt: value.nextRunAt } : {}),
+    ...(typeof value.watermarkTs === "string" ? { watermarkTs: value.watermarkTs } : {}),
+    ...(typeof value.lastError === "string" ? { lastError: value.lastError } : {})
+  };
+}
+
+function parseDerivedMetricDashboardLink(value: unknown): DerivedMetricDashboardLink | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || typeof value.title !== "string"
+    || typeof value.widgetCount !== "number"
+    || typeof value.path !== "string") {
+    return null;
+  }
+  return {
+    id: value.id,
+    title: value.title,
+    widgetCount: value.widgetCount,
+    path: value.path
+  };
+}
+
+function parseDerivedMetricAsset(value: unknown): DerivedMetricAsset | null {
+  if (!isRecord(value) || !Array.isArray(value.linkedDashboards)) return null;
+  const instance = parseDerivedMetricInstance(value.instance);
+  const latest = value.latest === null ? null : parseDerivedMetricSample(value.latest);
+  const materialization = value.materialization === null ? null : parseDerivedMetricMaterialization(value.materialization);
+  const linkedDashboards = value.linkedDashboards
+    .map((entry) => parseDerivedMetricDashboardLink(entry))
+    .filter((entry): entry is DerivedMetricDashboardLink => entry !== null);
+  if (!instance || latest === null && value.latest !== null || materialization === null && value.materialization !== null || linkedDashboards.length !== value.linkedDashboards.length) {
+    return null;
+  }
+  return { instance, latest, materialization, linkedDashboards };
 }
 
 function parseChatMessageImages(value: unknown, message: string): ChatMessageImage[] | undefined {
@@ -1573,6 +1912,57 @@ export async function getDashboard(token: string, projectId: string, dashboardId
     throw malformed("Dashboard returned an unexpected dashboard.");
   }
   return { dashboard: parsed, requestId: payload.requestId };
+}
+
+export async function getDerivedMetrics(token: string, projectId: string): Promise<{ metrics: DerivedMetricAsset[]; totalCount: number; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/derived-metrics`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || !Array.isArray(payload.metrics) || typeof payload.requestId !== "string") {
+    throw malformed("Derived metrics returned an unexpected response.");
+  }
+  return {
+    metrics: payload.metrics.map((entry) => {
+      const parsed = parseDerivedMetricAsset(entry);
+      if (!parsed) {
+        throw malformed("Derived metrics returned an unexpected metric.");
+      }
+      return parsed;
+    }),
+    totalCount: typeof payload.totalCount === "number" ? payload.totalCount : payload.metrics.length,
+    requestId: payload.requestId
+  };
+}
+
+export async function getDerivedMetric(token: string, projectId: string, instanceId: string): Promise<{ metric: DerivedMetricAsset; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/derived-metrics/${encodeURIComponent(instanceId)}`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || typeof payload.requestId !== "string") {
+    throw malformed("Derived metric returned an unexpected response.");
+  }
+  const metric = parseDerivedMetricAsset(payload.metric);
+  if (!metric) {
+    throw malformed("Derived metric returned an unexpected metric.");
+  }
+  return { metric, requestId: payload.requestId };
+}
+
+export async function updateDerivedMetricMaterialization(
+  token: string,
+  projectId: string,
+  instanceId: string,
+  payload: { enabled: boolean }
+): Promise<{ metric: DerivedMetricAsset; requestId: string }> {
+  const response = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/derived-metrics/${encodeURIComponent(instanceId)}/materialization`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  });
+  if (!isRecord(response) || typeof response.requestId !== "string") {
+    throw malformed("Derived metric materialization returned an unexpected response.");
+  }
+  const metric = parseDerivedMetricAsset(response.metric);
+  if (!metric) {
+    throw malformed("Derived metric materialization returned an unexpected metric.");
+  }
+  return { metric, requestId: response.requestId };
 }
 
 export async function createDashboard(token: string, projectId: string, payload: Partial<DashboardRecord> & Pick<DashboardRecord, "title" | "layout" | "widgets">): Promise<{ dashboard: DashboardRecord; path: string; requestId: string }> {

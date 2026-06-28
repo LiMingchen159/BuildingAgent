@@ -43,7 +43,10 @@ interface ChartSeries {
   pointName: string;
   unit: string;
   color: string;
-  points: Array<{ ts: string; value: number }>;
+  role?: string;
+  dependencyRole?: string;
+  defaultVisible?: boolean;
+  points: Array<{ ts: string; value: number | null }>;
 }
 
 interface WidgetValue {
@@ -119,6 +122,8 @@ const DASHBOARD_HISTORY_CACHE_TTL_MS = 5 * 60_000;
 const DASHBOARD_HISTORY_CACHE_MAX_ENTRIES = 96;
 const DASHBOARD_HISTORY_START_DELAY_MS = 180;
 const DASHBOARD_FALLBACK_VALUES_START_DELAY_MS = 260;
+const CHART_BRIDGE_GAP_MAX_NULL_SAMPLES = 4;
+const CHART_BRIDGE_GAP_MAX_SECONDS = 90 * 60;
 const RANGE_OPTIONS: Array<{ key: RangeKey; label: string; hours: number }> = [
   { key: "1h", label: "1h", hours: 1 },
   { key: "6h", label: "6h", hours: 6 },
@@ -195,7 +200,7 @@ function pointDisplayName(binding: DashboardPointBinding): string {
 }
 
 function bindingIsDerivedMetric(binding: DashboardPointBinding): boolean {
-  return binding.source === "derived_metric" || Boolean(binding.metricInstanceId || binding.metricKey || binding.entityId);
+  return binding.source === "derived_metric" || Boolean(binding.metricInstanceId || binding.metricKey);
 }
 
 function pointKey(binding: DashboardPointBinding): string {
@@ -213,6 +218,9 @@ function emptySeriesForBinding(widget: DashboardWidget, binding: DashboardPointB
     pointName: pointName || `missing-${widget.id}-${index}`,
     unit: binding.unit ?? "",
     color: CHART_COLORS[index % CHART_COLORS.length]!,
+    ...(binding.role ? { role: binding.role } : {}),
+    ...(binding.dependencyRole ? { dependencyRole: binding.dependencyRole } : {}),
+    ...(binding.defaultVisible !== undefined ? { defaultVisible: binding.defaultVisible } : {}),
     points: []
   };
 }
@@ -334,13 +342,17 @@ function sortLayout(layout: DashboardLayoutItem[]): DashboardLayoutItem[] {
 
 function minSizeForWidget(widget: DashboardWidget): Pick<LayoutItem, "minW" | "minH"> {
   if (widget.kind === "timeseries_chart") return { minW: 4, minH: 4 };
-  if (widget.kind === "bar_comparison") return { minW: 4, minH: 2 };
+  if (widget.kind === "bar_comparison") return { minW: 4, minH: 3 };
   return { minW: 2, minH: 2 };
+}
+
+function barComparisonHeight(widget: DashboardWidget): number {
+  return Math.max(3, Math.min(6, 3 + Math.ceil(Math.max(0, widget.pointBindings.length - 8) / 4)));
 }
 
 function defaultSizeForWidget(widget: DashboardWidget): Pick<LayoutItem, "w" | "h"> {
   if (widget.kind === "timeseries_chart") return { w: 6, h: 4 };
-  if (widget.kind === "bar_comparison") return { w: 6, h: 3 };
+  if (widget.kind === "bar_comparison") return { w: 6, h: barComparisonHeight(widget) };
   if (widget.kind === "live_value_grid") return { w: 3, h: widget.pointBindings.length > 2 ? 3 : 2 };
   if (widget.kind === "note") return { w: 3, h: 2 };
   return { w: 3, h: 2 };
@@ -726,15 +738,13 @@ function clearBrowserSelection(): void {
   }
 }
 
-function toChartPoints(rows: BmsCollectorTimeseriesRow[]): Array<{ ts: string; value: number }> {
-  return rows
-    .map((row) => {
-      const numeric = typeof row.value_num === "number" && Number.isFinite(row.value_num)
-        ? row.value_num
-        : Number(row.value ?? row.value_text ?? "");
-      return Number.isFinite(numeric) ? { ts: row.ts, value: numeric } : null;
-    })
-    .filter((entry): entry is { ts: string; value: number } => entry !== null);
+function toChartPoints(rows: BmsCollectorTimeseriesRow[]): Array<{ ts: string; value: number | null }> {
+  return rows.map((row) => {
+    const numeric = typeof row.value_num === "number" && Number.isFinite(row.value_num)
+      ? row.value_num
+      : Number(row.value ?? row.value_text ?? "");
+    return { ts: row.ts, value: Number.isFinite(numeric) ? numeric : null };
+  });
 }
 
 function historyQueryForBinding(
@@ -812,8 +822,74 @@ function widgetValues(
   });
 }
 
+function numericChartValues(series: ChartSeries): number[] {
+  return series.points
+    .map((point) => point.value)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+}
+
+function chartSeriesHasMissingSamples(series: ChartSeries): boolean {
+  return series.points.some((point) => point.value === null) && numericChartValues(series).length > 0;
+}
+
+function chartTimestampSeconds(value: string): number | null {
+  const seconds = Math.round(Date.parse(value) / 1000);
+  return Number.isFinite(seconds) ? seconds : null;
+}
+
+function shouldBridgeMissingRun(timestamps: number[], values: Array<number | null>, start: number, end: number): boolean {
+  const runLength = end - start + 1;
+  if (runLength > CHART_BRIDGE_GAP_MAX_NULL_SAMPLES) return false;
+
+  const previousIndex = start - 1;
+  const nextIndex = end + 1;
+  const previousValue = values[previousIndex];
+  const nextValue = values[nextIndex];
+  if (typeof previousValue !== "number" || !Number.isFinite(previousValue)) return false;
+  if (typeof nextValue !== "number" || !Number.isFinite(nextValue)) return false;
+
+  const previousTimestamp = timestamps[previousIndex];
+  const nextTimestamp = timestamps[nextIndex];
+  if (typeof previousTimestamp !== "number" || !Number.isFinite(previousTimestamp)) return false;
+  if (typeof nextTimestamp !== "number" || !Number.isFinite(nextTimestamp)) return false;
+  return nextTimestamp - previousTimestamp <= CHART_BRIDGE_GAP_MAX_SECONDS;
+}
+
+function bridgeShortMissingRuns(timestamps: number[], values: Array<number | null>): Array<number | null | undefined> {
+  const bridged: Array<number | null | undefined> = [...values];
+  let index = 0;
+  while (index < values.length) {
+    if (values[index] !== null) {
+      index += 1;
+      continue;
+    }
+
+    const start = index;
+    while (index < values.length && values[index] === null) {
+      index += 1;
+    }
+    const end = index - 1;
+    if (shouldBridgeMissingRun(timestamps, values, start, end)) {
+      for (let missingIndex = start; missingIndex <= end; missingIndex += 1) {
+        bridged[missingIndex] = undefined;
+      }
+    }
+  }
+  return bridged;
+}
+
+function lastNumericChartPoint(series: ChartSeries): { ts: string; value: number | null } | undefined {
+  for (let index = series.points.length - 1; index >= 0; index -= 1) {
+    const point = series.points[index];
+    if (point && typeof point.value === "number" && Number.isFinite(point.value)) {
+      return point;
+    }
+  }
+  return undefined;
+}
+
 function seriesStats(series: ChartSeries): { last: number | null; min: number | null; max: number | null; avg: number | null; count: number; updatedAt?: string } {
-  const values = series.points.map((point) => point.value).filter(Number.isFinite);
+  const values = numericChartValues(series);
   if (values.length === 0) {
     return { last: null, min: null, max: null, avg: null, count: 0 };
   }
@@ -825,7 +901,7 @@ function seriesStats(series: ChartSeries): { last: number | null; min: number | 
     avg: sum / values.length,
     count: values.length
   };
-  const updatedAt = series.points.at(-1)?.ts;
+  const updatedAt = lastNumericChartPoint(series)?.ts;
   if (updatedAt) {
     stats.updatedAt = updatedAt;
   }
@@ -838,10 +914,18 @@ function formatNumber(value: number | null, unit = ""): string {
 }
 
 function alignedChartData(series: ChartSeries[]): UPlot.AlignedData {
-  const timestamps = [...new Set(series.flatMap((entry) => entry.points.map((point) => Math.round(Date.parse(point.ts) / 1000))))].sort((a, b) => a - b);
+  const timestamps = [...new Set(series.flatMap((entry) => entry.points.map((point) => chartTimestampSeconds(point.ts)).filter((ts): ts is number => ts !== null)))].sort((a, b) => a - b);
   const valuesBySeries = series.map((entry) => {
-    const valueByTs = new Map(entry.points.map((point) => [Math.round(Date.parse(point.ts) / 1000), point.value]));
-    return timestamps.map((ts) => valueByTs.get(ts) ?? null);
+    const valueByTs = new Map(
+      entry.points
+        .map((point) => {
+          const timestamp = chartTimestampSeconds(point.ts);
+          return timestamp === null ? null : [timestamp, point.value] as const;
+        })
+        .filter((point): point is readonly [number, number | null] => point !== null)
+    );
+    const rawValues = timestamps.map((ts) => valueByTs.has(ts) ? valueByTs.get(ts) ?? null : null);
+    return bridgeShortMissingRuns(timestamps, rawValues);
   });
   return [timestamps, ...valuesBySeries];
 }
@@ -876,12 +960,12 @@ function TimeSeriesWidget({
   );
   const chartData = useMemo(() => alignedChartData(visibleSeries), [visibleSeries]);
   const visibleSeriesSignature = useMemo(
-    () => visibleSeries.map((entry) => `${entry.pointName}:${entry.label}:${entry.unit}:${entry.color}`).join("|"),
+    () => visibleSeries.map((entry) => `${entry.pointName}:${entry.label}:${entry.unit}:${entry.color}:${entry.defaultVisible === false ? "default-hidden" : "default-visible"}:${chartSeriesHasMissingSamples(entry) ? "gapped" : "solid"}`).join("|"),
     [visibleSeries]
   );
   const visibleSeriesRef = useRef(visibleSeries);
   const chartDataRef = useRef(chartData);
-  const hasVisibleData = visibleSeries.some((entry) => entry.points.length > 0);
+  const hasVisibleData = visibleSeries.some((entry) => numericChartValues(entry).length > 0);
   const allSeriesHidden = series.length > 0 && visibleSeries.length === 0;
   const canRenderPlot = hasVisibleData && plotSize.width > 0 && plotSize.height > 0;
   const awaitingFirstPaint = hasVisibleData && (!canRenderPlot || !plotReady) && !plotUnavailable;
@@ -918,7 +1002,13 @@ function TimeSeriesWidget({
   useEffect(() => {
     setHiddenSeries((current) => {
       const validNames = new Set(series.map((entry) => entry.pointName));
-      return Object.fromEntries(Object.entries(current).filter(([pointName]) => validNames.has(pointName)));
+      const next = Object.fromEntries(Object.entries(current).filter(([pointName]) => validNames.has(pointName)));
+      for (const entry of series) {
+        if (!(entry.pointName in next) && entry.defaultVisible === false) {
+          next[entry.pointName] = true;
+        }
+      }
+      return next;
     });
   }, [series]);
 
@@ -1015,7 +1105,7 @@ function TimeSeriesWidget({
               label: entry.label,
               stroke: entry.color,
               width: 2.2,
-              spanGaps: true,
+              spanGaps: false,
               points: { show: false }
             }))
           ],
@@ -1122,7 +1212,7 @@ function TimeSeriesWidget({
     };
   }, [canRenderPlot, plotSize.height, plotSize.width, range, visibleSeriesSignature]);
 
-  const combinedStats = visibleSeries.flatMap((entry) => entry.points.map((point) => point.value));
+  const combinedStats = visibleSeries.flatMap((entry) => numericChartValues(entry));
   const min = combinedStats.length > 0 ? Math.min(...combinedStats) : null;
   const max = combinedStats.length > 0 ? Math.max(...combinedStats) : null;
 
@@ -1191,6 +1281,7 @@ function TimeSeriesWidget({
               <span>
                 <i style={{ backgroundColor: entry.color }} />
                 <strong>{entry.label}</strong>
+                {entry.dependencyRole ? <small className="dashboard-legend-role">{entry.dependencyRole}</small> : null}
               </span>
               <span>{formatNumber(stats.last, entry.unit)}</span>
               <span>{formatNumber(stats.min, entry.unit)}</span>

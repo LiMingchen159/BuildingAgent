@@ -16,7 +16,7 @@ import { feedbackProposalGuidanceBlock, isLikelyCorrectionTurn, playbooksPromptB
 import type { FeedbackEpisode, RuleErrorType } from "../projectRules.js";
 import type { GroundingRuleIndex } from "../groundingRuleIndex.js";
 import { formatRetrievedRulesPreview, resolveRuleDisplayName, siteRuleTemplateGuidanceBlock } from "../projectRules.js";
-import { retrieveGroundingRules, selectGroundingForTurn } from "../groundingRuleRetrieval.js";
+import { alwaysOnGroundingRules, retrieveGroundingRules, selectGroundingForTurn, shouldAttemptGroundingRuleRetrieval } from "../groundingRuleRetrieval.js";
 import { validateAssistantAgainstRules } from "../projectRuleValidator.js";
 import { hasSiteRuleSaveConsent, siteRuleSaveConsentHintBlock } from "./siteRuleConsent.js";
 import { sanitizeUserFacingAssistantText, userFacingRulesBlock } from "./userFacingRules.js";
@@ -362,7 +362,7 @@ export class AgentRuntime {
     let groundingRules: ProjectGroundingRule[] = allGroundingRules;
     let retrievedGroundingRules: ProjectGroundingRule[] = [];
 
-    if (this.options.groundingRuleIndex && lastUserMessage.trim()) {
+    if (this.options.groundingRuleIndex && shouldAttemptGroundingRuleRetrieval(lastUserMessage)) {
       const groundingRetrieveId = `grounding_${request.requestId}`;
       yield yieldEvent(this.makeEvent("tool_started", "Retrieving site rules.", {
         tool: "project_grounding",
@@ -393,7 +393,9 @@ export class AgentRuntime {
           : {})
       }));
     } else {
-      groundingRules = allGroundingRules;
+      groundingRules = this.options.groundingRuleIndex && lastUserMessage.trim()
+        ? alwaysOnGroundingRules(allGroundingRules)
+        : allGroundingRules;
     }
 
     if (isLikelyCorrectionTurn(lastUserMessage) && this.options.onCaptureFeedback) {

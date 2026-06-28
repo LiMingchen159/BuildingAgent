@@ -1,4 +1,4 @@
-import { FormEvent, type CSSProperties, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type ReactNode, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
@@ -8,8 +8,6 @@ import { Repository, type RepositoryItem } from "./ui/Repository";
 import { BmsDataConfigPage } from "./ui/BmsDataConfig";
 import { DashboardView } from "./ui/DashboardView";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
-import { Skills } from "./ui/Skills";
-import { Tools } from "./ui/Tools";
 import { CubeLogo } from "./ui/CubeLogo";
 import { ParticleField } from "./ui/ParticleField";
 import { instantConversationTitle, parseActivityLabel, parseAssistantContent, stripThinkingFromAnswer } from "./ui/activityThinking";
@@ -18,7 +16,11 @@ import {
   createProjectSocket,
   getDashboard,
   getDashboards,
+  getDerivedMetric,
+  getDerivedMetrics,
   getChat,
+  getActiveChatStreams,
+  parseActiveChatStreamSnapshot,
   getKnowledgeBase,
   getProjectManagement,
   getRepository,
@@ -38,10 +40,13 @@ import {
   deleteConversation,
   renameConversation,
   updateDashboard,
+  updateDerivedMetricMaterialization,
   deleteDashboard,
   deleteProject,
   type DashboardRecord,
+  type DerivedMetricAsset,
   type DashboardVisibility,
+  type ActiveChatStreamSnapshot,
   type ChatProviderDiagnostics,
   type ChatLifecycleEvent,
   type ChatMessageImage,
@@ -79,7 +84,7 @@ function consumeSkipProjectRestore(): boolean {
   return true;
 }
 
-type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "registry" | "gateways" | "building";
+type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "kpis" | "registry" | "gateways" | "building";
 
 type IconName =
   | "activity"
@@ -195,10 +200,13 @@ function visibleRepositoryArtifactCount(artifacts: RepositoryArtifact[]): number
   return artifacts.filter(isVisibleRepositoryArtifact).length;
 }
 
-function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): string {
+function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?: string | null, metricInstanceId?: string | null): string {
   const section = tab === "bms" ? "bms-data-config" : tab;
   if (tab === "dashboards" && dashboardId) {
     return `/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`;
+  }
+  if (tab === "kpis" && metricInstanceId) {
+    return `/projects/${encodeURIComponent(projectId)}/kpis/${encodeURIComponent(metricInstanceId)}`;
   }
   return `/projects/${encodeURIComponent(projectId)}/${section}`;
 }
@@ -211,7 +219,7 @@ function isSoloDashboardSearch(search: string): boolean {
   return new URLSearchParams(search).get("view") === "solo";
 }
 
-function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab; dashboardId?: string } | null {
+function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab; dashboardId?: string; metricInstanceId?: string } | null {
   const dashboardMatch = pathname.match(/^\/projects\/([^/]+)\/dashboards\/([^/]+)$/);
   if (dashboardMatch) {
     const projectId = decodeURIComponent(dashboardMatch[1] ?? "");
@@ -219,13 +227,20 @@ function parseWorkspacePath(pathname: string): { projectId: string; tab: Workspa
     if (!projectId || !dashboardId) return null;
     return { projectId, tab: "dashboards", dashboardId };
   }
+  const kpiMatch = pathname.match(/^\/projects\/([^/]+)\/kpis\/([^/]+)$/);
+  if (kpiMatch) {
+    const projectId = decodeURIComponent(kpiMatch[1] ?? "");
+    const metricInstanceId = decodeURIComponent(kpiMatch[2] ?? "");
+    if (!projectId || !metricInstanceId) return null;
+    return { projectId, tab: "kpis", metricInstanceId };
+  }
   const match = pathname.match(/^\/projects\/([^/]+)\/([^/]+)$/);
   if (!match) return null;
   const projectId = decodeURIComponent(match[1] ?? "");
   const section = match[2];
   if (!projectId) return null;
   const tab = section === "bms-data-config" ? "bms" : section;
-  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "registry" || tab === "gateways" || tab === "building") {
+  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "kpis" || tab === "registry" || tab === "gateways" || tab === "building") {
     return { projectId, tab };
   }
   return null;
@@ -931,6 +946,38 @@ interface ConversationStreamState {
   streamTimelineFinalized: boolean;
 }
 
+function conversationStreamFromActiveSnapshot(stream: ActiveChatStreamSnapshot): ConversationStreamState {
+  return {
+    conversationId: stream.conversationId,
+    optimisticUser: stream.userMessage,
+    streamingAssistant: stream.assistantMessage,
+    activities: stream.activities,
+    startedAt: stream.startedAt,
+    interimNarration: stream.interimNarration,
+    answerPhase: stream.answerPhase,
+    workElapsedMs: stream.workElapsedMs,
+    workSegmentStartedAt: stream.workSegmentStartedAt,
+    workTimelinePaused: stream.workTimelinePaused,
+    streamTimelineFinalized: stream.streamTimelineFinalized
+  };
+}
+
+function conversationStreamsFromActiveSnapshots(streams: ActiveChatStreamSnapshot[]): Record<string, ConversationStreamState> {
+  return Object.fromEntries(streams.map((stream) => [
+    stream.conversationId,
+    conversationStreamFromActiveSnapshot(stream)
+  ]));
+}
+
+function conversationSummaryFromActiveStream(stream: ActiveChatStreamSnapshot): ConversationSummary {
+  return {
+    id: stream.conversationId,
+    title: instantConversationTitle(stream.userMessage.content),
+    messageCount: 1,
+    createdAt: new Date(stream.startedAt).toISOString()
+  };
+}
+
 interface SidebarRefreshSnapshot {
   conversations: ConversationSummary[];
   kbDocuments: KnowledgeBaseDocument[];
@@ -962,13 +1009,16 @@ function upsertConversationSummary(
 function mergeConversationSummaries(
   serverConversations: ConversationSummary[],
   localConversations: ConversationSummary[],
-  streamStates: Record<string, ConversationStreamState>
+  streamStates: Record<string, ConversationStreamState>,
+  deletedConversationIds: ReadonlySet<string> = new Set()
 ): ConversationSummary[] {
   const merged = new Map<string, ConversationSummary>();
   for (const conversation of serverConversations) {
+    if (deletedConversationIds.has(conversation.id)) continue;
     merged.set(conversation.id, conversation);
   }
   for (const conversation of localConversations) {
+    if (deletedConversationIds.has(conversation.id)) continue;
     const existing = merged.get(conversation.id);
     if (!existing) {
       merged.set(conversation.id, conversation);
@@ -982,6 +1032,7 @@ function mergeConversationSummaries(
     });
   }
   for (const [conversationId, streamState] of Object.entries(streamStates)) {
+    if (deletedConversationIds.has(conversationId)) continue;
     const existing = merged.get(conversationId);
     if (!existing) continue;
     merged.set(conversationId, {
@@ -1091,6 +1142,27 @@ function mergeDashboardList(current: DashboardRecord[], incoming: DashboardRecor
   });
   const sorted = sortDashboardsByUpdatedAt(merged);
   return sameDashboardList(current, sorted) ? current : sorted;
+}
+
+function sortDerivedMetricAssets(metrics: DerivedMetricAsset[]): DerivedMetricAsset[] {
+  return [...metrics].sort((left, right) => {
+    const leftTime = Date.parse(left.instance.updatedAt) || 0;
+    const rightTime = Date.parse(right.instance.updatedAt) || 0;
+    return rightTime - leftTime || left.instance.displayName.localeCompare(right.instance.displayName);
+  });
+}
+
+function upsertDerivedMetricAsset(metrics: DerivedMetricAsset[], metric: DerivedMetricAsset): DerivedMetricAsset[] {
+  let found = false;
+  const next = metrics.map((entry) => {
+    if (entry.instance.instanceId !== metric.instance.instanceId) return entry;
+    found = true;
+    return metric;
+  });
+  if (!found) {
+    next.unshift(metric);
+  }
+  return sortDerivedMetricAssets(next);
 }
 
 function dashboardPointNames(dashboard: DashboardRecord | null): string[] {
@@ -1418,8 +1490,33 @@ function mergeMessagesWithStreamingState(
   if (!streamState) {
     return messages;
   }
+  const optimisticUserContent = streamState.optimisticUser.content.trim();
+  const persistedUserIndex = optimisticUserContent.length > 0
+    ? messages.findIndex((message) =>
+      message.role === "user"
+      && !message.id.startsWith("pending_user_")
+      && message.content.trim() === optimisticUserContent
+    )
+    : -1;
+  const persistedAssistantAfterUser = persistedUserIndex >= 0
+    ? messages.slice(persistedUserIndex + 1).some((message) =>
+      message.role === "assistant" && !message.id.startsWith("streaming_")
+    )
+    : false;
+  if (persistedAssistantAfterUser) {
+    return messages.filter((message) =>
+      message.id !== streamState.optimisticUser.id
+      && message.id !== streamState.streamingAssistant.id
+      && !message.id.startsWith("pending_user_")
+      && !message.id.startsWith("streaming_")
+    );
+  }
   const withoutOptimistic = messages.filter(
-    (message) => message.id !== streamState.optimisticUser.id && message.id !== streamState.streamingAssistant.id
+    (message) =>
+      message.id !== streamState.optimisticUser.id
+      && message.id !== streamState.streamingAssistant.id
+      && !(message.role === "user" && optimisticUserContent.length > 0 && message.content.trim() === optimisticUserContent)
+      && !(message.role === "assistant" && message.id.startsWith("streaming_"))
   );
   return [...withoutOptimistic, streamState.optimisticUser, streamState.streamingAssistant];
 }
@@ -1558,6 +1655,7 @@ function ChatWorkspace({ project, user, token, messages, dashboards, activeConve
   const messageListRef = useRef<HTMLElement | null>(null);
   const previousConversationRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const submitInFlightRef = useRef(false);
   const wasEmptyRef = useRef(messages.length === 0);
   const userScrolledUpRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1673,26 +1771,31 @@ function ChatWorkspace({ project, user, token, messages, dashboards, activeConve
     }
   }, [activities.length]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!draft.trim() || busy) {
+  async function submitDraft() {
+    if (submitInFlightRef.current || !draft.trim() || busy) {
       return;
     }
+    submitInFlightRef.current = true;
     const message = draft.trim();
     setDraft("");
     userScrolledUpRef.current = false;
-    await onSend(message);
+    try {
+      await onSend(message);
+    } finally {
+      submitInFlightRef.current = false;
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitDraft();
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends message, Ctrl+Enter or Cmd+Enter inserts newline
     if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      if (!draft.trim() || busy) return;
-      const message = draft.trim();
-      setDraft("");
-      userScrolledUpRef.current = false;
-      void onSend(message);
+      void submitDraft();
     }
   }
 
@@ -2381,13 +2484,474 @@ function WorkspaceSidebarBlock({
   );
 }
 
+interface KpiMetricGroup {
+  groupKey: string;
+  representative: DerivedMetricAsset;
+  metrics: DerivedMetricAsset[];
+  displayName: string;
+}
+
+function humanizeMetricKey(metricKey: string): string {
+  return metricKey
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.length <= 3 ? part.toUpperCase() : `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
+function kpiMetricGroupKey(asset: DerivedMetricAsset): string {
+  const normalized = `${asset.instance.metricType} ${asset.instance.metricKey}`.toLowerCase();
+  const assetKind = /\b(fdd|fd|fault|detection|diagnostic)\b/u.test(normalized) ? "fdd" : "kpi";
+  return `${assetKind}:${asset.instance.metricKey}:${asset.instance.formulaVersion}`;
+}
+
+function groupDisplayName(asset: DerivedMetricAsset, count: number): string {
+  if (count > 1) {
+    return humanizeMetricKey(asset.instance.metricKey);
+  }
+  return asset.instance.displayName;
+}
+
+function formatEntityId(entityId: string): string {
+  return entityId.replace(/_/gu, "-");
+}
+
+function formatEntityLabel(asset: DerivedMetricAsset): string {
+  const entityId = formatEntityId(asset.instance.entityId);
+  const entityName = asset.instance.entityName?.trim();
+  if (!entityName || entityName === asset.instance.entityId || entityName === entityId) {
+    return entityId;
+  }
+  return `${entityName} (${entityId})`;
+}
+
+function groupDerivedMetricAssets(metrics: DerivedMetricAsset[]): KpiMetricGroup[] {
+  const grouped = new Map<string, DerivedMetricAsset[]>();
+  for (const metric of metrics) {
+    const key = kpiMetricGroupKey(metric);
+    grouped.set(key, [...(grouped.get(key) ?? []), metric]);
+  }
+  return [...grouped.entries()]
+    .map(([groupKey, entries]) => {
+      const sorted = entries.slice().sort((left, right) =>
+        left.instance.entityId.localeCompare(right.instance.entityId)
+      );
+      const representative = sorted[0]!;
+      return {
+        groupKey,
+        representative,
+        metrics: sorted,
+        displayName: groupDisplayName(representative, sorted.length)
+      };
+    })
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function formatDerivedMetricValue(asset: DerivedMetricAsset): string {
+  const latest = asset.latest;
+  if (!latest) return "N/A";
+  const unit = asset.instance.unit ? ` ${asset.instance.unit}` : "";
+  if (typeof latest.valueNum === "number" && Number.isFinite(latest.valueNum)) {
+    return `${Number(latest.valueNum.toFixed(3)).toLocaleString()}${unit}`;
+  }
+  return latest.valueText ?? "N/A";
+}
+
+function derivedAssetKindLabel(asset: DerivedMetricAsset): "FDD" | "KPI" {
+  const normalized = `${asset.instance.metricType} ${asset.instance.metricKey}`.toLowerCase();
+  return /\b(fdd|fd|fault|detection|diagnostic)\b/u.test(normalized) ? "FDD" : "KPI";
+}
+
+function materializationEnabled(asset: DerivedMetricAsset): boolean {
+  return asset.materialization?.enabled === true;
+}
+
+function groupMaterializationEnabled(group: KpiMetricGroup): boolean {
+  return group.metrics.length > 0 && group.metrics.every(materializationEnabled);
+}
+
+function groupMaterializationStatus(group: KpiMetricGroup): string {
+  const enabledCount = group.metrics.filter(materializationEnabled).length;
+  if (enabledCount === group.metrics.length) return "On";
+  if (enabledCount === 0) return "Off";
+  return `${enabledCount}/${group.metrics.length} On`;
+}
+
+function metricBackgroundCalculationStatus(asset: DerivedMetricAsset): string {
+  if (!asset.materialization) return "Not set";
+  return asset.materialization.enabled ? "On" : "Off";
+}
+
+function dependencyDisplayName(dependency: DerivedMetricAsset["instance"]["dependencies"][number]): string {
+  return dependency.label ?? dependency.pointName ?? dependency.objectRef ?? dependency.sourceId ?? dependency.role;
+}
+
+function dependencySourceLabel(dependency: DerivedMetricAsset["instance"]["dependencies"][number]): string {
+  const source = dependency.pointName ?? dependency.objectRef ?? dependency.sourceId;
+  return [source, dependency.unit].filter(Boolean).join(" · ");
+}
+
+function dependencyIconName(dependency: DerivedMetricAsset["instance"]["dependencies"][number]): IconName {
+  const normalized = `${dependency.role} ${dependency.label ?? ""} ${dependency.pointName ?? ""} ${dependency.unit ?? ""}`.toLowerCase();
+  if (/\b(power|motor|kw|tlkw|electric)\b/u.test(normalized)) return "cpu";
+  if (/\b(cooling|load|chw|water|temp|q)\b/u.test(normalized)) return "snowflake";
+  return "activity";
+}
+
+function escapeLatexText(value: string): string {
+  return value.replace(/[\\{}]/g, "\\$&");
+}
+
+function latexText(value: string): string {
+  return `\\text{${escapeLatexText(value)}}`;
+}
+
+function dependencyForRole(asset: DerivedMetricAsset, role: string | undefined, fallbackIndex: number) {
+  return asset.instance.dependencies.find((dependency) => dependency.role === role)
+    ?? asset.instance.dependencies[fallbackIndex]
+    ?? null;
+}
+
+function formulaMarkdownForMetric(asset: DerivedMetricAsset): string {
+  const formulaKind = asset.materialization?.formulaKind;
+  const left = dependencyForRole(asset, asset.materialization?.leftRole, 0);
+  const right = dependencyForRole(asset, asset.materialization?.rightRole, 1);
+  const output = latexText(humanizeMetricKey(asset.instance.metricKey));
+  if (formulaKind === "ratio" && left && right) {
+    return `$$\n${output} = \\frac{${latexText(dependencyDisplayName(left))}}{${latexText(dependencyDisplayName(right))}}\n$$`;
+  }
+  if (formulaKind === "difference" && left && right) {
+    return `$$\n${output} = ${latexText(dependencyDisplayName(left))} - ${latexText(dependencyDisplayName(right))}\n$$`;
+  }
+  if (asset.instance.formula.includes("/")) {
+    const [leftFormula, rightFormula] = asset.instance.formula.split("/").map((part) => part.trim());
+    return `$$\n${output} = \\frac{${latexText(leftFormula || "input")}}{${latexText(rightFormula || "input")}}\n$$`;
+  }
+  return `$$\n${output} = ${latexText(asset.instance.formula)}\n$$`;
+}
+
+function professionalExplanationForMetric(asset: DerivedMetricAsset): string {
+  const metricKey = asset.instance.metricKey.toLowerCase();
+  const formulaKind = asset.materialization?.formulaKind;
+  if (/\bcop\b/u.test(metricKey) || metricKey.includes("_cop")) {
+    return "COP (Coefficient of Performance) expresses how many units of cooling are delivered per unit of electrical power consumed. It is dimensionless, and higher values generally indicate better chiller efficiency. The value is only operationally meaningful when the power input is positive and the cooling/power measurements are valid.";
+  }
+  if (derivedAssetKindLabel(asset) === "FDD") {
+    return "This FDD asset converts raw operating evidence into a reusable diagnostic signal. Treat the output as a maintained detection result, while the listed inputs remain available for audit and troubleshooting.";
+  }
+  if (formulaKind === "ratio") {
+    return "This KPI normalizes one measured quantity by another so equipment can be compared on a like-for-like basis. Review denominator quality carefully because zero or unavailable denominator values make the KPI non-calculable.";
+  }
+  if (formulaKind === "difference") {
+    return "This derived asset tracks the difference between two aligned measurements. Positive or negative direction should be interpreted according to the input roles and equipment context.";
+  }
+  return "This derived asset stores a reusable calculated result from the listed input measurements, so dashboards and reports can consume the output consistently instead of recalculating it inside each widget.";
+}
+
+const HKT_FRIENDLY_DATE_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Hong_Kong",
+  day: "2-digit",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false
+});
+
+function formatRelativeTime(ms: number): string {
+  const diffMs = ms - Date.now();
+  const absMs = Math.abs(diffMs);
+  if (absMs < 45_000) return diffMs < 0 ? "just now" : "now";
+  const units: Array<[label: string, sizeMs: number]> = [
+    ["d", 86_400_000],
+    ["h", 3_600_000],
+    ["min", 60_000]
+  ];
+  const [label, sizeMs] = units.find(([, size]) => absMs >= size) ?? units[units.length - 1]!;
+  const amount = Math.max(1, Math.round(absMs / sizeMs));
+  return diffMs < 0 ? `${amount}${label} ago` : `in ${amount}${label}`;
+}
+
+function formatFriendlyDateTime(value: string | number | undefined): string {
+  if (value === undefined) return "Not scheduled";
+  const ms = typeof value === "number" ? value : Date.parse(value);
+  if (!Number.isFinite(ms)) return "Not scheduled";
+  return `${formatRelativeTime(ms)} · ${HKT_FRIENDLY_DATE_FORMATTER.format(ms)} HKT`;
+}
+
+function groupScheduleValue(group: KpiMetricGroup, field: "lastRunAt" | "nextRunAt"): string {
+  const times = group.metrics
+    .map((metric) => metric.materialization?.[field])
+    .filter((value): value is string => Boolean(value))
+    .map((value) => Date.parse(value))
+    .filter(Number.isFinite);
+  if (times.length === 0) return "Not scheduled";
+  const selected = field === "lastRunAt" ? Math.max(...times) : Math.min(...times);
+  return formatFriendlyDateTime(selected);
+}
+
+function groupIntervalLabel(group: KpiMetricGroup): string {
+  const seconds = group.representative.materialization?.intervalSeconds;
+  if (!seconds) return "Not scheduled";
+  if (seconds % 3600 === 0) return `Every ${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `Every ${seconds / 60}m`;
+  return `Every ${seconds}s`;
+}
+
+function formatKpiGroupValue(group: KpiMetricGroup): string {
+  if (group.metrics.length === 1) {
+    return formatDerivedMetricValue(group.representative);
+  }
+  return `${group.metrics.length} entities`;
+}
+
+function linkedDashboardIdsForGroup(group: KpiMetricGroup): Set<string> {
+  return new Set(group.metrics.flatMap((metric) => metric.linkedDashboards.map((dashboard) => dashboard.id)));
+}
+
+function MetricToggle({
+  checked,
+  onChange,
+  disabled,
+  title
+}: {
+  checked: boolean;
+  onChange: (enabled: boolean) => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <label className={`metric-toggle${checked ? " is-on" : ""}${disabled ? " is-disabled" : ""}`} title={title ?? (checked ? "Background Calculation is On" : "Background Calculation is Off")}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.currentTarget.checked)}
+      />
+      <span aria-hidden="true" />
+    </label>
+  );
+}
+
+function RightPanelEmptyCard({
+  label,
+  title,
+  children
+}: {
+  label: string;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rp-empty-card" aria-label={label}>
+      <strong>{title}</strong>
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function WorkspaceMetricGroupList({
+  groups,
+  activeMetricId,
+  ariaLabel,
+  onOpenMetric,
+  onToggleMetricMaterialization
+}: {
+  groups: KpiMetricGroup[];
+  activeMetricId: string | null;
+  ariaLabel: string;
+  onOpenMetric: (instanceId: string) => void;
+  onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => void;
+}) {
+  return (
+    <ul className="workspace-right-metric-list" aria-label={ariaLabel}>
+      {groups.map((group) => {
+        const instanceIds = group.metrics.map((metric) => metric.instance.instanceId);
+        const isActive = activeMetricId ? instanceIds.includes(activeMetricId) : false;
+        const groupBackgroundStatus = groupMaterializationStatus(group);
+        return (
+          <li key={group.groupKey} className={`workspace-right-metric-row${isActive ? " is-active" : ""}`}>
+            <button type="button" className="workspace-right-metric-item" onClick={() => onOpenMetric(group.representative.instance.instanceId)}>
+              <span className="workspace-right-metric-copy">
+                <strong>{group.displayName}</strong>
+                <small>{derivedAssetKindLabel(group.representative)} · {group.metrics.length === 1 ? formatEntityLabel(group.representative) : `${group.metrics.length} entities`}</small>
+              </span>
+              <span className="workspace-right-metric-value">{formatKpiGroupValue(group)}</span>
+            </button>
+            <MetricToggle
+              checked={groupMaterializationEnabled(group)}
+              onChange={(enabled) => onToggleMetricMaterialization(instanceIds, enabled)}
+              title={`Background Calculation: ${groupBackgroundStatus}`}
+            />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function KpiDetailPanel({
+  metricGroup,
+  activeMetricId,
+  dashboards,
+  onOpenDashboard,
+  onToggleMetricMaterialization
+}: {
+  metricGroup: KpiMetricGroup | null;
+  activeMetricId: string | null;
+  dashboards: DashboardRecord[];
+  onOpenDashboard: (dashboardId: string) => void;
+  onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => void;
+}) {
+  if (!activeMetricId) {
+    return (
+      <Surface className="kpi-detail-page">
+        <EmptyState title="Choose a KPI or FDD">Open a derived asset from the right sidebar to review its formula, inputs, Background Calculation, covered entities, and linked dashboards.</EmptyState>
+      </Surface>
+    );
+  }
+  if (!metricGroup) {
+    return (
+      <Surface className="kpi-detail-page">
+        <EmptyState title="Loading asset">The KPI/FDD detail will appear here as soon as it is available.</EmptyState>
+      </Surface>
+    );
+  }
+  const representative = metricGroup.representative;
+  const instance = representative.instance;
+  const linkedDashboardIds = linkedDashboardIdsForGroup(metricGroup);
+  const linkedDashboards = dashboards.filter((dashboard) => linkedDashboardIds.has(dashboard.id));
+  const instanceIds = metricGroup.metrics.map((metric) => metric.instance.instanceId);
+  const enabledCount = metricGroup.metrics.filter(materializationEnabled).length;
+  const groupBackgroundStatus = groupMaterializationStatus(metricGroup);
+  return (
+    <Surface className="kpi-detail-page">
+      <section className="kpi-detail-section kpi-asset-overview-card">
+        <div className="kpi-detail-header">
+          <div>
+            <h2>{metricGroup.displayName}</h2>
+            <p>{metricGroup.metrics.length} entities · {instance.metricKey}</p>
+          </div>
+        </div>
+        <p>{professionalExplanationForMetric(representative)}</p>
+        <div className="kpi-formula-panel">
+          <div className="kpi-formula-panel-label">Formula</div>
+          <Markdown source={formulaMarkdownForMetric(representative)} className="kpi-formula-markdown" />
+          {instance.formulaDescription ? <span>{instance.formulaDescription}</span> : null}
+        </div>
+      </section>
+
+      <div className="kpi-detail-three-column">
+        <section className="kpi-detail-section">
+          <h3>Inputs / Output</h3>
+          <div className="kpi-io-contract">
+            <div className="kpi-io-group">
+              <div className="kpi-io-group-label">Output</div>
+              <div className="kpi-io-card kpi-io-card-output">
+                <span className="kpi-io-icon"><Icon name="bar-chart" /></span>
+                <span className="kpi-io-card-copy">
+                  <strong>{metricGroup.displayName}</strong>
+                  <small>{instance.unit ?? "derived value"}</small>
+                </span>
+              </div>
+            </div>
+            <div className="kpi-io-group">
+              <div className="kpi-io-group-label kpi-io-group-label-lined">Inputs</div>
+              <div className="kpi-io-input-list">
+                {instance.dependencies.map((dependency) => (
+                  <div key={dependency.dependencyId} className="kpi-io-card">
+                    <span className="kpi-io-icon"><Icon name={dependencyIconName(dependency)} /></span>
+                    <span className="kpi-io-card-copy">
+                      <strong>{dependencyDisplayName(dependency)}</strong>
+                      <small>{dependencySourceLabel(dependency)}</small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+        <section className="kpi-detail-section">
+          <h3>Background Calculation</h3>
+          <p className="kpi-muted">Controls whether the system keeps this asset updated in the background. Use the group switch for the whole algorithm, or entity switches below for individual equipment.</p>
+          <div className="kpi-background-status-card">
+            <div>
+              <strong><span aria-hidden="true" />{groupBackgroundStatus}</strong>
+              <span>{enabledCount}/{metricGroup.metrics.length} entities enabled</span>
+            </div>
+            <MetricToggle
+              checked={groupMaterializationEnabled(metricGroup)}
+              onChange={(enabled) => onToggleMetricMaterialization(instanceIds, enabled)}
+              title={`Background Calculation: ${groupBackgroundStatus}`}
+            />
+          </div>
+          <div className="kpi-schedule-card">
+            <span className="kpi-schedule-icon"><Icon name="clock" /></span>
+            <div className="kpi-schedule-lines">
+              <span>{groupIntervalLabel(metricGroup)}</span>
+              <span>Last: {groupScheduleValue(metricGroup, "lastRunAt")}</span>
+              <span>Next: {groupScheduleValue(metricGroup, "nextRunAt")}</span>
+            </div>
+          </div>
+        </section>
+        <section className="kpi-detail-section kpi-linked-dashboard-section">
+          <div className="kpi-section-heading-row">
+            <h3>Linked Dashboards</h3>
+            <span className="kpi-count-pill">{linkedDashboards.length}</span>
+          </div>
+          {linkedDashboards.length === 0 ? (
+            <p className="kpi-muted">No dashboard currently binds this output.</p>
+          ) : (
+            <div className="kpi-dashboard-links kpi-dashboard-links-compact">
+              {linkedDashboards.map((dashboard) => (
+                <button key={dashboard.id} type="button" onClick={() => onOpenDashboard(dashboard.id)}>
+                  <span className="kpi-dashboard-link-icon"><Icon name="grid" /></span>
+                  <span className="kpi-dashboard-link-copy">
+                    <strong>{dashboard.title}</strong>
+                    <span>{dashboard.widgets.length} widgets using this output</span>
+                  </span>
+                  <span className="kpi-dashboard-link-arrow" aria-hidden="true">→</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <section className="kpi-detail-section">
+        <h3>Covered Entities</h3>
+        <div className="kpi-entity-card-grid">
+          {metricGroup.metrics.map((metric) => (
+            <article key={metric.instance.instanceId} className="kpi-entity-card">
+              <strong>{formatEntityLabel(metric)}</strong>
+              <span className={metric.latest?.valueNum === undefined ? "is-muted" : ""}>{formatDerivedMetricValue(metric)}</span>
+              <div className="kpi-entity-background">
+                <small><span aria-hidden="true" />{metricBackgroundCalculationStatus(metric)}</small>
+                <MetricToggle
+                  checked={materializationEnabled(metric)}
+                  onChange={(enabled) => onToggleMetricMaterialization([metric.instance.instanceId], enabled)}
+                  title={`Background Calculation: ${metricBackgroundCalculationStatus(metric)}`}
+                />
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+    </Surface>
+  );
+}
+
 function WorkspaceRightPanel({
   registry,
   management,
   dashboards,
+  derivedMetrics,
   activeDashboardId,
+  activeMetricId,
   disabled,
   onOpenDashboard,
+  onOpenMetric,
+  onToggleMetricMaterialization,
   onRenameDashboard,
   onDuplicateDashboard,
   onDeleteDashboard,
@@ -2396,41 +2960,70 @@ function WorkspaceRightPanel({
   registry: RegistryResponse | null;
   management: ProjectManagementResponse | null;
   dashboards: DashboardRecord[];
+  derivedMetrics: DerivedMetricAsset[];
   activeDashboardId: string | null;
+  activeMetricId: string | null;
   disabled?: boolean;
   onOpenDashboard: (dashboardId: string) => void;
+  onOpenMetric: (instanceId: string) => void;
+  onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => void;
   onRenameDashboard: (dashboardId: string) => void;
   onDuplicateDashboard: (dashboardId: string) => void;
   onDeleteDashboard: (dashboardId: string) => void;
   onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => void;
 }) {
-  const taskCount = disabled ? 0 : 3;
-  const skillCount = disabled ? 0 : (registry?.skills.length ?? 0);
-  const toolCount = disabled ? 0 : (management?.tools.length ?? registry?.tools.length ?? 0);
+  const assetGroups = disabled ? [] : groupDerivedMetricAssets(derivedMetrics);
+  const fddGroups = assetGroups.filter((group) => derivedAssetKindLabel(group.representative) === "FDD");
+  const kpiGroups = assetGroups.filter((group) => derivedAssetKindLabel(group.representative) === "KPI");
+  const taskCount = fddGroups.length;
+  const metricCount = kpiGroups.length;
   const dashboardCount = disabled ? 0 : dashboards.length;
   const [dashboardsSectionOpen, setDashboardsSectionOpen] = useState(true);
   return (
     <div className={`workspace-right-block${disabled ? " is-disabled" : ""}`}>
       <details className="workspace-right-section">
         <summary>
-          <span><Icon name="clock" />Scheduled &amp; rule-based tasks</span>
+          <span><Icon name="file-search" />FDD Tasks</span>
           <span className="right-section-meta">{taskCount}</span>
         </summary>
-        {disabled ? <p className="right-section-empty">Select a project to view tasks</p> : <ScheduledTasks />}
+        {disabled ? (
+          <RightPanelEmptyCard label="FDD tasks" title="Select a project">
+            Choose a project to view FDD tasks.
+          </RightPanelEmptyCard>
+        ) : fddGroups.length === 0 ? (
+          <ScheduledTasks />
+        ) : (
+          <WorkspaceMetricGroupList
+            groups={fddGroups}
+            activeMetricId={activeMetricId}
+            ariaLabel="Project FDD tasks"
+            onOpenMetric={onOpenMetric}
+            onToggleMetricMaterialization={onToggleMetricMaterialization}
+          />
+        )}
       </details>
-      <details className="workspace-right-section">
+      <details className="workspace-right-section" open>
         <summary>
-          <span><Icon name="puzzle" />Skills</span>
-          <span className="right-section-meta">{skillCount}</span>
+          <span><Icon name="bar-chart" />KPI</span>
+          <span className="right-section-meta">{metricCount}</span>
         </summary>
-        {disabled ? <p className="right-section-empty">Select a project to view skills</p> : <Skills />}
-      </details>
-      <details className="workspace-right-section">
-        <summary>
-          <span><Icon name="wrench" />Tools</span>
-          <span className="right-section-meta">{toolCount}</span>
-        </summary>
-        {disabled ? <p className="right-section-empty">Select a project to view tools</p> : <Tools />}
+        {disabled ? (
+          <RightPanelEmptyCard label="KPI assets" title="Select a project">
+            Choose a project to view KPI assets.
+          </RightPanelEmptyCard>
+        ) : kpiGroups.length === 0 ? (
+          <RightPanelEmptyCard label="KPI assets" title="No KPI assets yet.">
+            KPI assets will appear here after BuildingGPT registers a KPI calculation.
+          </RightPanelEmptyCard>
+        ) : (
+          <WorkspaceMetricGroupList
+            groups={kpiGroups}
+            activeMetricId={activeMetricId}
+            ariaLabel="Project KPI assets"
+            onOpenMetric={onOpenMetric}
+            onToggleMetricMaterialization={onToggleMetricMaterialization}
+          />
+        )}
       </details>
       <details className="workspace-right-section" open={dashboardsSectionOpen} onToggle={(event) => setDashboardsSectionOpen(event.currentTarget.open)}>
         <summary>
@@ -2438,9 +3031,13 @@ function WorkspaceRightPanel({
           <span className="right-section-meta">{dashboardCount}</span>
         </summary>
         {disabled ? (
-          <p className="right-section-empty">Select a project to view dashboards</p>
+          <RightPanelEmptyCard label="Project dashboards" title="Select a project">
+            Choose a project to view dashboards.
+          </RightPanelEmptyCard>
         ) : dashboards.length === 0 ? (
-          <p className="right-section-empty">Ask BuildingGPT to monitor equipment and a dashboard will appear here.</p>
+          <RightPanelEmptyCard label="Project dashboards" title="No dashboards yet.">
+            Dashboards will appear here after BuildingGPT creates one.
+          </RightPanelEmptyCard>
         ) : (
           <ul className="workspace-right-dashboard-list" aria-label="Project dashboards">
             {dashboards.map((dashboard) => (
@@ -2453,7 +3050,7 @@ function WorkspaceRightPanel({
                   >
                     <span className="workspace-right-dashboard-copy">
                       <strong>{dashboard.title}</strong>
-                      <small>{dashboard.widgets.length} widgets</small>
+                      <small>{dashboard.widgets.length} widgets · Updated {formatFriendlyDateTime(dashboard.updatedAt)}</small>
                     </span>
                     <Badge tone={dashboard.visibility === "project" ? "success" : "neutral"}>
                       {dashboard.visibility === "project" ? "Shared" : "Private"}
@@ -2492,6 +3089,9 @@ function Workspace({
   repoItems,
   dashboards,
   activeDashboard,
+  derivedMetrics,
+  activeMetricGroup,
+  activeMetricId,
   dashboardLiveValues,
   dashboardRealtimeStale,
   kbTotalCount,
@@ -2509,6 +3109,7 @@ function Workspace({
   onSelectProject,
   onSelectConversation,
   onOpenDashboard,
+  onOpenMetric,
   onCreateProject,
   onSignOut,
   projectConversationCounts,
@@ -2525,6 +3126,7 @@ function Workspace({
   onDeleteDashboard,
   onMergeDashboard,
   onCopyWidgetToDashboard,
+  onToggleMetricMaterialization,
   onStop,
   soloDashboardView,
   streamingActivity,
@@ -2547,6 +3149,9 @@ function Workspace({
   repoItems: RepositoryItem[];
   dashboards: DashboardRecord[];
   activeDashboard: DashboardRecord | null;
+  derivedMetrics: DerivedMetricAsset[];
+  activeMetricGroup: KpiMetricGroup | null;
+  activeMetricId: string | null;
   dashboardLiveValues: Record<string, BmsCollectorPoint>;
   dashboardRealtimeStale: boolean;
   kbTotalCount: number;
@@ -2565,6 +3170,7 @@ function Workspace({
   onSelectProject: (project: ProjectSummary) => void;
   onSelectConversation: (convId: string) => void;
   onOpenDashboard: (dashboardId: string) => void;
+  onOpenMetric: (instanceId: string) => void;
   onCreateProject: (name: string) => void;
   onSignOut: () => void;
   projectConversationCounts: Record<string, number>;
@@ -2581,6 +3187,7 @@ function Workspace({
   onDeleteDashboard: (dashboardId: string) => Promise<void>;
   onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => Promise<void>;
   onCopyWidgetToDashboard: (widgetId: string, targetDashboardId: string) => Promise<void>;
+  onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => Promise<void>;
   streamingActivity?: ChatStreamActivityEvent[];
   streamOutputStarted: boolean;
   streamAnswerPhase?: boolean;
@@ -2597,6 +3204,7 @@ function Workspace({
     { id: "kb", label: "Knowledge Base" },
     { id: "repo", label: "Repository" },
     { id: "dashboards", label: "Dashboards" },
+    { id: "kpis", label: "KPI" },
     { id: "registry", label: "Platform Registry" },
     { id: "gateways", label: "Gateways" },
     { id: "building", label: "Building Domain" }
@@ -2669,6 +3277,15 @@ function Workspace({
             <EmptyState title="Choose a dashboard">Pick a dashboard from the right sidebar to open it here.</EmptyState>
           </Surface>
         )
+      ) : null}
+      {activeTab === "kpis" ? (
+        <KpiDetailPanel
+          metricGroup={activeMetricGroup}
+          activeMetricId={activeMetricId}
+          dashboards={dashboards}
+          onOpenDashboard={onOpenDashboard}
+          onToggleMetricMaterialization={(instanceIds, enabled) => { void onToggleMetricMaterialization(instanceIds, enabled); }}
+        />
       ) : null}
       {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
       {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
@@ -2768,9 +3385,13 @@ function Workspace({
             registry={project ? registry : null}
             management={project ? management : null}
             dashboards={project ? dashboards : []}
+            derivedMetrics={project ? derivedMetrics : []}
             activeDashboardId={activeDashboard?.id ?? null}
+            activeMetricId={activeMetricId}
             disabled={!project}
             onOpenDashboard={onOpenDashboard}
+            onOpenMetric={onOpenMetric}
+            onToggleMetricMaterialization={(instanceIds, enabled) => { void onToggleMetricMaterialization(instanceIds, enabled); }}
             onRenameDashboard={(dashboardId) => { void onRenameDashboard(dashboardId); }}
             onDuplicateDashboard={(dashboardId) => { void onDuplicateDashboard(dashboardId); }}
             onDeleteDashboard={(dashboardId) => { void onDeleteDashboard(dashboardId); }}
@@ -2799,6 +3420,8 @@ export default function App() {
   const [repositoryItems, setRepositoryItems] = useState<RepositoryItem[]>([]);
   const [dashboards, setDashboards] = useState<DashboardRecord[]>([]);
   const [activeDashboardId, setActiveDashboardId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.dashboardId ?? null);
+  const [derivedMetrics, setDerivedMetrics] = useState<DerivedMetricAsset[]>([]);
+  const [activeMetricId, setActiveMetricId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.metricInstanceId ?? null);
   const [dashboardLiveValues, setDashboardLiveValues] = useState<Record<string, BmsCollectorPoint>>({});
   const [dashboardRealtimeAt, setDashboardRealtimeAt] = useState<number | null>(null);
   const [kbTotalCount, setKbTotalCount] = useState(0);
@@ -2820,16 +3443,23 @@ export default function App() {
   const hadSavedSession = useMemo(() => Boolean(initial.token), [initial.token]);
   const soloDashboardView = isSoloDashboardSearch(locationSearch);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const sendInFlightRef = useRef(false);
   const streamingTurnRef = useRef<StreamingTurnState | null>(null);
   const projectSocketRef = useRef<ReturnType<typeof createProjectSocket> | null>(null);
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
   const conversationStreamsRef = useRef<Record<string, ConversationStreamState>>({});
+  const deletedConversationIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
   useEffect(() => {
     conversationStreamsRef.current = conversationStreams;
   }, [conversationStreams]);
+
+  function isLocallyStreamingConversation(conversationId: string): boolean {
+    const turn = streamingTurnRef.current;
+    return Boolean(turn?.conversationId === conversationId && turn.assistantId);
+  }
 
   useEffect(() => {
     if (!selectedProject) {
@@ -2838,7 +3468,8 @@ export default function App() {
     const targetPath = workspacePathFromTab(
       selectedProject.id,
       activeTab,
-      activeTab === "dashboards" ? activeDashboardId : null
+      activeTab === "dashboards" ? activeDashboardId : null,
+      activeTab === "kpis" ? activeMetricId : null
     );
     const targetUrl = soloDashboardView && activeTab === "dashboards" && activeDashboardId
       ? dashboardSoloPath(selectedProject.id, activeDashboardId)
@@ -2847,7 +3478,7 @@ export default function App() {
       window.history.pushState({}, "", targetUrl);
       setLocationSearch(soloDashboardView && activeTab === "dashboards" && activeDashboardId ? "?view=solo" : "");
     }
-  }, [activeDashboardId, activeTab, selectedProject?.id ?? null, soloDashboardView]);
+  }, [activeDashboardId, activeMetricId, activeTab, selectedProject?.id ?? null, soloDashboardView]);
 
   useEffect(() => {
     const parsed = parseWorkspacePath(window.location.pathname);
@@ -2855,6 +3486,7 @@ export default function App() {
       setPathnameProjectId(parsed.projectId);
       setActiveTab(parsed.tab);
       setActiveDashboardId(parsed.dashboardId ?? null);
+      setActiveMetricId(parsed.metricInstanceId ?? null);
     }
     setLocationSearch(window.location.search);
     const handlePopState = () => {
@@ -2864,8 +3496,10 @@ export default function App() {
       if (next) {
         setActiveTab(next.tab);
         setActiveDashboardId(next.dashboardId ?? null);
+        setActiveMetricId(next.metricInstanceId ?? null);
       } else {
         setActiveDashboardId(null);
+        setActiveMetricId(null);
       }
     };
     window.addEventListener("popstate", handlePopState);
@@ -2877,6 +3511,12 @@ export default function App() {
     () => dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
     [dashboards, activeDashboardId]
   );
+  const activeMetricGroup = useMemo(() => {
+    if (!activeMetricId) return null;
+    return groupDerivedMetricAssets(derivedMetrics).find((group) =>
+      group.metrics.some((metric) => metric.instance.instanceId === activeMetricId)
+    ) ?? null;
+  }, [derivedMetrics, activeMetricId]);
   const activeDashboardPointNames = useMemo(
     () => dashboardPointNames(activeDashboard),
     [activeDashboard]
@@ -2904,6 +3544,8 @@ export default function App() {
     setRepositoryItems([]);
     setDashboards([]);
     setActiveDashboardId(null);
+    setDerivedMetrics([]);
+    setActiveMetricId(null);
     setDashboardLiveValues({});
     setDashboardRealtimeAt(null);
     setKbTotalCount(0);
@@ -2933,10 +3575,11 @@ export default function App() {
       getRegistry(currentToken),
       getProjectManagement(currentToken, projectId)
     ]);
-    const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
+    const [kbResponse, repoResponse, dashboardResponse, derivedMetricResponse] = await Promise.all([
       getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
       getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
-      getDashboards(currentToken, projectId).catch(() => null)
+      getDashboards(currentToken, projectId).catch(() => null),
+      getDerivedMetrics(currentToken, projectId).catch(() => ({ metrics: [], totalCount: 0, requestId: "" }))
     ]);
     setRegistry(registryResponse);
     setManagement(managementResponse);
@@ -2944,23 +3587,25 @@ export default function App() {
     if (dashboardResponse) {
       setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
     }
+    setDerivedMetrics(derivedMetricResponse.metrics);
     const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
     const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
     setRepositoryItems(visibleRepoItems);
     setKbTotalCount(kbResponse.totalCount);
     setRepoTotalCount(visibleRepoCount);
     setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + visibleRepoCount }));
-    return { registryResponse, managementResponse, kbResponse, repoResponse, dashboardResponse };
+    return { registryResponse, managementResponse, kbResponse, repoResponse, dashboardResponse, derivedMetricResponse };
   }
 
-  function applyWorkspacePath(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): void {
-    const nextPath = workspacePathFromTab(projectId, tab, dashboardId);
+  function applyWorkspacePath(projectId: string, tab: WorkspaceTab, dashboardId?: string | null, metricInstanceId?: string | null): void {
+    const nextPath = workspacePathFromTab(projectId, tab, dashboardId, metricInstanceId);
     if (window.location.pathname !== nextPath || window.location.search) {
       window.history.pushState({}, "", nextPath);
     }
     setPathnameProjectId(projectId);
     setActiveTab(tab);
     setActiveDashboardId(tab === "dashboards" ? (dashboardId ?? null) : null);
+    setActiveMetricId(tab === "kpis" ? (metricInstanceId ?? null) : null);
     setLocationSearch("");
   }
 
@@ -2994,6 +3639,7 @@ export default function App() {
         if (nextProject) {
           setActiveTab(pathState?.tab ?? "chat");
           setActiveDashboardId(pathState?.dashboardId ?? null);
+          setActiveMetricId(pathState?.metricInstanceId ?? null);
           setPathnameProjectId(nextProject.id);
           if (sessionResponse.session.projectId !== nextProject.id) {
             const selected = await selectProject(token, nextProject.id);
@@ -3002,25 +3648,31 @@ export default function App() {
             }
             setSession(selected.session);
           }
-          const [chatResponse, registryResponse, managementResponse, convResponse] = await Promise.all([
+          const [chatResponse, registryResponse, managementResponse, convResponse, activeStreamsResponse] = await Promise.all([
             getChat(token, nextProject.id),
             getRegistry(token),
             getProjectManagement(token, nextProject.id),
-            getConversations(token, nextProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" }))
+            getConversations(token, nextProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
+            getActiveChatStreams(token, nextProject.id).catch(() => ({ projectId: nextProject.id, streams: [], requestId: "" }))
           ]);
-          const [kbResponse, repoResponse, dashboardResponse] = await Promise.all([
+          const [kbResponse, repoResponse, dashboardResponse, derivedMetricResponse] = await Promise.all([
             getKnowledgeBase(token, nextProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
             getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
-            getDashboards(token, nextProject.id).catch(() => null)
+            getDashboards(token, nextProject.id).catch(() => null),
+            getDerivedMetrics(token, nextProject.id).catch(() => ({ metrics: [], totalCount: 0, requestId: "" }))
           ]);
           if (!cancelled) {
             const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
             const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
+            const restoredStreams = conversationStreamsFromActiveSnapshots(activeStreamsResponse.streams);
+            const restoredActiveConversationId = chatResponse.activeConversationId
+              ?? activeStreamsResponse.streams[activeStreamsResponse.streams.length - 1]?.conversationId
+              ?? null;
             setMessages(chatResponse.messages);
-            setConversations(sortConversationsByNewest(convResponse.conversations));
+            setConversations(mergeConversationSummaries(convResponse.conversations, [], restoredStreams, deletedConversationIdsRef.current));
             setProjectConversationCounts((current) => ({ ...current, [nextProject.id]: convResponse.conversations.length }));
             setProjectAssetCounts((current) => ({ ...current, [nextProject.id]: kbResponse.totalCount + visibleRepoCount }));
-            setActiveConversationId(chatResponse.activeConversationId ?? null);
+            setActiveConversationId(restoredActiveConversationId);
             setPendingNewChat(false);
             setRegistry(registryResponse);
             setManagement(managementResponse);
@@ -3028,10 +3680,11 @@ export default function App() {
             if (dashboardResponse) {
               setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
             }
+            setDerivedMetrics(derivedMetricResponse.metrics);
             setRepositoryItems(visibleRepoItems);
             setKbTotalCount(kbResponse.totalCount);
             setRepoTotalCount(visibleRepoCount);
-            setConversationStreams({});
+            setConversationStreams(restoredStreams);
             storeSession({ token, user: user ?? readStoredSession().user, projectId: nextProject.id });
           }
         }
@@ -3086,6 +3739,37 @@ export default function App() {
       cancelled = true;
     };
   }, [activeDashboardId, activeTab, dashboards, selectedProject?.id ?? null, token]);
+
+  useEffect(() => {
+    if (!token || !selectedProject || !activeMetricId) return;
+    if (derivedMetrics.some((metric) => metric.instance.instanceId === activeMetricId)) return;
+
+    let cancelled = false;
+    const projectId = selectedProject.id;
+    const metricId = activeMetricId;
+    async function hydrateActiveMetric() {
+      try {
+        const response = await getDerivedMetric(token, projectId, metricId);
+        if (cancelled) return;
+        setDerivedMetrics((current) => upsertDerivedMetricAsset(current, response.metric));
+      } catch (error) {
+        if (cancelled) return;
+        if (isAuthFailure(error)) {
+          clearAuth(errorBanner(error, "Session expired"));
+          return;
+        }
+        if (activeTab === "kpis") {
+          applyWorkspacePath(projectId, "kpis");
+        }
+        setBanner(errorBanner(error, "Could not load KPI/FDD asset"));
+      }
+    }
+
+    void hydrateActiveMetric();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeMetricId, activeTab, derivedMetrics, selectedProject?.id ?? null, token]);
 
   useEffect(() => {
     setDashboardLiveValues({});
@@ -3156,27 +3840,30 @@ export default function App() {
       if (inFlight || busy) return;
       inFlight = true;
       try {
-        const [convResponse, kbResponse, repoResponse, dashboardResponse] = await Promise.all([
+        const [convResponse, kbResponse, repoResponse, dashboardResponse, derivedMetricResponse] = await Promise.all([
           getConversations(token, projectId).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
           getKnowledgeBase(token, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
           getRepository(token, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
-          getDashboards(token, projectId).catch(() => null)
+          getDashboards(token, projectId).catch(() => null),
+          getDerivedMetrics(token, projectId).catch(() => ({ metrics: [], totalCount: 0, requestId: "" }))
         ]);
         if (!active) return;
         const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
         const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
-        setConversations((current) => mergeConversationSummaries(convResponse.conversations, current, conversationStreamsRef.current));
+        const visibleConversations = convResponse.conversations.filter((conversation) => !deletedConversationIdsRef.current.has(conversation.id));
+        setConversations((current) => mergeConversationSummaries(visibleConversations, current, conversationStreamsRef.current, deletedConversationIdsRef.current));
         setKnowledgeBaseDocuments(kbResponse.documents.map(apiDocumentToUi));
         if (dashboardResponse) {
           setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
         }
+        setDerivedMetrics(derivedMetricResponse.metrics);
         setRepositoryItems((current) => {
           const incomingIds = new Set(visibleRepoItems.map((item) => item.id));
           return [...visibleRepoItems, ...current.filter((item) => !incomingIds.has(item.id))];
         });
         setKbTotalCount(kbResponse.totalCount);
         setRepoTotalCount(visibleRepoCount);
-        setProjectConversationCounts((current) => ({ ...current, [projectId]: convResponse.conversations.length }));
+        setProjectConversationCounts((current) => ({ ...current, [projectId]: visibleConversations.length }));
         setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + visibleRepoCount }));
       } catch {
         // Sidebar refresh is best-effort.
@@ -3200,10 +3887,73 @@ export default function App() {
 
     const socket = createProjectSocket(selectedProject.id, token);
     projectSocketRef.current = socket;
+    let active = true;
+
+    async function hydrateActiveChatStreams(): Promise<void> {
+      try {
+        const response = await getActiveChatStreams(token!, selectedProject!.id);
+        if (!active) return;
+        const visibleStreams = response.streams.filter((stream) =>
+          !deletedConversationIdsRef.current.has(stream.conversationId)
+          && !isLocallyStreamingConversation(stream.conversationId)
+        );
+        const restoredStreams = conversationStreamsFromActiveSnapshots(visibleStreams);
+        setConversationStreams((current) => ({ ...current, ...restoredStreams }));
+        setConversations((current) => {
+          let next = current;
+          for (const stream of visibleStreams) {
+            next = upsertConversationSummary(next, conversationSummaryFromActiveStream(stream));
+          }
+          return next;
+        });
+      } catch {
+        // Active stream hydration is best-effort; normal chat polling still works.
+      }
+    }
 
     socket.on("message", (data) => {
       if (data.type === "connected") {
         socket.send({ type: "dashboard_subscribe", pointNames: activeDashboardPointNames });
+        void hydrateActiveChatStreams();
+      }
+      if (data.type === "chat_stream_updated") {
+        const stream = parseActiveChatStreamSnapshot(data.stream);
+        if (stream) {
+          if (deletedConversationIdsRef.current.has(stream.conversationId)) return;
+          if (!isLocallyStreamingConversation(stream.conversationId)) {
+            setConversationStreams((current) => ({
+              ...current,
+              [stream.conversationId]: conversationStreamFromActiveSnapshot(stream)
+            }));
+          }
+          setConversations((current) => upsertConversationSummary(current, conversationSummaryFromActiveStream(stream)));
+        }
+      }
+      if (data.type === "chat_stream_finished" && typeof data.conversationId === "string") {
+        const finishedConversationId = data.conversationId;
+        if (isLocallyStreamingConversation(finishedConversationId)) return;
+        setConversationStreams((current) => {
+          if (!current[finishedConversationId]) return current;
+          const next = { ...current };
+          delete next[finishedConversationId];
+          return next;
+        });
+        void getConversations(token, selectedProject.id)
+          .then((response) => {
+            if (!active) return;
+            const visibleConversations = response.conversations.filter((conversation) => !deletedConversationIdsRef.current.has(conversation.id));
+            setConversations((current) => mergeConversationSummaries(visibleConversations, current, conversationStreamsRef.current, deletedConversationIdsRef.current));
+            setProjectConversationCounts((current) => ({ ...current, [selectedProject.id]: visibleConversations.length }));
+          })
+          .catch(() => undefined);
+        if (!deletedConversationIdsRef.current.has(finishedConversationId) && finishedConversationId === activeConversationIdRef.current) {
+          void getChat(token, selectedProject.id, finishedConversationId)
+            .then((response) => {
+              if (!active) return;
+              setMessages(response.messages);
+            })
+            .catch(() => undefined);
+        }
       }
       if (data.type === "reminder_fired" && data.message) {
         const reminderMsg = data.message as ChatMessage;
@@ -3214,6 +3964,7 @@ export default function App() {
         });
         setConversations((current) => {
           if (typeof data.conversationId !== "string") return current;
+          if (deletedConversationIdsRef.current.has(data.conversationId)) return current;
           const existing = current.find((conversation) => conversation.id === data.conversationId);
           if (!existing) return current;
           return upsertConversationSummary(current, {
@@ -3224,6 +3975,7 @@ export default function App() {
         });
       }
       if (data.type === "conversation_title_updated" && typeof data.conversationId === "string" && typeof data.title === "string") {
+        if (deletedConversationIdsRef.current.has(data.conversationId)) return;
         setConversations((current) =>
           sortConversationsByNewest(current.map((c) =>
             c.id === data.conversationId ? { ...c, title: data.title as string } : c
@@ -3272,9 +4024,6 @@ export default function App() {
         const dashboard = data.dashboard as DashboardRecord;
         setDashboards((current) => upsertDashboardRecord(current, dashboard));
         if (dashboard.sourceConversationId && dashboard.sourceConversationId === activeConversationIdRef.current) {
-          setDashboardLiveValues({});
-          setDashboardRealtimeAt(null);
-          applyWorkspacePath(selectedProject.id, "dashboards", dashboard.id);
           setBanner({ tone: "success", title: "Dashboard created", message: dashboard.title });
         }
       }
@@ -3287,9 +4036,18 @@ export default function App() {
           applyWorkspacePath(selectedProject.id, "dashboards");
         }
       }
+      if (data.type === "derived_metrics_updated") {
+        void getDerivedMetrics(token, selectedProject.id)
+          .then((response) => {
+            if (!active) return;
+            setDerivedMetrics(response.metrics);
+          })
+          .catch(() => undefined);
+      }
     });
 
     return () => {
+      active = false;
       if (projectSocketRef.current === socket) {
         projectSocketRef.current = null;
       }
@@ -3313,6 +4071,8 @@ export default function App() {
       setMessages([]);
       setConversations([]);
       setActiveConversationId(null);
+      setDerivedMetrics([]);
+      setActiveMetricId(null);
       setRegistry(null);
       setManagement(null);
       storeSession({ token: response.token, user: response.user, projectId: null });
@@ -3398,6 +4158,8 @@ export default function App() {
       setRepositoryItems([]);
       setDashboards([]);
       setActiveDashboardId(null);
+      setDerivedMetrics([]);
+      setActiveMetricId(null);
       setDashboardLiveValues({});
       setDashboardRealtimeAt(null);
       setKbTotalCount(0);
@@ -3671,6 +4433,9 @@ export default function App() {
   }
 
   async function handleSend(message: string) {
+    if (sendInFlightRef.current) {
+      return;
+    }
     if (!token || !selectedProject) {
       setBanner({ tone: "error", title: "Select a project first", message: "Chat is available only after authentication and project selection.", code: "project_not_selected" });
       return;
@@ -3679,6 +4444,7 @@ export default function App() {
       setBanner({ tone: "error", title: "Message required", message: "Enter a non-empty message before sending.", code: "chat_invalid" });
       return;
     }
+    sendInFlightRef.current = true;
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const signal = controller.signal;
@@ -3693,11 +4459,13 @@ export default function App() {
         const created = await createConversation(token, projectId);
         targetConversationId = created.conversation.id;
         setActiveConversationId(created.conversation.id);
+        activeConversationIdRef.current = created.conversation.id;
         setPendingNewChat(false);
         setConversations((current) => current.some((c) => c.id === created.conversation.id) ? current : upsertConversationSummary(current, created.conversation));
         setProjectConversationCounts((current) => ({ ...current, [projectId]: (current[projectId] ?? 0) + 1 }));
       } catch (error) {
         abortControllerRef.current = null;
+        sendInFlightRef.current = false;
         setBusy(false);
         setBanner(errorBanner(error, "Could not create conversation"));
         return;
@@ -3751,7 +4519,6 @@ export default function App() {
         streamTimelineFinalized: false
       }
     }));
-    setMessages((current) => (activeConversationIdRef.current === targetConversationId ? [...current, optimisticUser, streamingAssistant] : current));
     setConversations((current) => {
       const existing = current.find((conversation) => conversation.id === targetConversationId);
       if (!existing) return current;
@@ -3982,18 +4749,6 @@ export default function App() {
             pauseWorkingTimelineForStream(turn);
             turn.streamTimelineFinalized = true;
             turn.workTimelinePaused = true;
-            setConversationStreams((current) => {
-              const stream = current[turn.conversationId!];
-              if (!stream) return current;
-              return {
-                ...current,
-                [turn.conversationId!]: {
-                  ...stream,
-                  streamTimelineFinalized: true,
-                  ...streamingWorkFieldsFromTurn(turn)
-                }
-              };
-            });
           }
           const capturedActivities = turn?.assistantId === streamingId ? [...turn.activities] : [];
           const finalDuration = turn?.assistantId === streamingId
@@ -4005,7 +4760,10 @@ export default function App() {
             activities: capturedActivities.length > 0 ? capturedActivities : undefined,
             workDuration: finalDuration > 0 ? finalDuration : undefined
           };
-          if (completedConversationId === activeConversationIdRef.current) {
+          const completedConversationDeleted = completedConversationId
+            ? deletedConversationIdsRef.current.has(completedConversationId)
+            : false;
+          if (!completedConversationDeleted && completedConversationId === activeConversationIdRef.current) {
             setMessages((current) => [
               ...current.filter((message) => message.id !== optimisticUser.id && message.id !== streamingId),
               response.message,
@@ -4032,7 +4790,7 @@ export default function App() {
               ];
             });
           }
-          if (response.conversationId) {
+          if (response.conversationId && !deletedConversationIdsRef.current.has(response.conversationId)) {
             const updatedTitle = response.conversationTitle ?? "New conversation";
             setConversations((current) => {
               const existing = current.find((c) => c.id === response.conversationId);
@@ -4089,6 +4847,7 @@ export default function App() {
       }
     } finally {
       abortControllerRef.current = null;
+      sendInFlightRef.current = false;
       setBusy(false);
     }
   }
@@ -4114,6 +4873,7 @@ export default function App() {
     if (!token || !selectedProject) {
       setActiveTab("chat");
       setActiveDashboardId(null);
+      setActiveMetricId(null);
       setMessages([]);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
@@ -4159,6 +4919,17 @@ export default function App() {
 
   async function handleDeleteConversation(convId: string) {
     if (!token || !selectedProject) return;
+    deletedConversationIdsRef.current.add(convId);
+    const activeStream = streamingTurnRef.current;
+    if (activeStream?.conversationId === convId) {
+      abortControllerRef.current?.abort();
+    }
+    setConversations((current) => current.filter((c) => c.id !== convId));
+    setConversationStreams((current) => {
+      const next = { ...current };
+      delete next[convId];
+      return next;
+    });
     setBusy(true);
     try {
       const result = await deleteConversation(token, selectedProject.id, convId);
@@ -4177,6 +4948,7 @@ export default function App() {
       }
       setBanner({ tone: "success", title: "Conversation deleted", message: `Removed ${result.removedMessages} messages.`, requestId: result.requestId });
     } catch (error) {
+      deletedConversationIdsRef.current.delete(convId);
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
       } else {
@@ -4221,6 +4993,8 @@ export default function App() {
         setRepositoryItems([]);
         setDashboards([]);
         setActiveDashboardId(null);
+        setDerivedMetrics([]);
+        setActiveMetricId(null);
         setDashboardLiveValues({});
         setDashboardRealtimeAt(null);
         setKbTotalCount(0);
@@ -4249,6 +5023,7 @@ export default function App() {
     if (!token || !selectedProject) {
       setActiveTab("chat");
       setActiveDashboardId(null);
+      setActiveMetricId(null);
       setMessages([]);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
@@ -4291,6 +5066,52 @@ export default function App() {
     }
   }
 
+  async function handleOpenMetric(instanceId: string) {
+    if (!token || !selectedProject) return;
+    applyWorkspacePath(selectedProject.id, "kpis", null, instanceId);
+    setBanner(null);
+    if (derivedMetrics.some((metric) => metric.instance.instanceId === instanceId)) {
+      return;
+    }
+    try {
+      const response = await getDerivedMetric(token, selectedProject.id, instanceId);
+      setDerivedMetrics((current) => upsertDerivedMetricAsset(current, response.metric));
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not open KPI/FDD asset"));
+      }
+    }
+  }
+
+  async function handleToggleMetricMaterialization(instanceIds: string[], enabled: boolean) {
+    if (!token || !selectedProject || instanceIds.length === 0) return;
+    try {
+      const responses = await Promise.all(instanceIds.map((instanceId) =>
+        updateDerivedMetricMaterialization(token, selectedProject.id, instanceId, { enabled })
+      ));
+      setDerivedMetrics((current) => responses.reduce(
+        (next, response) => upsertDerivedMetricAsset(next, response.metric),
+        current
+      ));
+      setBanner({
+        tone: "success",
+        title: enabled ? "Background Calculation enabled" : "Background Calculation disabled",
+        message: responses.length === 1
+          ? responses[0]!.metric.instance.displayName
+          : `${responses.length} Background Calculation entries updated`,
+        requestId: responses.at(-1)?.requestId
+      });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not update Background Calculation"));
+      }
+    }
+  }
+
   const authenticated = Boolean(token && user);
   const shellVariant = "workspace";
   const showProjectPicker = authenticated && !bootstrapping && !selectedProject;
@@ -4325,6 +5146,9 @@ export default function App() {
           repoItems={repositoryItems}
           dashboards={dashboards}
           activeDashboard={activeDashboard}
+          derivedMetrics={derivedMetrics}
+          activeMetricGroup={activeMetricGroup}
+          activeMetricId={activeMetricId}
           dashboardLiveValues={dashboardLiveValues}
           dashboardRealtimeStale={dashboardRealtimeStale}
           kbTotalCount={kbTotalCount}
@@ -4345,6 +5169,8 @@ export default function App() {
             setActiveConversationId(null);
             setDashboards([]);
             setActiveDashboardId(null);
+            setDerivedMetrics([]);
+            setActiveMetricId(null);
             setDashboardLiveValues({});
             setDashboardRealtimeAt(null);
             storeSession({ token, user, projectId: null });
@@ -4353,6 +5179,7 @@ export default function App() {
           onSelectProject={(project) => { void handleProjectSelect(project); }}
           onSelectConversation={(convId) => { void handleSelectConversation(convId); }}
           onOpenDashboard={(dashboardId) => { void handleOpenDashboard(dashboardId); }}
+          onOpenMetric={(instanceId) => { void handleOpenMetric(instanceId); }}
           onCreateProject={(name) => { void handleCreateProject(name); }}
           onSignOut={() => clearAuth()}
           projectConversationCounts={projectConversationCounts}
@@ -4369,6 +5196,7 @@ export default function App() {
           onDeleteDashboard={handleDeleteDashboard}
           onMergeDashboard={handleMergeDashboard}
           onCopyWidgetToDashboard={handleCopyWidgetToDashboard}
+          onToggleMetricMaterialization={handleToggleMetricMaterialization}
           onStop={handleStop}
           streamingActivity={visibleStreamingActivity}
           streamOutputStarted={streamShowsWorkedFor(visibleStreamState)}

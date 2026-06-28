@@ -676,6 +676,7 @@ describe("project-scoped chat contract", () => {
 
       const createdDashboards = store.dashboardsByProject.project_alpha ?? [];
       expect(createdDashboards).toHaveLength(1);
+      expect(response.json().assistantMessage.content).toContain(`/projects/project_alpha/dashboards/${createdDashboards[0]!.id}`);
       expect(createdDashboards[0]).toMatchObject({
         title: "Chiller supply/return monitor",
           visibility: "project",
@@ -1663,6 +1664,126 @@ describe("chat streaming endpoint", () => {
     });
   });
 
+  it("appends dashboard links to streaming dashboard answers when the provider omits them", async () => {
+    const store = createSeedStore();
+    const provider: ChatProvider = {
+      metadata: { id: "stream-dashboard-real", mode: "real", model: "stream-model", status: "configured" },
+      async complete() {
+        return {
+          text: "Dashboard created successfully.",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      },
+      async *completeStream(request) {
+        const toolMessages = request.messages.filter((message) => message.role === "tool");
+        if (toolMessages.length === 0) {
+          yield {
+            toolCalls: [{
+              id: "call_stream_dashboard",
+              type: "function",
+              function: {
+                name: "dashboard_create",
+                arguments: JSON.stringify({
+                  title: "Streaming dashboard link check",
+                  widgets: [{
+                    kind: "live_value_grid",
+                    title: "CH-01 live temperatures",
+                    points: ["CH-01_Supply_Water_Temp", "CH-01_Return_Water_Temp"]
+                  }]
+                })
+              }
+            }]
+          };
+          return;
+        }
+        yield { content: "Dashboard created successfully." };
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Create a dashboard for CH-01 temperatures" }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    const doneEvent = events.find((event) => event.event === "done");
+    expect(doneEvent).toBeDefined();
+    const createdDashboards = store.dashboardsByProject.project_alpha ?? [];
+    expect(createdDashboards).toHaveLength(1);
+    const doneData = doneEvent!.data as { assistantMessage?: { content?: string } };
+    expect(doneData.assistantMessage?.content).toContain("Dashboard created successfully.");
+    expect(doneData.assistantMessage?.content).toContain(`/projects/project_alpha/dashboards/${createdDashboards[0]!.id}`);
+  });
+
+  it("exposes and clears active stream snapshots while a chat turn is running", async () => {
+    const started = deferredPromise<void>();
+    const release = deferredPromise<void>();
+    const provider: ChatProvider = {
+      metadata: { id: "stream-real", mode: "real", model: "stream-model", status: "configured" },
+      async complete() {
+        return {
+          text: "Streaming title",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      },
+      async *completeStream() {
+        yield { progress: { label: "Checking live dashboard context", kind: "context" as const } };
+        yield { content: "Working on it" };
+        started.resolve();
+        await release.promise;
+        yield { content: " now complete" };
+      }
+    };
+    const app = buildServer({ chatProvider: provider, persist: false });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const streamPromise = app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Keep me updated" }
+    });
+
+    await started.promise;
+    const active = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_alpha/chat/active-streams",
+      headers: bearer(adaToken)
+    });
+
+    expect(active.statusCode).toBe(200);
+    expect(active.json().streams).toHaveLength(1);
+    expect(active.json().streams[0]).toMatchObject({
+      projectId: "project_alpha",
+      conversationId: expect.stringMatching(/^conv_/),
+      requestId: expect.stringMatching(/^req_/),
+      userMessage: { role: "user", content: "Keep me updated" },
+      assistantMessage: { role: "assistant" },
+      interimNarration: expect.stringContaining("Working on it"),
+      activities: expect.arrayContaining([
+        expect.objectContaining({ label: "Checking live dashboard context", kind: "context" })
+      ])
+    });
+
+    release.resolve();
+    const stream = await streamPromise;
+    expect(stream.statusCode).toBe(200);
+
+    const cleared = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_alpha/chat/active-streams",
+      headers: bearer(adaToken)
+    });
+    expect(cleared.json().streams).toEqual([]);
+  });
+
   it("emits Retrieved site rules activity when a relevant user rule matches the query", async () => {
     const store = createSeedStore();
     const grounding = createProjectGroundingBindings(store);
@@ -1740,6 +1861,68 @@ describe("chat streaming endpoint", () => {
     expect(activities.some((activity) => typeof activity.label === "string" && activity.label.startsWith("Retrieved site rule"))).toBe(
       true
     );
+  }, 10_000);
+
+  it("does not emit site rule retrieval activity for low-signal greetings", async () => {
+    const store = createSeedStore();
+    const grounding = createProjectGroundingBindings(store);
+    grounding.addStructured(
+      "project_element",
+      {
+        ruleKey: "wrong_running_state",
+        name: "Chiller running: TLKW cross-check",
+        scope: "chiller plant / running-state queries",
+        trigger: "When user asks which chillers are running",
+        action: "Cross-check Run_Status with motor power (WCC_{1-8}_TLKW).",
+        wrongPattern: "Do not rely on Run_Status alone.",
+        triggerTopics: ["chiller running", "which chillers", "running situation", "运行状态"],
+        systems: ["chiller plant"],
+        equipment: ["WCC"],
+        status: "approved"
+      },
+      { source: "user" }
+    );
+
+    const provider: ChatProvider = {
+      metadata: { id: "stream-real", mode: "real", model: "stream-model", status: "configured" },
+      async complete() {
+        return {
+          text: "Hello! How can I help?",
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      },
+      async *completeStream() {
+        yield { content: "Hello! How can I help?" };
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider, persist: false });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer("seed-token-buildinggpt") });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/chat/stream",
+      headers: bearer("seed-token-buildinggpt"),
+      payload: { message: "hello" }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSseEvents(res.body);
+    const groundingActivities = events.filter((event) =>
+      event.event === "activity"
+      && (
+        (event.data as Record<string, unknown>).tool === "project_grounding"
+        || (
+          typeof (event.data as Record<string, unknown>).label === "string"
+          && ((event.data as Record<string, unknown>).label as string).includes("site rule")
+        )
+      )
+    );
+    expect(groundingActivities).toEqual([]);
+    const doneEvent = events.find((event) => event.event === "done");
+    const assistantMessage = (doneEvent?.data as Record<string, unknown>).assistantMessage as Record<string, unknown>;
+    const activities = (assistantMessage.activities ?? []) as Array<Record<string, unknown>>;
+    expect(activities.some((activity) => activity.tool === "project_grounding")).toBe(false);
   });
 
   it("emits provider stream content as work_token before tool calls arrive", async () => {
