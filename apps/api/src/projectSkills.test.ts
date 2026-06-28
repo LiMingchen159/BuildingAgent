@@ -15,6 +15,12 @@ describe("projectSkills", () => {
     expect(elementHints).toContain("BMS DATA ROUTING");
     expect(elementHints).toContain("DERIVED METRICS");
     expect(elementHints).toContain("DASHBOARD GENERATION");
+    expect(elementHints).toContain("30-day source window");
+    expect(elementHints).toContain("preserve coverage");
+    expect(elementHints).toContain("same naming/equipment layer");
+    expect(elementHints).toContain("same semantic boundary");
+    expect(elementHints).toContain("Derived analytics UI");
+    expect(elementHints).toContain("defaultVisible:false");
     expect(mortarHints).not.toContain("BMS DATA ROUTING");
     expect(mortarHints).toContain("DERIVED METRICS");
     expect(mortarHints).toContain("DASHBOARD GENERATION");

@@ -208,6 +208,49 @@ describe("DerivedMetricStore", () => {
     expect(store.readLatest(metric.instance.instanceId)).toMatchObject({ valueNum: 4.4 });
     expect(store.readHistory(metric.instance.instanceId, { order: "asc" }).map((sample) => sample.valueNum)).toEqual([4.1, 4.4]);
   });
+
+  it("persists materialization state for reusable derived metrics", () => {
+    const dir = tempDir();
+    const store = new DerivedMetricStore(dir);
+    const metric = store.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_06",
+      formula: "cooling_load_kw / power_kw",
+      dependencies: [
+        { role: "cooling_load_kw", sourceId: "WCC-L1-06_Q", pointName: "WCC-L1-06_Q" },
+        { role: "power_kw", sourceId: "WCC-L1-06_TLKW", pointName: "WCC-L1-06_TLKW" }
+      ]
+    });
+
+    const materialization = store.configureMaterialization({
+      instanceId: metric.instance.instanceId,
+      enabled: true,
+      formulaKind: "ratio",
+      leftRole: "cooling_load_kw",
+      rightRole: "power_kw",
+      invalidValuePolicy: "null"
+    });
+
+    expect(materialization).toMatchObject({
+      instanceId: metric.instance.instanceId,
+      projectId: "project_element",
+      enabled: true,
+      formulaKind: "ratio",
+      leftRole: "cooling_load_kw",
+      rightRole: "power_kw",
+      invalidValuePolicy: "null",
+      status: "active"
+    });
+
+    const reopened = new DerivedMetricStore(dir);
+    expect(reopened.readMaterialization(metric.instance.instanceId)).toMatchObject({
+      enabled: true,
+      formulaKind: "ratio",
+      leftRole: "cooling_load_kw",
+      rightRole: "power_kw"
+    });
+  });
 });
 
 describe("derived metric agent tools", () => {
@@ -340,8 +383,28 @@ describe("derived metric agent tools", () => {
         source: "derived_metric",
         metricKey: "system_cop",
         entityId: "WCC_09",
-        label: "WCC-09 System COP"
-      }
+        label: "WCC-09 System COP",
+        role: "output",
+        defaultVisible: true
+      },
+      inputDashboardBindings: [
+        expect.objectContaining({
+          source: "derived_metric",
+          metricInstanceId: loadMetric.instance.instanceId,
+          entityId: "WCC_09",
+          role: "cooling_load_kw",
+          dependencyRole: "input",
+          defaultVisible: false
+        }),
+        expect.objectContaining({
+          source: "derived_metric",
+          metricInstanceId: powerMetric.instance.instanceId,
+          entityId: "WCC_09",
+          role: "power_kw",
+          dependencyRole: "input",
+          defaultVisible: false
+        })
+      ]
     });
 
     const second = await calculate!.run({
@@ -358,11 +421,574 @@ describe("derived metric agent tools", () => {
       reused: true,
       calculated: false,
       created: false,
-      latest: { valueNum: 4 }
+      latest: { valueNum: 4 },
+      inputDashboardBindings: [
+        expect.objectContaining({ dependencyRole: "input", defaultVisible: false }),
+        expect.objectContaining({ dependencyRole: "input", defaultVisible: false })
+      ]
     });
     expect(found).toHaveLength(1);
     expect(history.map((sample) => sample.valueNum)).toEqual([4, 4]);
     expect(projectMemory.filter((entry) => entry.includes("WCC_09/system_cop"))).toHaveLength(1);
+  });
+
+  it("aligns different-frequency dependencies with nearest policy", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const loadMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "cooling_load_kw",
+      entityId: "WCC_15",
+      formula: "source cooling load",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-15_Q" }]
+    });
+    const powerMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "power_kw",
+      entityId: "WCC_15",
+      formula: "source power",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-15_P" }]
+    });
+    metrics.recordSample({ instanceId: loadMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 100 });
+    metrics.recordSample({ instanceId: loadMetric.instance.instanceId, ts: "2026-06-26T00:15:00.000Z", valueNum: 120 });
+    metrics.recordSample({ instanceId: powerMetric.instance.instanceId, ts: "2026-06-26T00:02:00.000Z", valueNum: 25 });
+    metrics.recordSample({ instanceId: powerMetric.instance.instanceId, ts: "2026-06-26T00:17:00.000Z", valueNum: 30 });
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const calculate = registry.list().find((tool) => tool.name === "derived_metric_calculate");
+    const result = await calculate!.run({
+      metricKey: "system_cop",
+      entityId: "WCC_15",
+      displayName: "WCC-15 System COP",
+      formulaKind: "ratio",
+      numeratorRole: "cooling_load_kw",
+      denominatorRole: "power_kw",
+      from: "2026-06-26T00:00:00.000Z",
+      to: "2026-06-26T01:00:00.000Z",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "metric", sourceId: loadMetric.instance.instanceId },
+        { role: "power_kw", sourceType: "metric", sourceId: powerMetric.instance.instanceId }
+      ]
+    }, {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_calc_nearest_alignment",
+      conversationId: "conv_calc_nearest_alignment",
+      canConfigure: true,
+      messages: []
+    });
+
+    const found = metrics.lookup({ projectId: "project_element", metricKey: "system_cop", entityId: "WCC_15" });
+    const history = metrics.readHistory(found[0]!.instanceId, { order: "asc" });
+    const materialization = metrics.readMaterialization(found[0]!.instanceId);
+
+    expect(result).toMatchObject({
+      calculated: true,
+      sampleCount: 2,
+      alignmentPolicy: "nearest",
+      alignmentToleranceSeconds: 300,
+      latest: { valueNum: 4 }
+    });
+    expect(history.map((sample) => sample.valueNum)).toEqual([4, 4]);
+    expect(history[0]).toMatchObject({
+      ts: "2026-06-26T00:00:00.000Z",
+      metadata: {
+        alignmentPolicy: "nearest",
+        alignmentToleranceSeconds: 300,
+        inputTimestamps: {
+          cooling_load_kw: "2026-06-26T00:00:00.000Z",
+          power_kw: "2026-06-26T00:02:00.000Z"
+        },
+        inputLagSeconds: {
+          cooling_load_kw: 0,
+          power_kw: 120
+        }
+      }
+    });
+    expect(materialization).toMatchObject({
+      alignmentPolicy: "nearest",
+      alignmentToleranceSeconds: 300
+    });
+  });
+
+  it("adds derived metric inputs to dashboard live values and hidden trend audit series", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const metric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_14",
+      displayName: "WCC-14 System COP",
+      unit: "ratio",
+      formula: "cooling_load_kw / power_kw",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "raw_point", sourceId: "1401", pointName: "WCC-L1-14_Q", unit: "kW", label: "Cooling Load" },
+        { role: "power_kw", sourceType: "raw_point", sourceId: "1402", pointName: "WCC-L1-14_P", unit: "kW", label: "Power" }
+      ]
+    });
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const dashboardCreate = registry.list().find((tool) => tool.name === "dashboard_create");
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_dashboard_audit_inputs",
+      conversationId: "conv_dashboard_audit_inputs",
+      canConfigure: true,
+      messages: [],
+      dashboardOps: {
+        create: (input: any) => ({
+          id: "dash_audit_inputs",
+          projectId: "project_element",
+          ownerUserId: "user_buildinggpt",
+          visibility: input.visibility ?? "project",
+          createdAt: "2026-06-27T00:00:00.000Z",
+          updatedAt: "2026-06-27T00:00:00.000Z",
+          ...input
+        })
+      }
+    };
+
+    const result = await dashboardCreate!.run({
+      title: "Derived audit dashboard",
+      widgets: [
+        {
+          id: "wcc_14_live",
+          kind: "live_value_grid",
+          title: "WCC-14 Live",
+          pointBindings: [
+            { pointName: "WCC-L1-14_COP", label: "BMS COP", entityId: "WCC_14" },
+            { source: "derived_metric", metricInstanceId: metric.instance.instanceId, label: "System COP" }
+          ]
+        },
+        {
+          id: "wcc_14_trend",
+          kind: "timeseries_chart",
+          title: "WCC-14 Trend",
+          pointBindings: [
+            { pointName: "WCC-L1-14_COP", label: "BMS COP", entityId: "WCC_14" },
+            { source: "derived_metric", metricInstanceId: metric.instance.instanceId, label: "System COP" }
+          ]
+        }
+      ]
+    }, context);
+
+    const widgets = (result.dashboard as any).widgets as Array<{ id: string; pointBindings: Array<Record<string, unknown>> }>;
+    const live = widgets.find((widget) => widget.id === "wcc_14_live");
+    const trend = widgets.find((widget) => widget.id === "wcc_14_trend");
+    expect(live?.pointBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "BMS COP", pointName: "WCC-L1-14_COP" }),
+      expect.objectContaining({ source: "derived_metric", metricInstanceId: metric.instance.instanceId, dependencyRole: "output", defaultVisible: true }),
+      expect.objectContaining({ source: "bms", pointName: "WCC-L1-14_Q", dependencyRole: "input", defaultVisible: true }),
+      expect.objectContaining({ source: "bms", pointName: "WCC-L1-14_P", dependencyRole: "input", defaultVisible: true })
+    ]));
+    expect(trend?.pointBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "BMS COP", pointName: "WCC-L1-14_COP" }),
+      expect.objectContaining({ source: "derived_metric", metricInstanceId: metric.instance.instanceId, dependencyRole: "output", defaultVisible: true }),
+      expect.objectContaining({ source: "bms", pointName: "WCC-L1-14_Q", dependencyRole: "input", defaultVisible: false }),
+      expect.objectContaining({ source: "bms", pointName: "WCC-L1-14_P", dependencyRole: "input", defaultVisible: false })
+    ]));
+  });
+
+  it("splits combined derived dashboard widgets after adding audit inputs", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const metric14 = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_14",
+      displayName: "WCC-14 System COP",
+      formula: "cooling_load_kw / power_kw",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "raw_point", sourceId: "1401", pointName: "WCC-L1-14_Q", label: "Cooling Load" },
+        { role: "power_kw", sourceType: "raw_point", sourceId: "1402", pointName: "WCC-L1-14_P", label: "Power" }
+      ]
+    });
+    const metric15 = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_15",
+      displayName: "WCC-15 System COP",
+      formula: "cooling_load_kw / power_kw",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "raw_point", sourceId: "1501", pointName: "WCC-L1-15_Q", label: "Cooling Load" },
+        { role: "power_kw", sourceType: "raw_point", sourceId: "1502", pointName: "WCC-L1-15_P", label: "Power" }
+      ]
+    });
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const dashboardCreate = registry.list().find((tool) => tool.name === "dashboard_create");
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_dashboard_split_inputs",
+      conversationId: "conv_dashboard_split_inputs",
+      canConfigure: true,
+      messages: [],
+      dashboardOps: {
+        create: (input: any) => ({
+          id: "dash_split_inputs",
+          projectId: "project_element",
+          ownerUserId: "user_buildinggpt",
+          visibility: input.visibility ?? "project",
+          createdAt: "2026-06-27T00:00:00.000Z",
+          updatedAt: "2026-06-27T00:00:00.000Z",
+          ...input
+        })
+      }
+    };
+
+    const result = await dashboardCreate!.run({
+      title: "Combined derived dashboard",
+      widgets: [
+        {
+          id: "fleet_live",
+          kind: "live_value_grid",
+          title: "Fleet Live",
+          pointBindings: [
+            { pointName: "WCC-L1-14_COP", label: "WCC-14 BMS COP", entityId: "WCC_14" },
+            { source: "derived_metric", metricInstanceId: metric14.instance.instanceId, label: "WCC-14 System COP", entityId: "WCC_14" },
+            { pointName: "WCC-L1-15_COP", label: "WCC-15 BMS COP", entityId: "WCC_15" },
+            { source: "derived_metric", metricInstanceId: metric15.instance.instanceId, label: "WCC-15 System COP", entityId: "WCC_15" }
+          ]
+        },
+        {
+          id: "fleet_trend",
+          kind: "timeseries_chart",
+          title: "WCC-14 Trend",
+          pointBindings: [
+            { pointName: "WCC-L1-14_COP", label: "WCC-14 BMS COP", entityId: "WCC_14" },
+            { source: "derived_metric", metricInstanceId: metric14.instance.instanceId, label: "WCC-14 System COP", entityId: "WCC_14" },
+            { pointName: "WCC-L1-15_COP", label: "WCC-15 BMS COP", entityId: "WCC_15" },
+            { source: "derived_metric", metricInstanceId: metric15.instance.instanceId, label: "WCC-15 System COP", entityId: "WCC_15" }
+          ]
+        },
+        {
+          id: "fleet_compare",
+          kind: "bar_comparison",
+          title: "Fleet Comparison",
+          pointBindings: [
+            { pointName: "WCC-L1-14_COP", label: "WCC-14 BMS COP", entityId: "WCC_14" },
+            { source: "derived_metric", metricInstanceId: metric14.instance.instanceId, label: "WCC-14 System COP", entityId: "WCC_14" }
+          ]
+        }
+      ]
+    }, context);
+
+    const widgets = (result.dashboard as any).widgets as Array<{ id: string; kind: string; title: string; pointBindings: Array<Record<string, unknown>> }>;
+    const liveWidgets = widgets.filter((widget) => widget.kind === "live_value_grid");
+    const trendWidgets = widgets.filter((widget) => widget.kind === "timeseries_chart");
+    const comparisonWidgets = widgets.filter((widget) => widget.kind === "bar_comparison");
+    expect(liveWidgets).toHaveLength(2);
+    expect(trendWidgets).toHaveLength(2);
+    expect(comparisonWidgets).toHaveLength(2);
+    expect(trendWidgets.map((widget) => widget.title)).toEqual([
+      "WCC-14 Trend",
+      "WCC-15 Trend"
+    ]);
+    expect(comparisonWidgets.map((widget) => widget.title)).toEqual([
+      "Fleet Comparison — BMS COP",
+      "Fleet Comparison — System COP"
+    ]);
+    for (const widget of comparisonWidgets) {
+      expect(widget.pointBindings).toHaveLength(2);
+      expect(new Set(widget.pointBindings.map((binding) => binding.entityId))).toEqual(new Set(["WCC_14", "WCC_15"]));
+      expect(widget.pointBindings.every((binding) => binding.dependencyRole !== "input")).toBe(true);
+    }
+    expect(comparisonWidgets[0]?.pointBindings.every((binding) => binding.source !== "derived_metric")).toBe(true);
+    expect(comparisonWidgets[1]?.pointBindings.every((binding) => binding.source === "derived_metric")).toBe(true);
+    for (const widget of liveWidgets) {
+      expect(new Set(widget.pointBindings.map((binding) => binding.entityId))).toHaveProperty("size", 1);
+      expect(widget.pointBindings).toHaveLength(4);
+      expect(widget.pointBindings.filter((binding) => binding.dependencyRole === "input")).toHaveLength(2);
+      expect(widget.pointBindings.filter((binding) => binding.defaultVisible === true)).toHaveLength(3);
+    }
+    for (const widget of trendWidgets) {
+      expect(new Set(widget.pointBindings.map((binding) => binding.entityId))).toHaveProperty("size", 1);
+      expect(widget.pointBindings).toHaveLength(4);
+      expect(widget.pointBindings.filter((binding) => binding.dependencyRole === "input" && binding.defaultVisible === false)).toHaveLength(2);
+    }
+  });
+
+  it("expands persisted calculations to at least a 30-day history window", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const loadMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "cooling_load_kw",
+      entityId: "WCC_13",
+      formula: "source cooling load",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-13_Q" }]
+    });
+    const powerMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "power_kw",
+      entityId: "WCC_13",
+      formula: "source power",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-13_P" }]
+    });
+    for (const [ts, load, power] of [
+      ["2026-06-01T00:00:00.000Z", 100, 25],
+      ["2026-06-29T00:00:00.000Z", 120, 30]
+    ] as const) {
+      metrics.recordSample({ instanceId: loadMetric.instance.instanceId, ts, valueNum: load });
+      metrics.recordSample({ instanceId: powerMetric.instance.instanceId, ts, valueNum: power });
+    }
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const calculate = registry.list().find((tool) => tool.name === "derived_metric_calculate");
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_calc_window",
+      conversationId: "conv_calc_window",
+      canConfigure: true,
+      messages: []
+    };
+
+    const result = await calculate!.run({
+      metricKey: "system_cop",
+      entityId: "WCC_13",
+      displayName: "WCC-13 System COP",
+      formulaKind: "ratio",
+      numeratorRole: "cooling_load_kw",
+      denominatorRole: "power_kw",
+      from: "2026-06-29T00:00:00.000Z",
+      to: "2026-06-30T00:00:00.000Z",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "metric", sourceId: loadMetric.instance.instanceId },
+        { role: "power_kw", sourceType: "metric", sourceId: powerMetric.instance.instanceId }
+      ]
+    }, context);
+
+    const found = metrics.lookup({ projectId: "project_element", metricKey: "system_cop", entityId: "WCC_13" });
+    const history = metrics.readHistory(found[0]!.instanceId, { order: "asc" });
+
+    expect(result).toMatchObject({
+      calculated: true,
+      sampleCount: 2,
+      sourceWindow: {
+        from: "2026-05-31T00:00:00.000Z",
+        to: "2026-06-30T00:00:00.000Z",
+        minimumDays: 30,
+        expandedFrom: true
+      }
+    });
+    expect(history.map((sample) => sample.valueNum)).toEqual([4, 4]);
+  });
+
+  it("defaults non-calculable ratio samples to null-like invalid values", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const loadMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "cooling_load_kw",
+      entityId: "WCC_14",
+      formula: "source cooling load",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-14_Q" }]
+    });
+    const powerMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "power_kw",
+      entityId: "WCC_14",
+      formula: "source power",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-14_P" }]
+    });
+    metrics.recordSample({ instanceId: loadMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 100 });
+    metrics.recordSample({ instanceId: powerMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 0 });
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const calculate = registry.list().find((tool) => tool.name === "derived_metric_calculate");
+    const result = await calculate!.run({
+      metricKey: "system_cop",
+      entityId: "WCC_14",
+      displayName: "WCC-14 System COP",
+      formulaKind: "ratio",
+      numeratorRole: "cooling_load_kw",
+      denominatorRole: "power_kw",
+      from: "2026-06-26T00:00:00.000Z",
+      to: "2026-06-27T00:00:00.000Z",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "metric", sourceId: loadMetric.instance.instanceId },
+        { role: "power_kw", sourceType: "metric", sourceId: powerMetric.instance.instanceId }
+      ]
+    }, {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_calc_null_fallback",
+      conversationId: "conv_calc_null_fallback",
+      canConfigure: true,
+      messages: []
+    });
+
+    const found = metrics.lookup({ projectId: "project_element", metricKey: "system_cop", entityId: "WCC_14" });
+    const history = metrics.readHistory(found[0]!.instanceId, { order: "asc" });
+
+    expect(result).toMatchObject({
+      created: true,
+      calculated: true,
+      sampleCount: 1,
+      fallbackCount: 1,
+      invalidValuePolicy: "null",
+      latest: {
+        valueText: "N/A",
+        quality: "invalid",
+        status: "not_calculable"
+      }
+    });
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      valueText: "N/A",
+      quality: "invalid",
+      status: "not_calculable",
+      metadata: {
+        invalidValuePolicy: "null",
+        invalidReason: "division_by_zero"
+      }
+    });
+    expect(history[0]!.valueNum).toBeUndefined();
+  });
+
+  it("persists zero fallback only when the agent selects zero policy", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const loadMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "cooling_load_kw",
+      entityId: "WCC_14",
+      formula: "source cooling load",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-14_Q" }]
+    });
+    const powerMetric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "power_kw",
+      entityId: "WCC_14",
+      formula: "source power",
+      dependencies: [{ role: "source", sourceId: "WCC-L1-14_P" }]
+    });
+    metrics.recordSample({ instanceId: loadMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 100 });
+    metrics.recordSample({ instanceId: powerMetric.instance.instanceId, ts: "2026-06-26T00:00:00.000Z", valueNum: 0 });
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const calculate = registry.list().find((tool) => tool.name === "derived_metric_calculate");
+    const result = await calculate!.run({
+      metricKey: "system_cop",
+      entityId: "WCC_14",
+      displayName: "WCC-14 System COP",
+      formulaKind: "ratio",
+      invalidValuePolicy: "zero",
+      numeratorRole: "cooling_load_kw",
+      denominatorRole: "power_kw",
+      from: "2026-06-26T00:00:00.000Z",
+      to: "2026-06-27T00:00:00.000Z",
+      dependencies: [
+        { role: "cooling_load_kw", sourceType: "metric", sourceId: loadMetric.instance.instanceId },
+        { role: "power_kw", sourceType: "metric", sourceId: powerMetric.instance.instanceId }
+      ]
+    }, {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_calc_zero_fallback",
+      conversationId: "conv_calc_zero_fallback",
+      canConfigure: true,
+      messages: []
+    });
+
+    const found = metrics.lookup({ projectId: "project_element", metricKey: "system_cop", entityId: "WCC_14" });
+    const history = metrics.readHistory(found[0]!.instanceId, { order: "asc" });
+
+    expect(result).toMatchObject({
+      created: true,
+      calculated: true,
+      sampleCount: 1,
+      fallbackCount: 1,
+      invalidValuePolicy: "zero",
+      latest: {
+        valueNum: 0,
+        quality: "invalid",
+        status: "fallback_zero"
+      }
+    });
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      valueNum: 0,
+      quality: "invalid",
+      status: "fallback_zero",
+      metadata: {
+        invalidValuePolicy: "zero",
+        invalidReason: "division_by_zero",
+      }
+    });
   });
 
   it("calculates Delta T style difference metrics", async () => {

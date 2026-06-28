@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import type { DerivedMetricAlignmentPolicy } from "./derivedMetricAlignment.js";
 
 export type DerivedMetricSourceType = "raw_point" | "metric";
+export type DerivedMetricFormulaKind = "ratio" | "difference";
+export type DerivedMetricInvalidValuePolicy = "null" | "zero";
 
 export interface DerivedMetricDependencyInput {
   role: string;
@@ -110,6 +113,44 @@ export interface DerivedMetricRegisterResult {
   instance: DerivedMetricInstance;
 }
 
+export interface DerivedMetricMaterialization {
+  instanceId: string;
+  projectId: string;
+  enabled: boolean;
+  intervalSeconds: number;
+  lookbackSeconds: number;
+  formulaKind?: DerivedMetricFormulaKind;
+  leftRole?: string;
+  rightRole?: string;
+  invalidValuePolicy?: DerivedMetricInvalidValuePolicy;
+  alignmentPolicy?: DerivedMetricAlignmentPolicy;
+  alignmentToleranceSeconds?: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  watermarkTs?: string;
+  status: string;
+  lastError?: string;
+  updatedAt: string;
+}
+
+export interface DerivedMetricConfigureMaterializationInput {
+  instanceId: string;
+  enabled: boolean;
+  intervalSeconds?: number;
+  lookbackSeconds?: number;
+  formulaKind?: DerivedMetricFormulaKind;
+  leftRole?: string;
+  rightRole?: string;
+  invalidValuePolicy?: DerivedMetricInvalidValuePolicy;
+  alignmentPolicy?: DerivedMetricAlignmentPolicy;
+  alignmentToleranceSeconds?: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  watermarkTs?: string;
+  status?: string;
+  lastError?: string | null;
+}
+
 function stableId(prefix: string, parts: string[], length = 20): string {
   const hash = createHash("sha256")
     .update(parts.map((part) => part.trim().toLowerCase()).join("\u001f"))
@@ -199,6 +240,26 @@ interface SampleRow {
   source_window_end: string | null;
   metadata_json: string | null;
   created_at: string;
+}
+
+interface MaterializationRow {
+  instance_id: string;
+  project_id: string;
+  enabled: number;
+  interval_seconds: number;
+  lookback_seconds: number;
+  formula_kind: DerivedMetricFormulaKind | null;
+  left_role: string | null;
+  right_role: string | null;
+  invalid_value_policy: DerivedMetricInvalidValuePolicy | null;
+  alignment_policy: DerivedMetricAlignmentPolicy | null;
+  alignment_tolerance_seconds: number | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  watermark_ts: string | null;
+  status: string;
+  last_error: string | null;
+  updated_at: string;
 }
 
 export class DerivedMetricStore {
@@ -310,14 +371,38 @@ export class DerivedMetricStore {
         FOREIGN KEY(instance_id) REFERENCES metric_instances(instance_id)
       );
 
+      CREATE TABLE IF NOT EXISTS metric_materialization (
+        instance_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        interval_seconds INTEGER NOT NULL,
+        lookback_seconds INTEGER NOT NULL,
+        formula_kind TEXT,
+        left_role TEXT,
+        right_role TEXT,
+        invalid_value_policy TEXT,
+        alignment_policy TEXT,
+        alignment_tolerance_seconds INTEGER,
+        last_run_at TEXT,
+        next_run_at TEXT,
+        watermark_ts TEXT,
+        status TEXT NOT NULL,
+        last_error TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(instance_id) REFERENCES metric_instances(instance_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_metric_instances_lookup
         ON metric_instances(project_id, metric_key, entity_id);
       CREATE INDEX IF NOT EXISTS idx_metric_samples_instance_ts
         ON metric_samples(instance_id, ts);
       CREATE INDEX IF NOT EXISTS idx_metric_latest_project
         ON metric_latest(project_id, ts);
+      CREATE INDEX IF NOT EXISTS idx_metric_materialization_project
+        ON metric_materialization(project_id, enabled, next_run_at);
     `);
     this.ensureMetricInstanceLineageColumns();
+    this.ensureMetricMaterializationAlignmentColumns();
   }
 
   private ensureMetricInstanceLineageColumns(): void {
@@ -359,6 +444,22 @@ export class DerivedMetricStore {
       WHERE formula_version IS NULL
          OR formula IS NULL
     `);
+  }
+
+  private ensureMetricMaterializationAlignmentColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(metric_materialization)").all() as Array<{ name: string }>)
+        .map((column) => column.name)
+    );
+    const requiredColumns: Array<[name: string, type: string]> = [
+      ["alignment_policy", "TEXT"],
+      ["alignment_tolerance_seconds", "INTEGER"]
+    ];
+    for (const [name, type] of requiredColumns) {
+      if (!columns.has(name)) {
+        this.db.prepare(`ALTER TABLE metric_materialization ADD COLUMN ${name} ${type}`).run();
+      }
+    }
   }
 
   registerMetric(input: DerivedMetricRegisterInput): DerivedMetricRegisterResult {
@@ -532,6 +633,20 @@ export class DerivedMetricStore {
     return rows.map((row) => this.instanceFromRow(row));
   }
 
+  listProjectMetrics(projectId: string, limit = 250): DerivedMetricInstance[] {
+    const normalizedProjectId = trimRequired(projectId, "projectId");
+    const rows = this.db.prepare(`
+      ${this.instanceSelectSql()}
+      WHERE i.project_id = @project_id
+      ORDER BY i.updated_at DESC
+      LIMIT @limit
+    `).all({
+      project_id: normalizedProjectId,
+      limit: Math.min(Math.max(1, Math.trunc(limit)), 1000)
+    }) as InstanceRow[];
+    return rows.map((row) => this.instanceFromRow(row));
+  }
+
   getInstance(instanceId: string): DerivedMetricInstance | null {
     const row = this.db.prepare(`
       ${this.instanceSelectSql()}
@@ -658,6 +773,100 @@ export class DerivedMetricStore {
     return rows.map((row) => this.sampleFromRow(row));
   }
 
+  configureMaterialization(input: DerivedMetricConfigureMaterializationInput): DerivedMetricMaterialization {
+    const instanceId = trimRequired(input.instanceId, "instanceId");
+    const instance = this.getInstance(instanceId);
+    if (!instance) {
+      throw new Error("derived_metric_instance_not_found");
+    }
+    const existing = this.readMaterialization(instanceId);
+    const now = new Date().toISOString();
+    const intervalSeconds = clampInteger(input.intervalSeconds ?? existing?.intervalSeconds ?? 300, 30, 86_400);
+    const lookbackSeconds = clampInteger(input.lookbackSeconds ?? existing?.lookbackSeconds ?? 3_600, 60, 31 * 24 * 3_600);
+    const alignmentToleranceSeconds = typeof input.alignmentToleranceSeconds === "number"
+      ? clampInteger(input.alignmentToleranceSeconds, 0, 86_400)
+      : existing?.alignmentToleranceSeconds ?? null;
+    const enabled = input.enabled;
+    const nextRunAt = optional(input.nextRunAt)
+      ?? (enabled ? existing?.nextRunAt ?? now : undefined);
+    const status = optional(input.status) ?? (enabled ? "active" : "paused");
+
+    this.db.prepare(`
+      INSERT INTO metric_materialization (
+        instance_id, project_id, enabled, interval_seconds, lookback_seconds,
+        formula_kind, left_role, right_role, invalid_value_policy, alignment_policy, alignment_tolerance_seconds,
+        last_run_at, next_run_at, watermark_ts, status, last_error, updated_at
+      ) VALUES (
+        @instance_id, @project_id, @enabled, @interval_seconds, @lookback_seconds,
+        @formula_kind, @left_role, @right_role, @invalid_value_policy, @alignment_policy, @alignment_tolerance_seconds,
+        @last_run_at, @next_run_at, @watermark_ts, @status, @last_error, @updated_at
+      )
+      ON CONFLICT(instance_id) DO UPDATE SET
+        project_id = excluded.project_id,
+        enabled = excluded.enabled,
+        interval_seconds = excluded.interval_seconds,
+        lookback_seconds = excluded.lookback_seconds,
+        formula_kind = COALESCE(excluded.formula_kind, metric_materialization.formula_kind),
+        left_role = COALESCE(excluded.left_role, metric_materialization.left_role),
+        right_role = COALESCE(excluded.right_role, metric_materialization.right_role),
+        invalid_value_policy = COALESCE(excluded.invalid_value_policy, metric_materialization.invalid_value_policy),
+        alignment_policy = COALESCE(excluded.alignment_policy, metric_materialization.alignment_policy),
+        alignment_tolerance_seconds = COALESCE(excluded.alignment_tolerance_seconds, metric_materialization.alignment_tolerance_seconds),
+        last_run_at = COALESCE(excluded.last_run_at, metric_materialization.last_run_at),
+        next_run_at = excluded.next_run_at,
+        watermark_ts = COALESCE(excluded.watermark_ts, metric_materialization.watermark_ts),
+        status = excluded.status,
+        last_error = excluded.last_error,
+        updated_at = excluded.updated_at
+    `).run({
+      instance_id: instance.instanceId,
+      project_id: instance.projectId,
+      enabled: enabled ? 1 : 0,
+      interval_seconds: intervalSeconds,
+      lookback_seconds: lookbackSeconds,
+      formula_kind: input.formulaKind ?? existing?.formulaKind ?? null,
+      left_role: optional(input.leftRole) ?? existing?.leftRole ?? null,
+      right_role: optional(input.rightRole) ?? existing?.rightRole ?? null,
+      invalid_value_policy: input.invalidValuePolicy ?? existing?.invalidValuePolicy ?? null,
+      alignment_policy: input.alignmentPolicy ?? existing?.alignmentPolicy ?? null,
+      alignment_tolerance_seconds: alignmentToleranceSeconds,
+      last_run_at: optional(input.lastRunAt) ?? existing?.lastRunAt ?? null,
+      next_run_at: nextRunAt ?? null,
+      watermark_ts: optional(input.watermarkTs) ?? existing?.watermarkTs ?? null,
+      status,
+      last_error: input.lastError === undefined ? existing?.lastError ?? null : optional(input.lastError ?? undefined),
+      updated_at: now
+    });
+
+    const materialization = this.readMaterialization(instanceId);
+    if (!materialization) {
+      throw new Error("derived_metric_materialization_failed");
+    }
+    return materialization;
+  }
+
+  readMaterialization(instanceId: string): DerivedMetricMaterialization | null {
+    const row = this.db.prepare(`
+      SELECT * FROM metric_materialization
+      WHERE instance_id = ?
+    `).get(instanceId) as MaterializationRow | undefined;
+    return row ? this.materializationFromRow(row) : null;
+  }
+
+  listMaterializations(projectId?: string): DerivedMetricMaterialization[] {
+    const rows = projectId?.trim()
+      ? this.db.prepare(`
+          SELECT * FROM metric_materialization
+          WHERE project_id = ?
+          ORDER BY updated_at DESC
+        `).all(projectId.trim()) as MaterializationRow[]
+      : this.db.prepare(`
+          SELECT * FROM metric_materialization
+          ORDER BY updated_at DESC
+        `).all() as MaterializationRow[];
+    return rows.map((row) => this.materializationFromRow(row));
+  }
+
   private findInstance(projectId: string, metricKey: string, entityId: string): DerivedMetricInstance | null {
     const row = this.db.prepare(`
       ${this.instanceSelectSql()}
@@ -751,4 +960,32 @@ export class DerivedMetricStore {
     if (metadata) sample.metadata = metadata;
     return sample;
   }
+
+  private materializationFromRow(row: MaterializationRow): DerivedMetricMaterialization {
+    const materialization: DerivedMetricMaterialization = {
+      instanceId: row.instance_id,
+      projectId: row.project_id,
+      enabled: row.enabled === 1,
+      intervalSeconds: row.interval_seconds,
+      lookbackSeconds: row.lookback_seconds,
+      status: row.status,
+      updatedAt: row.updated_at
+    };
+    if (row.formula_kind) materialization.formulaKind = row.formula_kind;
+    if (row.left_role) materialization.leftRole = row.left_role;
+    if (row.right_role) materialization.rightRole = row.right_role;
+    if (row.invalid_value_policy) materialization.invalidValuePolicy = row.invalid_value_policy;
+    if (row.alignment_policy) materialization.alignmentPolicy = row.alignment_policy;
+    if (typeof row.alignment_tolerance_seconds === "number") materialization.alignmentToleranceSeconds = row.alignment_tolerance_seconds;
+    if (row.last_run_at) materialization.lastRunAt = row.last_run_at;
+    if (row.next_run_at) materialization.nextRunAt = row.next_run_at;
+    if (row.watermark_ts) materialization.watermarkTs = row.watermark_ts;
+    if (row.last_error) materialization.lastError = row.last_error;
+    return materialization;
+  }
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(Math.trunc(value), min), max);
 }

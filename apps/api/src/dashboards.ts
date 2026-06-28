@@ -13,7 +13,10 @@ export interface DashboardPointBinding {
   metricKey?: string;
   entityId?: string;
   label?: string;
-  role?: "supply" | "return" | "other";
+  role?: string;
+  dependencyRole?: string;
+  defaultVisible?: boolean;
+  groupId?: string;
   unit?: string;
 }
 
@@ -112,6 +115,13 @@ function stringFrom(value: Record<string, unknown>, keys: string[]): string | un
   return undefined;
 }
 
+function booleanFrom(value: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    if (typeof value[key] === "boolean") return value[key];
+  }
+  return undefined;
+}
+
 function normalizeBindingSource(value: unknown): DashboardPointSource | undefined {
   if (value === "derived_metric" || value === "derived" || value === "metric") return "derived_metric";
   if (value === "bms" || value === "raw_point" || value === "point") return "bms";
@@ -125,9 +135,19 @@ function sanitizeBinding(value: unknown): DashboardPointBinding | null {
   const metricInstanceId = stringFrom(value, ["metricInstanceId", "metric_instance_id", "instanceId", "instance_id"]);
   const metricKey = stringFrom(value, ["metricKey", "metric_key"]);
   const entityId = stringFrom(value, ["entityId", "entity_id"]);
-  const source = normalizeBindingSource(value.source) ?? (metricInstanceId || metricKey || entityId ? "derived_metric" : "bms");
-  const role = asString(value.role);
-  const normalizedRole = role === "supply" || role === "return" || role === "other" ? role : undefined;
+  const source = normalizeBindingSource(value.source) ?? (metricInstanceId || metricKey ? "derived_metric" : "bms");
+  const role = asString(value.role)?.trim();
+  const dependencyRole = stringFrom(value, ["dependencyRole", "dependency_role"]);
+  const defaultVisible = booleanFrom(value, ["defaultVisible", "default_visible"]);
+  const groupId = stringFrom(value, ["groupId", "group_id"]);
+  const metadata = {
+    ...(asString(value.label)?.trim() ? { label: asString(value.label)!.trim() } : {}),
+    ...(role ? { role } : {}),
+    ...(dependencyRole ? { dependencyRole } : {}),
+    ...(defaultVisible !== undefined ? { defaultVisible } : {}),
+    ...(groupId ? { groupId } : {}),
+    ...(asString(value.unit)?.trim() ? { unit: asString(value.unit)!.trim() } : {})
+  };
   if (source === "derived_metric") {
     if (!metricInstanceId && (!metricKey || !entityId)) return null;
     return {
@@ -136,9 +156,7 @@ function sanitizeBinding(value: unknown): DashboardPointBinding | null {
       ...(metricInstanceId ? { metricInstanceId } : {}),
       ...(metricKey ? { metricKey } : {}),
       ...(entityId ? { entityId } : {}),
-      ...(asString(value.label)?.trim() ? { label: asString(value.label)!.trim() } : {}),
-      ...(normalizedRole ? { role: normalizedRole } : {}),
-      ...(asString(value.unit)?.trim() ? { unit: asString(value.unit)!.trim() } : {})
+      ...metadata
     };
   }
   if (!pointName && !objectRef) return null;
@@ -147,9 +165,8 @@ function sanitizeBinding(value: unknown): DashboardPointBinding | null {
     ...(source === "bms" && asString(value.source)?.trim() ? { source } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
-    ...(asString(value.label)?.trim() ? { label: asString(value.label)!.trim() } : {}),
-    ...(normalizedRole ? { role: normalizedRole } : {}),
-    ...(asString(value.unit)?.trim() ? { unit: asString(value.unit)!.trim() } : {})
+    ...(entityId ? { entityId } : {}),
+    ...metadata
   };
 }
 
