@@ -1430,12 +1430,14 @@ describe("BuildingGPT Web flow", () => {
     await user.type(screen.getByRole("textbox", { name: /^message$/i }), "Create a dashboard");
     await user.click(screen.getByRole("button", { name: /send message/i }));
     expect(await screen.findByText("Dashboard request acknowledged.")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Chiller monitoring request/i })).toHaveAttribute("aria-current", "page");
 
     expect(screen.getByText(/dashboards/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /plant temperature dashboard/i }));
 
     expect(await screen.findByRole("heading", { name: /plant temperature dashboard/i })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_temp_watch");
+    expect(screen.getByRole("button", { name: /Chiller monitoring request/i })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: /expand project sidebar/i })).toBeInTheDocument();
 
     const socket = MockWebSocket.instances.at(-1);
