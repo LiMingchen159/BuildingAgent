@@ -7,6 +7,7 @@ import { KnowledgeBase, type KnowledgeBaseDocument } from "./ui/KnowledgeBase";
 import { Repository, type RepositoryItem } from "./ui/Repository";
 import { BmsDataConfigPage } from "./ui/BmsDataConfig";
 import { DashboardView } from "./ui/DashboardView";
+import { AutoReport } from "./ui/AutoReport";
 import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { Skills } from "./ui/Skills";
 import { Tools } from "./ui/Tools";
@@ -79,7 +80,7 @@ function consumeSkipProjectRestore(): boolean {
   return true;
 }
 
-type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "registry" | "gateways" | "building";
+type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "reports" | "registry" | "gateways" | "building";
 
 type IconName =
   | "activity"
@@ -196,7 +197,7 @@ function visibleRepositoryArtifactCount(artifacts: RepositoryArtifact[]): number
 }
 
 function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?: string | null): string {
-  const section = tab === "bms" ? "bms-data-config" : tab;
+  const section = tab === "bms" ? "bms-data-config" : tab === "reports" ? "autoreport" : tab;
   if (tab === "dashboards" && dashboardId) {
     return `/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`;
   }
@@ -224,8 +225,8 @@ function parseWorkspacePath(pathname: string): { projectId: string; tab: Workspa
   const projectId = decodeURIComponent(match[1] ?? "");
   const section = match[2];
   if (!projectId) return null;
-  const tab = section === "bms-data-config" ? "bms" : section;
-  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "registry" || tab === "gateways" || tab === "building") {
+  const tab = section === "bms-data-config" ? "bms" : section === "autoreport" ? "reports" : section;
+  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "reports" || tab === "registry" || tab === "gateways" || tab === "building") {
     return { projectId, tab };
   }
   return null;
@@ -2223,6 +2224,7 @@ function WorkspaceSidebarBlock({
   onOpenKnowledgeBase,
   onOpenBmsDataConfig,
   onOpenRepository,
+  onOpenAutoReport,
   onDeleteConversation,
   onRenameConversation,
   onDeleteProject
@@ -2243,6 +2245,7 @@ function WorkspaceSidebarBlock({
   onOpenKnowledgeBase: () => void;
   onOpenBmsDataConfig: () => void;
   onOpenRepository: () => void;
+  onOpenAutoReport: () => void;
   onDeleteConversation: (convId: string) => void;
   onRenameConversation: (convId: string, title: string) => void;
   onDeleteProject: (projectId: string) => void;
@@ -2353,6 +2356,16 @@ function WorkspaceSidebarBlock({
                 <small>Images, daily/weekly/monthly reports</small>
               </span>
               <small>{repoCount} items</small>
+            </button>
+          </li>
+          <li>
+            <button type="button" className="workspace-sidebar-shortcut" onClick={onOpenAutoReport} disabled={!hasProject}>
+              <span className="workspace-sidebar-shortcut-icon is-amber"><Icon name="file-chart" /></span>
+              <span>
+                <strong>Auto Report</strong>
+                <small>Dashboard-based operations reports</small>
+              </span>
+              <small>{hasProject ? "open" : "locked"}</small>
             </button>
           </li>
         </ul>
@@ -2597,6 +2610,7 @@ function Workspace({
     { id: "kb", label: "Knowledge Base" },
     { id: "repo", label: "Repository" },
     { id: "dashboards", label: "Dashboards" },
+    { id: "reports", label: "Auto Report" },
     { id: "registry", label: "Platform Registry" },
     { id: "gateways", label: "Gateways" },
     { id: "building", label: "Building Domain" }
@@ -2645,6 +2659,7 @@ function Workspace({
       {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
       {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
       {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
+      {activeTab === "reports" ? <AutoReport token={token} projectId={project.id} projectName={project.name} dashboards={dashboards} onOpenDashboard={onOpenDashboard} /> : null}
       {activeTab === "dashboards" ? (
         activeDashboard ? (
           <DashboardView
@@ -2757,6 +2772,7 @@ function Workspace({
             onOpenKnowledgeBase={() => onTabChange("kb")}
             onOpenBmsDataConfig={() => onTabChange("bms")}
             onOpenRepository={() => onTabChange("repo")}
+            onOpenAutoReport={() => onTabChange("reports")}
             onDeleteConversation={onDeleteConversation}
             onRenameConversation={(convId, title) => { void onRenameConversation(convId, title); }}
             onDeleteProject={onDeleteProject}
