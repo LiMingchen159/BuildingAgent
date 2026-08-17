@@ -1439,6 +1439,7 @@ describe("BuildingGPT Web flow", () => {
     expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_temp_watch");
     expect(screen.getByRole("button", { name: /Chiller monitoring request/i })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: /expand project sidebar/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /collapse workspace details/i }));
 
     const socket = MockWebSocket.instances.at(-1);
     expect(socket).toBeTruthy();
@@ -1459,11 +1460,12 @@ describe("BuildingGPT Web flow", () => {
     });
     expect((await screen.findAllByText(/42\.6 degF/i)).length).toBeGreaterThan(0);
 
+    await user.click(screen.getByRole("button", { name: /edit layout/i }));
+    expect(await screen.findByRole("button", { name: /view mode/i })).toBeInTheDocument();
     const liveCard = screen.getByText("Live temperatures").closest("article");
     const trendCard = screen.getByText("Temperature history").closest("article");
     expect(liveCard).not.toBeNull();
     expect(trendCard).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: /edit layout/i }));
     const trendDragHandle = trendCard!.querySelector(".dashboard-panel-drag-handle");
     expect(trendDragHandle).not.toBeNull();
     fireEvent.dragStart(trendDragHandle!);
@@ -1499,6 +1501,109 @@ describe("BuildingGPT Web flow", () => {
     });
     expect(window.location.pathname).toBe("/projects/project_alpha/dashboards/dashboard_temp_watch");
     expect(screen.getByRole("button", { name: /other conversation dashboard/i })).toBeInTheDocument();
+  });
+
+  it("limits the visible FDD frontend to imported CH-01 through CH-51 rules", async () => {
+    const project = alphaProject;
+    const now = "2026-08-11T00:00:00.000Z";
+    const fddAlgorithm = (algorithmKey: string, name: string, equipmentType = "chiller") => ({
+      id: `fddalg_${algorithmKey}`,
+      scope: "global_builtin",
+      algorithmKey,
+      version: "1.0.0",
+      name,
+      equipmentType,
+      faultType: name,
+      method: "rule_based",
+      categoryKey: "operation",
+      categoryLabel: "Operation",
+      requiredPoints: [{
+        slot: "running_status",
+        label: "Running status",
+        semantic: "Equipment status",
+        required: true,
+        quantityKind: "status",
+        unitRoleDescription: "Runtime gate"
+      }],
+      outputs: [{ key: "fault_status", label: "Fault status", type: "boolean" }],
+      parameters: [],
+      formula: "fault = false",
+      logicSummary: `${name} logic`,
+      deployableRuntime: true
+    });
+    const ch01 = fddAlgorithm("chiller_ch_01_commanded_chiller_fails_to_start", "CH-01 Commanded Chiller Fails to Start");
+    const ch51 = fddAlgorithm("chiller_ch_51_heat_balance_sensor_consistency", "CH-51 Heat Balance Sensor Consistency Fault");
+    const oldChiller = fddAlgorithm("chiller_low_cop_detection", "Chiller Low COP Detection");
+    const oldAhu = fddAlgorithm("ahu_supply_air_flow_sensor_fault", "AHU Supply Air Flow Sensor Fault", "ahu");
+    const oldTask = {
+      id: "fddtask_old",
+      projectId: project.id,
+      source: "global_library",
+      sharingScope: "project_only",
+      globalAlgorithmId: oldChiller.id,
+      algorithmSnapshot: oldChiller,
+      status: "running",
+      createdAt: now,
+      updatedAt: now
+    };
+    const oldDashboard = dashboardRecord({
+      id: "dash_old_fdd",
+      title: "Chiller Low COP Detection Dashboard",
+      description: "Runtime FDD dashboard for Chiller Low COP Detection.",
+      layout: [{ widgetId: "old_status", x: 0, y: 0, w: 4, h: 2 }],
+      widgets: [{
+        id: "old_status",
+        kind: "status_grid",
+        title: "WCC-1",
+        pointBindings: [{
+          source: "derived_metric",
+          metricInstanceId: "minst_old_fdd",
+          metricKey: "chiller_low_cop_detection",
+          entityId: "WCC_1",
+          label: "Fault status"
+        }]
+      }]
+    });
+
+    installFetch((url, init) => {
+      if (url === "/api/login") return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      if (url === "/api/session") return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      if (url === "/api/projects") return jsonResponse({ projects: [project], limit: 50, requestId: "req_projects" });
+      if (url === `/api/projects/${project.id}/select`) return jsonResponse({ session: { userId: "user_ada", projectId: project.id, permissions: project.permissions }, requestId: "req_select" });
+      if (url === `/api/projects/${project.id}/chat` && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === `/api/projects/${project.id}/chat/active-streams`) return jsonResponse({ projectId: project.id, streams: [], requestId: "req_active_streams" });
+      if (url === `/api/projects/${project.id}/conversations` && init?.method !== "POST") return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === `/api/projects/${project.id}/management`) return jsonResponse(managementBody({ projectId: project.id }));
+      if (url === `/api/projects/${project.id}/knowledge-base`) return jsonResponse({ documents: [], totalCount: 0, requestId: "req_kb" });
+      if (url === `/api/projects/${project.id}/repository`) return jsonResponse({ artifacts: [], totalCount: 0, requestId: "req_repo" });
+      if (url === `/api/projects/${project.id}/dashboards`) return jsonResponse({ projectId: project.id, dashboards: [oldDashboard], totalCount: 1, requestId: "req_dashboards" });
+      if (url === `/api/projects/${project.id}/derived-metrics`) return jsonResponse({ metrics: [], totalCount: 0, requestId: "req_metrics" });
+      if (url === `/api/projects/${project.id}/fdd-tasks`) return jsonResponse({ projectId: project.id, tasks: [oldTask], totalCount: 1, requestId: "req_fdd_tasks" });
+      if (url === `/api/projects/${project.id}/fdd-library`) {
+        return jsonResponse({
+          projectId: project.id,
+          algorithms: [oldAhu, oldChiller, ch51, ch01],
+          checks: [],
+          tasks: [oldTask],
+          requestId: "req_fdd_library"
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.click(screen.getByRole("button", { name: /open fdd library/i }));
+
+    expect((await screen.findAllByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i })).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Chiller Low COP Detection")).not.toBeInTheDocument();
+    expect(screen.queryByText("AHU Supply Air Flow Sensor Fault")).not.toBeInTheDocument();
+    expect(screen.queryByText("Chiller Low COP Detection Dashboard")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add algorithm/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add fdd/i })).not.toBeInTheDocument();
   });
 
   it("does not reload completed trend charts when unchanged dashboard objects are rerendered", async () => {
@@ -1731,6 +1836,199 @@ describe("BuildingGPT Web flow", () => {
         name: "WCC-L1-04_Q"
       })
     ]);
+  });
+
+  it("renders 7-day FDD fault-cause analysis text from output and input histories", async () => {
+    const dashboard = dashboardRecord({
+      title: "FDD attribution",
+      layout: [
+        { widgetId: "fdd_attr", x: 0, y: 0, w: 6, h: 4 },
+        { widgetId: "fdd_note", x: 0, y: 4, w: 3, h: 2 }
+      ],
+      widgets: [
+        {
+          id: "fdd_attr",
+          kind: "fdd_attribution_analysis",
+          title: "Fault Cause Analysis",
+          defaultTimeRange: "7d",
+          pointBindings: [
+            {
+              source: "derived_metric",
+              metricInstanceId: "minst_fault_wcc_04",
+              entityId: "WCC_04",
+              groupId: "WCC_04",
+              label: "Fault status",
+              role: "fault_status",
+              dependencyRole: "output",
+              unit: "boolean",
+              fddParameters: [
+                { key: "window_minutes", value: 30, source: "test" },
+                { key: "cop_threshold", value: 4, source: "test" }
+              ]
+            },
+            {
+              source: "bms",
+              pointName: "WCC-L1-04_CHWST",
+              entityId: "WCC_04",
+              groupId: "WCC_04",
+              label: "CHW supply temp",
+              role: "chw_supply_temp",
+              dependencyRole: "input",
+              unit: "C",
+              description: "Chilled Water Supply Temperature"
+            },
+            {
+              source: "bms",
+              pointName: "WCC_4_Run_Status",
+              entityId: "WCC_04",
+              groupId: "WCC_04",
+              label: "Chiller status",
+              role: "chiller_status",
+              dependencyRole: "input"
+            }
+          ]
+        },
+        {
+          id: "fdd_note",
+          kind: "note",
+          title: "Detection Logic",
+          content: "Low COP while running.",
+          pointBindings: []
+        }
+      ],
+      sections: [{ id: "analysis", title: "Fault Cause Analysis", kind: "analysis", widgetIds: ["fdd_attr", "fdd_note"] }]
+    }) as DashboardRecord;
+    const historyQueries: Array<{ range?: string; key?: string }> = [];
+    let attributionAnalysisRequests = 0;
+    const sampleTimes = Array.from({ length: 12 }, (_value, index) => `2026-06-26T${String(Math.floor(index / 4)).padStart(2, "0")}:${String((index % 4) * 15).padStart(2, "0")}:00.000Z`);
+
+    installFetch((url, init) => {
+      if (url === "/api/bms/dashboard/history-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string; range?: string; name?: string }> };
+        historyQueries.push(...(body.queries ?? []));
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({
+            key: query.key,
+            ok: true,
+            total: sampleTimes.length,
+            items: sampleTimes.map((ts, index) => ({
+              ts,
+              name: query.name ?? query.key,
+              ...(query.key.endsWith(":2")
+                ? { value_num: null, value_text: "active" }
+                : { value_num: query.key.endsWith(":0") ? (index < 6 ? 1 : 0) : query.key.endsWith(":1") ? 6.2 : 1 })
+            }))
+          })),
+          requestId: "req_fdd_attr_history"
+        });
+      }
+      if (url === "/api/projects/project_alpha/fdd-attribution-analysis" && init?.method === "POST") {
+        attributionAnalysisRequests += 1;
+        const body = JSON.parse(String(init.body ?? "{}")) as {
+          summary?: {
+            faultEntities?: Array<{
+              equipment?: string;
+              candidateInputs?: Array<{ point?: string; computedBasis?: string; facts?: { windowMinutes?: number } }>;
+            }>;
+          };
+        };
+        expect(body.summary?.faultEntities?.[0]?.equipment).toBe("WCC-4");
+        expect(body.summary?.faultEntities?.[0]?.candidateInputs?.[0]?.point).toBe("WCC-L1-04_CHWST (Chilled Water Supply Temperature)");
+        expect(body.summary?.faultEntities?.[0]?.candidateInputs?.[0]?.computedBasis).toBe("flatline");
+        expect(body.summary?.faultEntities?.[0]?.candidateInputs?.[0]?.facts?.windowMinutes).toBe(30);
+        return jsonResponse({
+          ok: true,
+          content: [
+            "**Overall summary:** Over the last 7 days, 1 of 1 analyzed chillers showed fault samples; 6/12 valid FDD output samples were faults (50.0%). The strongest evidence is on WCC-4.",
+            "",
+            "**Likely cause:** WCC-4 fault is most consistent with a frozen CHW supply temperature input.",
+            "",
+            "**Equipment:** WCC-4",
+            "",
+            "**Problem input:** WCC-L1-04_CHWST (Chilled Water Supply Temperature)",
+            "",
+            "**Data evidence:** The configured FDD window is 30 minutes. CHW supply temp stays flat at 6.2 C while the FDD output is in fault for 6 of 12 valid samples.",
+            "",
+            "**Data-based next check:** Trend WCC-L1-04_CHWST on WCC-4 and compare it with the local controller value; if both are frozen, check the temperature sensor or calculated point before investigating the chiller hardware."
+          ].join("\n"),
+          requestId: "req_fdd_attr_llm"
+        });
+      }
+      if (url === "/api/bms/dashboard/latest-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string }> };
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({
+            key: query.key,
+            ok: true,
+            total: 1,
+            point: {
+              id: 1,
+              name: query.key,
+              object_ref: query.key,
+              last_value: "1",
+              last_polled_at: "2026-06-26T02:45:00.000Z"
+            }
+          })),
+          requestId: "req_fdd_attr_latest"
+        });
+      }
+      return apiError("not_found", "Unexpected test URL", 404);
+    });
+
+    const dashboardViewProps = {
+      token: "seed-token-ada",
+      dashboard,
+      liveValues: {},
+      stale: false,
+      onLayoutChange: vi.fn(async () => undefined),
+      onVisibilityChange: vi.fn(async () => undefined)
+    };
+    const { rerender, unmount } = render(<DashboardView {...dashboardViewProps} />);
+
+    expect(await screen.findByText(/WCC-4 fault is most consistent/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Updating")).not.toBeInTheDocument());
+    expect(attributionAnalysisRequests).toBe(1);
+    const analysisSection = screen.getByText("Fault Cause Analysis").closest(".dashboard-section");
+    expect(analysisSection?.textContent).toContain("Overall summary");
+    expect(analysisSection?.textContent).toContain("1 of 1 analyzed chillers");
+    expect(analysisSection?.textContent).toContain("WCC-4");
+    expect(analysisSection?.textContent).toContain("CHW supply temp");
+    expect(analysisSection?.textContent).toContain("Data evidence");
+    expect(analysisSection?.textContent).toContain("Data-based next check");
+    expect(analysisSection?.textContent).toContain("WCC-L1-04_CHWST (Chilled Water Supply Temperature)");
+    expect(analysisSection?.textContent).toContain("30 min");
+    expect(analysisSection?.textContent).not.toContain("Detection Logic");
+    expect(analysisSection?.textContent).not.toContain("Low COP while running.");
+    expect(analysisSection?.textContent).not.toContain("Chiller status sample within");
+    expect(analysisSection?.querySelector(".dashboard-fdd-analysis-focus")).not.toBeInTheDocument();
+    expect(analysisSection?.querySelector(".dashboard-fdd-analysis-markdown")).toBeInTheDocument();
+    expect(analysisSection?.querySelector(".dashboard-fdd-analysis-markdown strong")).toBeInTheDocument();
+    expect(analysisSection?.querySelector(".dashboard-fdd-analysis-evidence-item")).not.toBeInTheDocument();
+    expect(analysisSection?.querySelector(".dashboard-fdd-analysis-section")).toBeInTheDocument();
+    expect(analysisSection?.querySelector(".dashboard-fdd-analysis-section")).toHaveAttribute("data-analysis-columns", "6");
+    expect(analysisSection?.querySelector(".dashboard-panel")).not.toBeInTheDocument();
+    const notesSection = screen.getByText("Notes").closest(".dashboard-section");
+    expect(notesSection?.textContent).toContain("Low COP while running.");
+    rerender(<DashboardView {...dashboardViewProps} forceCompactLayout />);
+    await waitFor(() => expect(screen.queryByText("Updating")).not.toBeInTheDocument());
+    const compactAnalysisSection = screen.getByText("Fault Cause Analysis").closest(".dashboard-section");
+    expect(compactAnalysisSection?.querySelector(".dashboard-fdd-analysis-section")).toHaveAttribute("data-analysis-columns", "6");
+    expect(attributionAnalysisRequests).toBe(1);
+    unmount();
+    render(<DashboardView {...dashboardViewProps} />);
+    expect(await screen.findByText(/WCC-4 fault is most consistent/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Updating")).not.toBeInTheDocument());
+    expect(attributionAnalysisRequests).toBe(1);
+    const cachedAnalysisSection = screen.getByText("Fault Cause Analysis").closest(".dashboard-section");
+    expect(cachedAnalysisSection).toBeTruthy();
+    await userEvent.click(within(cachedAnalysisSection as HTMLElement).getByRole("button", { name: /^refresh$/i }));
+    await waitFor(() => expect(attributionAnalysisRequests).toBe(2));
+    await waitFor(() => expect(screen.queryByText("Updating")).not.toBeInTheDocument());
+    expect(historyQueries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "fdd_attr:0", range: "7d" }),
+      expect.objectContaining({ key: "fdd_attr:1", range: "7d" }),
+      expect.objectContaining({ key: "fdd_attr:2", range: "7d" })
+    ]));
   });
 
   it("does not reload trend history when note placement changes reorder dashboard widgets", async () => {

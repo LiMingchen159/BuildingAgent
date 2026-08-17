@@ -45,6 +45,48 @@ describe("DerivedMetricStore", () => {
     expect(first.instance.dependencies.map((dependency) => dependency.sourceId).sort()).toEqual(["WCC-L1-01_P", "WCC-L1-01_Q"]);
   });
 
+  it("refreshes dependencies when an existing metric is registered again", () => {
+    const store = new DerivedMetricStore(tempDir());
+    const first = store.registerMetric({
+      projectId: "project_element",
+      metricKey: "chiller_low_cop_detection",
+      entityId: "WCC_01",
+      displayName: "Chiller Low COP Detection",
+      formula: "old low cop spec",
+      formulaVersion: "v1",
+      dependencies: [
+        { role: "chiller_status", sourceId: "WCC_1_Run_Status", pointName: "WCC_1_Run_Status" },
+        { role: "chw_supply_temp", sourceId: "WCC-L1-01-CHWST", pointName: "WCC-L1-01-CHWST" },
+        { role: "chw_return_temp", sourceId: "WCC-L1-01-CHWRT", pointName: "WCC-L1-01-CHWRT" },
+        { role: "cooling_load", sourceId: "WCC-L1-01_Q", pointName: "WCC-L1-01_Q" },
+        { role: "chiller_power", sourceId: "WCC_1_TLKW", pointName: "WCC_1_TLKW" }
+      ]
+    });
+
+    const second = store.registerMetric({
+      projectId: "project_element",
+      metricKey: "chiller_low_cop_detection",
+      entityId: "WCC_01",
+      displayName: "Chiller Low COP Detection",
+      formula: "direct cooling load low cop spec",
+      formulaVersion: "v2",
+      dependencies: [
+        { role: "chiller_status", sourceId: "WCC_1_Run_Status", pointName: "WCC_1_Run_Status" },
+        { role: "cooling_load", sourceId: "WCC-L1-01_Q", pointName: "WCC-L1-01_Q" },
+        { role: "chiller_power", sourceId: "WCC_1_TLKW", pointName: "WCC_1_TLKW" }
+      ]
+    });
+
+    expect(second.created).toBe(false);
+    expect(second.instance.instanceId).toBe(first.instance.instanceId);
+    expect(second.instance.formulaVersion).toBe("v2");
+    expect(second.instance.dependencies.map((dependency) => dependency.role).sort()).toEqual([
+      "chiller_power",
+      "chiller_status",
+      "cooling_load"
+    ]);
+  });
+
   it("preserves formula lineage per equipment instance for shared metric keys", () => {
     const store = new DerivedMetricStore(tempDir());
     const first = store.registerMetric({
@@ -610,6 +652,97 @@ describe("derived metric agent tools", () => {
       expect.objectContaining({ source: "derived_metric", metricInstanceId: metric.instance.instanceId, dependencyRole: "output", defaultVisible: true }),
       expect.objectContaining({ source: "bms", pointName: "WCC-L1-14_Q", dependencyRole: "input", defaultVisible: false }),
       expect.objectContaining({ source: "bms", pointName: "WCC-L1-14_P", dependencyRole: "input", defaultVisible: false })
+    ]));
+  });
+
+  it("normalizes FDD comparison widgets into 7-day fault-cause analysis with input evidence", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const metric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "chiller_low_cop_detection",
+      entityId: "WCC_04",
+      displayName: "WCC-04 Low COP Detection",
+      unit: "boolean",
+      formula: "FDD low COP rule",
+      dependencies: [
+        { role: "chiller_status", sourceType: "raw_point", sourceId: "WCC_4_Run_Status", pointName: "WCC_4_Run_Status", label: "Chiller status" },
+        { role: "chw_supply_temp", sourceType: "raw_point", sourceId: "WCC-L1-04_CHWST", pointName: "WCC-L1-04_CHWST", label: "CHW supply temp" },
+        { role: "chiller_power", sourceType: "raw_point", sourceId: "WCC_4_TLKW", pointName: "WCC_4_TLKW", label: "Chiller power" }
+      ]
+    });
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const dashboardCreate = registry.list().find((tool) => tool.name === "dashboard_create");
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_fdd_attribution",
+      conversationId: "conv_fdd_attribution",
+      canConfigure: true,
+      messages: [],
+      dashboardOps: {
+        create: (input: any) => ({
+          id: "dash_fdd_attribution",
+          projectId: "project_element",
+          ownerUserId: "user_buildinggpt",
+          visibility: input.visibility ?? "project",
+          createdAt: "2026-06-27T00:00:00.000Z",
+          updatedAt: "2026-06-27T00:00:00.000Z",
+          ...input
+        })
+      }
+    };
+
+    const result = await dashboardCreate!.run({
+      title: "FDD attribution dashboard",
+      widgets: [
+        {
+          id: "fdd_fault_status_comparison",
+          kind: "fdd_fault_rate_comparison",
+          title: "Fault Rate Comparison",
+          pointBindings: [{ source: "derived_metric", metricInstanceId: metric.instance.instanceId, label: "Fault status" }]
+        },
+        {
+          id: "operator_note",
+          kind: "note",
+          title: "Detection Logic",
+          content: "Low COP while running.",
+          pointBindings: []
+        }
+      ],
+      sections: [
+        { id: "attribution", title: "Attribution", kind: "analysis", widgetIds: ["fdd_fault_status_comparison", "operator_note"] }
+      ]
+    }, context);
+
+    const dashboard = result.dashboard as any;
+    const widget = dashboard.widgets.find((entry: { id: string }) => entry.id === "fdd_fault_status_comparison");
+    expect(widget).toMatchObject({
+      kind: "fdd_attribution_analysis",
+      title: "Fault Cause Analysis",
+      defaultTimeRange: "7d"
+    });
+    expect(widget.pointBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "derived_metric", metricInstanceId: metric.instance.instanceId, dependencyRole: "output", defaultVisible: true }),
+      expect.objectContaining({ source: "bms", pointName: "WCC_4_Run_Status", role: "chiller_status", dependencyRole: "input", defaultVisible: false }),
+      expect.objectContaining({ source: "bms", pointName: "WCC-L1-04_CHWST", role: "chw_supply_temp", dependencyRole: "input", defaultVisible: false }),
+      expect.objectContaining({ source: "bms", pointName: "WCC_4_TLKW", role: "chiller_power", dependencyRole: "input", defaultVisible: false })
+    ]));
+    expect(dashboard.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "analysis", title: "Fault Cause Analysis", kind: "analysis", widgetIds: [widget.id] }),
+      expect.objectContaining({ id: "notes", title: "Notes", kind: "custom", widgetIds: ["operator_note"] })
     ]));
   });
 

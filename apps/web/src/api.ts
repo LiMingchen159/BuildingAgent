@@ -107,14 +107,15 @@ export interface RepositoryArtifact {
 }
 
 export type DashboardVisibility = "private" | "project";
-export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart" | "stat_value" | "bar_comparison" | "note";
-export type DashboardSectionKind = "overview" | "comparison" | "trends" | "custom";
+export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart" | "stat_value" | "bar_comparison" | "status_grid" | "fdd_fault_rate_comparison" | "fdd_attribution_analysis" | "note";
+export type DashboardSectionKind = "overview" | "analysis" | "comparison" | "trends" | "custom";
 export type DashboardNoteTone = "yellow" | "blue" | "green" | "pink" | "neutral";
 export type DashboardPointSource = "bms" | "derived_metric";
 
 export interface DashboardPointBinding {
   id?: string;
   source?: DashboardPointSource;
+  bmsSourceId?: string;
   pointName?: string;
   objectRef?: string;
   metricInstanceId?: string;
@@ -126,6 +127,8 @@ export interface DashboardPointBinding {
   defaultVisible?: boolean;
   groupId?: string;
   unit?: string;
+  description?: string;
+  fddParameters?: Array<Record<string, unknown>>;
 }
 
 export interface DashboardLayoutItem {
@@ -170,7 +173,7 @@ export interface DashboardRecord {
   sourceConversationId?: string;
 }
 
-export type DerivedMetricFormulaKind = "ratio" | "difference";
+export type DerivedMetricFormulaKind = "ratio" | "difference" | "fdd_rule";
 export type DerivedMetricInvalidValuePolicy = "null" | "zero";
 export type DerivedMetricAlignmentPolicy = "exact" | "nearest";
 
@@ -258,6 +261,198 @@ export interface DerivedMetricAsset {
   latest: DerivedMetricSample | null;
   materialization: DerivedMetricMaterialization | null;
   linkedDashboards: DerivedMetricDashboardLink[];
+}
+
+export type FddAlgorithmScope = "global_builtin" | "global_community";
+export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "sensor";
+export type FddMethod = "rule_based" | "bayesian_network" | "performance_indicator" | "statistical";
+export type FddDeployabilityStatus = "can_deploy" | "uncertain" | "cannot_deploy";
+export type FddTaskStatus = "checking" | "ready" | "running" | "paused" | "cannot_deploy";
+export type FddTaskSource = "global_library" | "project_upload" | "buildinggpt_generated";
+export type FddSharingScope = "project_only" | "global_community";
+export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" | "load" | "status" | "pressure" | "humidity" | "position" | "speed" | "current" | "unknown";
+export type FddUnitCompatibility = "match" | "convertible" | "mismatch" | "unknown";
+export type FddParameterType = "number" | "boolean" | "select";
+export type FddParameterValue = string | number | boolean;
+export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended" | "user_override";
+
+export interface FddRequiredPoint {
+  slot: string;
+  label: string;
+  semantic: string;
+  required: boolean;
+  quantityKind: FddQuantityKind;
+  unitRoleDescription: string;
+  acceptableUnits?: string[];
+  keywords?: string[];
+  historyRequirement?: {
+    minDays: number;
+    preferredDays: number;
+  };
+}
+
+export interface FddOutput {
+  key: string;
+  label: string;
+  type: "boolean" | "number" | "text";
+  unit?: string;
+}
+
+export interface FddParameterSpec {
+  key: string;
+  label: string;
+  type: FddParameterType;
+  defaultValue: FddParameterValue;
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  description: string;
+  editable: boolean;
+}
+
+export interface FddTaskParameterValue {
+  key: string;
+  value: FddParameterValue;
+  unit?: string;
+  source: FddParameterSource;
+  confidence?: number;
+  reason: string;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface FddAlgorithm {
+  id: string;
+  scope: FddAlgorithmScope;
+  algorithmKey: string;
+  version: string;
+  name: string;
+  equipmentType: FddEquipmentType;
+  faultType: string;
+  method: FddMethod;
+  categoryKey: string;
+  categoryLabel: string;
+  requiredPoints: FddRequiredPoint[];
+  outputs: FddOutput[];
+  parameters: FddParameterSpec[];
+  formula: string;
+  logicSummary: string;
+  sourcePaperId?: string;
+  authorUserId?: string;
+  deployableRuntime: boolean;
+}
+
+export interface FddPointCandidate {
+  slot: string;
+  pointName: string;
+  entityKey?: string;
+  objectRef?: string;
+  unit?: string;
+  unitCompatibility: FddUnitCompatibility;
+  dimensionReason: string;
+  rejectionReason?: string;
+  confidence: number;
+  reason: string;
+  historyDays?: number;
+}
+
+export interface FddPointMapping {
+  slot: string;
+  pointName: string;
+  objectRef?: string;
+  unit?: string;
+}
+
+export interface FddAmbiguousInput {
+  slot: string;
+  label: string;
+  candidates: FddPointCandidate[];
+}
+
+export interface FddEntityDeployability {
+  entityKey: string;
+  status: FddDeployabilityStatus;
+  selectedMappings: FddPointMapping[];
+  ambiguousInputs: FddAmbiguousInput[];
+  missingPoints: string[];
+  historyIssues: string[];
+  confidence: number;
+}
+
+export interface FddCheckAgentWorkflow {
+  agentId: "buildinggpt";
+  skillId: string;
+  skillName: string;
+  mode: "deterministic_core" | "llm_deep_inference";
+  kbDocuments: string[];
+  skillIds?: string[];
+  memory?: {
+    userEntries: number;
+    projectEntries: number;
+  };
+  groundingRules?: Array<{
+    id: string;
+    name?: string;
+    source?: string;
+    content?: string;
+  }>;
+  steps: string[];
+}
+
+export interface FddDeployabilityCheck {
+  algorithmId?: string;
+  projectTaskId?: string;
+  algorithmVersion: string;
+  projectId: string;
+  status: FddDeployabilityStatus;
+  pointCandidates: FddPointCandidate[];
+  exampleEntityKey?: string;
+  selectedMappings?: FddPointMapping[];
+  deployableEntities?: FddEntityDeployability[];
+  ambiguousInputs: FddAmbiguousInput[];
+  rejectedCandidates: FddPointCandidate[];
+  missingPoints: string[];
+  historyIssues: string[];
+  checkedAt: string;
+  source: "auto" | "manual";
+  projectDataSignature: string;
+  agentWorkflow?: FddCheckAgentWorkflow;
+}
+
+export interface ProjectFddTask {
+  id: string;
+  projectId: string;
+  source: FddTaskSource;
+  sharingScope: FddSharingScope;
+  globalAlgorithmId?: string;
+  algorithmSnapshot: FddAlgorithm;
+  status: FddTaskStatus;
+  deployabilityCheck?: FddDeployabilityCheck;
+  parameterValues?: FddTaskParameterValue[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FddLibraryResponse {
+  projectId: string;
+  algorithms: FddAlgorithm[];
+  checks: FddDeployabilityCheck[];
+  tasks: ProjectFddTask[];
+  requestId: string;
+}
+
+export interface CreateFddTaskPayload {
+  name: string;
+  equipmentType: FddEquipmentType;
+  faultType: string;
+  method: FddMethod;
+  formula?: string;
+  logicSummary: string;
+  sharingScope: FddSharingScope;
+  requiredPoints?: FddRequiredPoint[];
+  parameters?: FddParameterSpec[];
 }
 
 export interface ChatProviderDiagnostics {
@@ -372,7 +567,7 @@ export async function sendChatMessageStream(
   try {
     response = await fetch(url, fetchInit);
   } catch {
-    handlers.onError?.({ code: "api_unavailable", message: "Local API is unavailable. Check that the API dev server is running, then retry." });
+    handlers.onError?.({ code: "api_unavailable", message: "BuildingAgent API is unavailable. Check the server connection, then retry." });
     return;
   }
 
@@ -626,7 +821,7 @@ export interface ProjectManagementResponse {
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
-const REQUEST_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 30000;
 const PLACEHOLDER_STATUSES = new Set(["placeholder", "mock", "not_configured"]);
 const RUNTIME_KINDS = new Set(["llm", "embedding", "workflow"]);
 const TOOL_CATEGORIES = new Set(["analysis", "retrieval", "building"]);
@@ -662,7 +857,15 @@ function malformed(message = "The API returned an unreadable response."): ApiCli
 }
 
 function unavailable(): ApiClientError {
-  return new ApiClientError({ code: "api_unavailable", message: "Local API is unavailable. Check that the API dev server is running, then retry." });
+  return new ApiClientError({ code: "api_unavailable", message: "BuildingAgent API is unavailable. Check the server connection, then retry." });
+}
+
+function timedOut(): ApiClientError {
+  return new ApiClientError({ code: "api_timeout", message: "BuildingAgent API request timed out. The server may still be working; refresh or retry in a moment." });
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -714,6 +917,9 @@ async function requestJson(path: string, options: RequestInit = {}): Promise<unk
   } catch (error) {
     if (error instanceof ApiClientError) {
       throw error;
+    }
+    if (isAbortError(error)) {
+      throw timedOut();
     }
     throw unavailable();
   } finally {
@@ -1453,16 +1659,21 @@ function parseDashboardPointBinding(value: unknown): DashboardPointBinding | nul
   const metricInstanceId = typeof value.metricInstanceId === "string" ? value.metricInstanceId : undefined;
   const metricKey = typeof value.metricKey === "string" ? value.metricKey : undefined;
   const entityId = typeof value.entityId === "string" ? value.entityId : undefined;
+  const bmsSourceId = typeof value.bmsSourceId === "string" ? value.bmsSourceId : undefined;
   const source = value.source === "derived_metric" || metricInstanceId || metricKey
     ? "derived_metric"
     : value.source === "bms"
       ? "bms"
       : undefined;
+  const fddParameters = Array.isArray(value.fddParameters)
+    ? value.fddParameters.filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    : undefined;
   if (source === "derived_metric" && !metricInstanceId && (!metricKey || !entityId)) return null;
   if (source !== "derived_metric" && !pointName && !objectRef) return null;
   return {
     ...(typeof value.id === "string" ? { id: value.id } : {}),
     ...(source ? { source } : {}),
+    ...(source !== "derived_metric" && bmsSourceId ? { bmsSourceId } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
     ...(metricInstanceId ? { metricInstanceId } : {}),
@@ -1473,7 +1684,9 @@ function parseDashboardPointBinding(value: unknown): DashboardPointBinding | nul
     ...(typeof value.dependencyRole === "string" ? { dependencyRole: value.dependencyRole } : {}),
     ...(typeof value.defaultVisible === "boolean" ? { defaultVisible: value.defaultVisible } : {}),
     ...(typeof value.groupId === "string" ? { groupId: value.groupId } : {}),
-    ...(typeof value.unit === "string" ? { unit: value.unit } : {})
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {}),
+    ...(typeof value.description === "string" ? { description: value.description } : {}),
+    ...(fddParameters && fddParameters.length > 0 ? { fddParameters } : {})
   };
 }
 
@@ -1488,7 +1701,7 @@ function parseDashboardWidget(value: unknown): DashboardWidget | null {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string" || !Array.isArray(value.pointBindings)) {
     return null;
   }
-  if (value.kind !== "live_value_grid" && value.kind !== "timeseries_chart" && value.kind !== "stat_value" && value.kind !== "bar_comparison" && value.kind !== "note") {
+  if (value.kind !== "live_value_grid" && value.kind !== "timeseries_chart" && value.kind !== "stat_value" && value.kind !== "bar_comparison" && value.kind !== "status_grid" && value.kind !== "fdd_fault_rate_comparison" && value.kind !== "fdd_attribution_analysis" && value.kind !== "note") {
     return null;
   }
   const pointBindings = value.pointBindings.map((entry) => parseDashboardPointBinding(entry)).filter((entry): entry is DashboardPointBinding => entry !== null);
@@ -1511,7 +1724,7 @@ function parseDashboardSection(value: unknown): DashboardSection | null {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.title !== "string" || !Array.isArray(value.widgetIds)) {
     return null;
   }
-  if (value.kind !== "overview" && value.kind !== "comparison" && value.kind !== "trends" && value.kind !== "custom") {
+  if (value.kind !== "overview" && value.kind !== "analysis" && value.kind !== "comparison" && value.kind !== "trends" && value.kind !== "custom") {
     return null;
   }
   const widgetIds = value.widgetIds.filter((entry): entry is string => typeof entry === "string");
@@ -1731,6 +1944,363 @@ function parseDerivedMetricAsset(value: unknown): DerivedMetricAsset | null {
     return null;
   }
   return { instance, latest, materialization, linkedDashboards };
+}
+
+function parseFddRequiredPoint(value: unknown): FddRequiredPoint | null {
+  if (!isRecord(value) || typeof value.slot !== "string" || typeof value.label !== "string" || typeof value.semantic !== "string" || typeof value.required !== "boolean") {
+    return null;
+  }
+  const historyRequirement = isRecord(value.historyRequirement)
+    && typeof value.historyRequirement.minDays === "number"
+    && typeof value.historyRequirement.preferredDays === "number"
+    ? {
+        minDays: value.historyRequirement.minDays,
+        preferredDays: value.historyRequirement.preferredDays
+      }
+    : undefined;
+  const acceptableUnits = Array.isArray(value.acceptableUnits) ? value.acceptableUnits.filter((unit): unit is string => typeof unit === "string") : undefined;
+  const quantityKind = parseFddQuantityKind(value.quantityKind) ?? inferFddQuantityKind(value.slot, value.label, value.semantic, acceptableUnits);
+  return {
+    slot: value.slot,
+    label: value.label,
+    semantic: value.semantic,
+    required: value.required,
+    quantityKind,
+    unitRoleDescription: typeof value.unitRoleDescription === "string" && value.unitRoleDescription.trim()
+      ? value.unitRoleDescription.trim()
+      : `${value.label} provides ${quantityKind.replace(/_/g, " ")} evidence for the FDD formula.`,
+    ...(acceptableUnits ? { acceptableUnits } : {}),
+    ...(Array.isArray(value.keywords) ? { keywords: value.keywords.filter((keyword): keyword is string => typeof keyword === "string") } : {}),
+    ...(historyRequirement ? { historyRequirement } : {})
+  };
+}
+
+function parseFddQuantityKind(value: unknown): FddQuantityKind | null {
+  return value === "temperature" || value === "flow_rate" || value === "power" || value === "energy" || value === "load" || value === "status" || value === "pressure" || value === "humidity" || value === "position" || value === "speed" || value === "current" || value === "unknown"
+    ? value
+    : null;
+}
+
+function inferFddQuantityKind(slot: string, label: string, semantic: string, acceptableUnits?: string[]): FddQuantityKind {
+  const text = `${slot} ${label} ${semantic} ${(acceptableUnits ?? []).join(" ")}`.toLowerCase();
+  if (/\b(status|proof|running|run|enable|on[\/\s-]?off)\b/u.test(text)) return "status";
+  if (/\b(load|cooling output|cooling capacity|refrigeration ton|rt)\b/u.test(text)) return "load";
+  if (/kwh|kw-?h|kilowatt[\s-]?hour|\benergy\b/u.test(text)) return "energy";
+  if (/\b(current|amps?|amperes?|amperage)\b/u.test(text) || /\ba\b/u.test((acceptableUnits ?? []).join(" ").toLowerCase())) return "current";
+  if (/kw(?!h)|\b(kilowatt|watt|power|demand|motor)\b/u.test(text)) return "power";
+  if (/\b(consumption|accumulated)\b/u.test(text)) return "energy";
+  if (/\b(temp|temperature|chwst|chwrt|sat|mat|oat|rat|degf|degc)\b/u.test(text)) return "temperature";
+  if (/\b(flow|flowrate|gpm|l\/s|m3\/h|cfm)\b/u.test(text)) return "flow_rate";
+  if (/\b(pressure|delta p|differential pressure|\bdp\b|pa|kpa|psi|inh2o)\b/u.test(text)) return "pressure";
+  if (/\b(humidity|humid|rh|g\/kg)\b/u.test(text)) return "humidity";
+  if (/\b(damper|valve|position|command|%)\b/u.test(text)) return "position";
+  if (/\b(speed|rpm|hz)\b/u.test(text)) return "speed";
+  return "unknown";
+}
+
+function fallbackFddCategory(equipmentType: FddEquipmentType, faultType: string): { categoryKey: string; categoryLabel: string } {
+  if (equipmentType === "ahu") {
+    const normalizedFault = faultType.toLowerCase();
+    if (normalizedFault === "sensor") return { categoryKey: "AHU-Sensor", categoryLabel: "AHU-Sensor" };
+    if (normalizedFault === "damper") return { categoryKey: "AHU-Damper", categoryLabel: "AHU-Damper" };
+    if (normalizedFault === "fan") return { categoryKey: "AHU-Fan", categoryLabel: "AHU-Fan" };
+    if (normalizedFault === "duct") return { categoryKey: "AHU-Duct", categoryLabel: "AHU-Duct" };
+    if (normalizedFault === "filter") return { categoryKey: "AHU-Filter", categoryLabel: "AHU-Filter" };
+    if (normalizedFault === "coil") return { categoryKey: "AHU-Coil", categoryLabel: "AHU-Coil" };
+    if (normalizedFault === "secondary water") return { categoryKey: "AHU-WaterSide", categoryLabel: "AHU-WaterSide" };
+  }
+  const equipment = equipmentType.split("_").map((part) => part[0]!.toUpperCase() + part.slice(1)).join("");
+  const fault = faultType.split(/[^a-z0-9]+/iu).filter(Boolean).map((part) => part[0]!.toUpperCase() + part.slice(1)).join("");
+  const label = `${equipment}-${fault || "General"}`;
+  return { categoryKey: label, categoryLabel: label };
+}
+
+function parseFddOutput(value: unknown): FddOutput | null {
+  if (!isRecord(value) || typeof value.key !== "string" || typeof value.label !== "string") return null;
+  if (value.type !== "boolean" && value.type !== "number" && value.type !== "text") return null;
+  return {
+    key: value.key,
+    label: value.label,
+    type: value.type,
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {})
+  };
+}
+
+function parseFddParameterValue(value: unknown): FddParameterValue | null {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null;
+}
+
+function parseFddParameterSpec(value: unknown): FddParameterSpec | null {
+  if (!isRecord(value)
+    || typeof value.key !== "string"
+    || typeof value.label !== "string"
+    || (value.type !== "number" && value.type !== "boolean" && value.type !== "select")
+    || typeof value.description !== "string"
+    || typeof value.editable !== "boolean") {
+    return null;
+  }
+  const defaultValue = parseFddParameterValue(value.defaultValue);
+  if (defaultValue === null) return null;
+  if (value.type === "number" && typeof defaultValue !== "number") return null;
+  if (value.type === "boolean" && typeof defaultValue !== "boolean") return null;
+  if (value.type === "select" && typeof defaultValue !== "string") return null;
+  return {
+    key: value.key,
+    label: value.label,
+    type: value.type,
+    defaultValue,
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {}),
+    ...(typeof value.min === "number" ? { min: value.min } : {}),
+    ...(typeof value.max === "number" ? { max: value.max } : {}),
+    ...(typeof value.step === "number" ? { step: value.step } : {}),
+    ...(Array.isArray(value.options) ? { options: value.options.filter((option): option is string => typeof option === "string") } : {}),
+    description: value.description,
+    editable: value.editable
+  };
+}
+
+function parseFddTaskParameterValue(value: unknown): FddTaskParameterValue | null {
+  if (!isRecord(value)
+    || typeof value.key !== "string"
+    || (value.source !== "algorithm_default" && value.source !== "buildinggpt_recommended" && value.source !== "user_override")
+    || typeof value.reason !== "string"
+    || typeof value.updatedAt !== "string") {
+    return null;
+  }
+  const parameterValue = parseFddParameterValue(value.value);
+  if (parameterValue === null) return null;
+  return {
+    key: value.key,
+    value: parameterValue,
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {}),
+    source: value.source,
+    ...(typeof value.confidence === "number" ? { confidence: value.confidence } : {}),
+    reason: value.reason,
+    updatedAt: value.updatedAt,
+    ...(typeof value.updatedBy === "string" ? { updatedBy: value.updatedBy } : {})
+  };
+}
+
+function parseFddAlgorithm(value: unknown): FddAlgorithm | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || (value.scope !== "global_builtin" && value.scope !== "global_community")
+    || typeof value.algorithmKey !== "string"
+    || typeof value.version !== "string"
+    || typeof value.name !== "string"
+    || (value.equipmentType !== "ahu" && value.equipmentType !== "chiller" && value.equipmentType !== "pump" && value.equipmentType !== "cooling_tower" && value.equipmentType !== "fcu" && value.equipmentType !== "sensor")
+    || (value.method !== "rule_based" && value.method !== "bayesian_network" && value.method !== "performance_indicator" && value.method !== "statistical")
+    || typeof value.faultType !== "string"
+    || !Array.isArray(value.requiredPoints)
+    || !Array.isArray(value.outputs)
+    || typeof value.logicSummary !== "string"
+    || typeof value.deployableRuntime !== "boolean") {
+    return null;
+  }
+  const requiredPoints = value.requiredPoints.map((entry) => parseFddRequiredPoint(entry)).filter((entry): entry is FddRequiredPoint => entry !== null);
+  const outputs = value.outputs.map((entry) => parseFddOutput(entry)).filter((entry): entry is FddOutput => entry !== null);
+  const parameters = Array.isArray(value.parameters)
+    ? value.parameters.map((entry) => parseFddParameterSpec(entry)).filter((entry): entry is FddParameterSpec => entry !== null)
+    : [];
+  if (requiredPoints.length !== value.requiredPoints.length || outputs.length !== value.outputs.length || (Array.isArray(value.parameters) && parameters.length !== value.parameters.length)) return null;
+  const category = typeof value.categoryKey === "string" && typeof value.categoryLabel === "string"
+    ? { categoryKey: value.categoryKey, categoryLabel: value.categoryLabel }
+    : fallbackFddCategory(value.equipmentType, value.faultType);
+  return {
+    id: value.id,
+    scope: value.scope,
+    algorithmKey: value.algorithmKey,
+    version: value.version,
+    name: value.name,
+    equipmentType: value.equipmentType,
+    faultType: value.faultType,
+    method: value.method,
+    categoryKey: category.categoryKey,
+    categoryLabel: category.categoryLabel,
+    requiredPoints,
+    outputs,
+    parameters,
+    formula: typeof value.formula === "string" ? value.formula : value.logicSummary,
+    logicSummary: value.logicSummary,
+    ...(typeof value.sourcePaperId === "string" ? { sourcePaperId: value.sourcePaperId } : {}),
+    ...(typeof value.authorUserId === "string" ? { authorUserId: value.authorUserId } : {}),
+    deployableRuntime: value.deployableRuntime
+  };
+}
+
+function parseFddPointCandidate(value: unknown): FddPointCandidate | null {
+  if (!isRecord(value) || typeof value.slot !== "string" || typeof value.pointName !== "string" || typeof value.confidence !== "number" || typeof value.reason !== "string") return null;
+  const unitCompatibility = value.unitCompatibility === "match" || value.unitCompatibility === "convertible" || value.unitCompatibility === "mismatch" || value.unitCompatibility === "unknown"
+    ? value.unitCompatibility
+    : "unknown";
+  return {
+    slot: value.slot,
+    pointName: value.pointName,
+    ...(typeof value.entityKey === "string" ? { entityKey: value.entityKey } : {}),
+    confidence: value.confidence,
+    reason: value.reason,
+    ...(typeof value.objectRef === "string" ? { objectRef: value.objectRef } : {}),
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {}),
+    unitCompatibility,
+    dimensionReason: typeof value.dimensionReason === "string" ? value.dimensionReason : "No unit dimension metadata was provided.",
+    ...(typeof value.rejectionReason === "string" ? { rejectionReason: value.rejectionReason } : {}),
+    ...(typeof value.historyDays === "number" ? { historyDays: value.historyDays } : {})
+  };
+}
+
+function parseFddPointMapping(value: unknown): FddPointMapping | null {
+  if (!isRecord(value) || typeof value.slot !== "string" || typeof value.pointName !== "string") return null;
+  return {
+    slot: value.slot,
+    pointName: value.pointName,
+    ...(typeof value.objectRef === "string" ? { objectRef: value.objectRef } : {}),
+    ...(typeof value.unit === "string" ? { unit: value.unit } : {})
+  };
+}
+
+function parseFddAmbiguousInput(value: unknown): FddAmbiguousInput | null {
+  if (!isRecord(value) || typeof value.slot !== "string" || typeof value.label !== "string" || !Array.isArray(value.candidates)) return null;
+  const candidates = value.candidates.map((entry) => parseFddPointCandidate(entry)).filter((entry): entry is FddPointCandidate => entry !== null);
+  if (candidates.length !== value.candidates.length) return null;
+  return {
+    slot: value.slot,
+    label: value.label,
+    candidates
+  };
+}
+
+function parseFddEntityDeployability(value: unknown): FddEntityDeployability | null {
+  if (!isRecord(value)
+    || typeof value.entityKey !== "string"
+    || (value.status !== "can_deploy" && value.status !== "uncertain" && value.status !== "cannot_deploy")
+    || !Array.isArray(value.selectedMappings)
+    || !Array.isArray(value.ambiguousInputs)
+    || !Array.isArray(value.missingPoints)
+    || !Array.isArray(value.historyIssues)
+    || typeof value.confidence !== "number") {
+    return null;
+  }
+  const selectedMappings = value.selectedMappings.map((entry) => parseFddPointMapping(entry)).filter((entry): entry is FddPointMapping => entry !== null);
+  const ambiguousInputs = value.ambiguousInputs.map((entry) => parseFddAmbiguousInput(entry)).filter((entry): entry is FddAmbiguousInput => entry !== null);
+  if (selectedMappings.length !== value.selectedMappings.length || ambiguousInputs.length !== value.ambiguousInputs.length) return null;
+  return {
+    entityKey: value.entityKey,
+    status: value.status,
+    selectedMappings,
+    ambiguousInputs,
+    missingPoints: value.missingPoints.filter((entry): entry is string => typeof entry === "string"),
+    historyIssues: value.historyIssues.filter((entry): entry is string => typeof entry === "string"),
+    confidence: value.confidence
+  };
+}
+
+function parseFddCheckAgentWorkflow(value: unknown): FddCheckAgentWorkflow | null {
+  if (!isRecord(value)
+    || value.agentId !== "buildinggpt"
+    || typeof value.skillId !== "string"
+    || typeof value.skillName !== "string"
+    || (value.mode !== "deterministic_core" && value.mode !== "llm_deep_inference")
+    || !Array.isArray(value.kbDocuments)
+    || !Array.isArray(value.steps)) {
+    return null;
+  }
+  const kbDocuments = value.kbDocuments.filter((entry): entry is string => typeof entry === "string");
+  const steps = value.steps.filter((entry): entry is string => typeof entry === "string");
+  if (kbDocuments.length !== value.kbDocuments.length || steps.length !== value.steps.length) return null;
+  return {
+    agentId: value.agentId,
+    skillId: value.skillId,
+    skillName: value.skillName,
+    mode: value.mode,
+    kbDocuments,
+    steps
+  };
+}
+
+function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | null {
+  if (!isRecord(value)
+    || typeof value.algorithmVersion !== "string"
+    || typeof value.projectId !== "string"
+    || (value.status !== "can_deploy" && value.status !== "uncertain" && value.status !== "cannot_deploy")
+    || !Array.isArray(value.pointCandidates)
+    || !Array.isArray(value.missingPoints)
+    || !Array.isArray(value.historyIssues)
+    || typeof value.checkedAt !== "string"
+    || (value.source !== "auto" && value.source !== "manual")
+    || typeof value.projectDataSignature !== "string") {
+    return null;
+  }
+  const pointCandidates = value.pointCandidates.map((entry) => parseFddPointCandidate(entry)).filter((entry): entry is FddPointCandidate => entry !== null);
+  const selectedMappings = Array.isArray(value.selectedMappings)
+    ? value.selectedMappings.map((entry) => parseFddPointMapping(entry)).filter((entry): entry is FddPointMapping => entry !== null)
+    : undefined;
+  const ambiguousInputs = Array.isArray(value.ambiguousInputs)
+    ? value.ambiguousInputs.map((entry) => parseFddAmbiguousInput(entry)).filter((entry): entry is FddAmbiguousInput => entry !== null)
+    : [];
+  const rejectedCandidates = Array.isArray(value.rejectedCandidates)
+    ? value.rejectedCandidates.map((entry) => parseFddPointCandidate(entry)).filter((entry): entry is FddPointCandidate => entry !== null)
+    : [];
+  const deployableEntities = Array.isArray(value.deployableEntities)
+    ? value.deployableEntities.map((entry) => parseFddEntityDeployability(entry)).filter((entry): entry is FddEntityDeployability => entry !== null)
+    : undefined;
+  const agentWorkflow = value.agentWorkflow === undefined ? undefined : parseFddCheckAgentWorkflow(value.agentWorkflow);
+  if (pointCandidates.length !== value.pointCandidates.length) return null;
+  if (Array.isArray(value.selectedMappings) && selectedMappings?.length !== value.selectedMappings.length) return null;
+  if (Array.isArray(value.ambiguousInputs) && ambiguousInputs.length !== value.ambiguousInputs.length) return null;
+  if (Array.isArray(value.rejectedCandidates) && rejectedCandidates.length !== value.rejectedCandidates.length) return null;
+  if (Array.isArray(value.deployableEntities) && deployableEntities?.length !== value.deployableEntities.length) return null;
+  if (value.agentWorkflow !== undefined && !agentWorkflow) return null;
+  return {
+    ...(typeof value.algorithmId === "string" ? { algorithmId: value.algorithmId } : {}),
+    ...(typeof value.projectTaskId === "string" ? { projectTaskId: value.projectTaskId } : {}),
+    algorithmVersion: value.algorithmVersion,
+    projectId: value.projectId,
+    status: value.status,
+    pointCandidates,
+    ...(typeof value.exampleEntityKey === "string" ? { exampleEntityKey: value.exampleEntityKey } : typeof value.selectedEntityKey === "string" ? { exampleEntityKey: value.selectedEntityKey } : {}),
+    ...(selectedMappings ? { selectedMappings } : {}),
+    ...(deployableEntities ? { deployableEntities } : {}),
+    ambiguousInputs,
+    rejectedCandidates,
+    missingPoints: value.missingPoints.filter((entry): entry is string => typeof entry === "string"),
+    historyIssues: value.historyIssues.filter((entry): entry is string => typeof entry === "string"),
+    checkedAt: value.checkedAt,
+    source: value.source,
+    projectDataSignature: value.projectDataSignature,
+    ...(agentWorkflow ? { agentWorkflow } : {})
+  };
+}
+
+function parseProjectFddTask(value: unknown): ProjectFddTask | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || typeof value.projectId !== "string"
+    || (value.source !== "global_library" && value.source !== "project_upload" && value.source !== "buildinggpt_generated")
+    || (value.sharingScope !== "project_only" && value.sharingScope !== "global_community")
+    || (value.status !== "checking" && value.status !== "ready" && value.status !== "running" && value.status !== "paused" && value.status !== "cannot_deploy")
+    || typeof value.createdAt !== "string"
+    || typeof value.updatedAt !== "string") {
+    return null;
+  }
+  const algorithmSnapshot = parseFddAlgorithm(value.algorithmSnapshot);
+  const deployabilityCheck = value.deployabilityCheck === undefined ? undefined : parseFddDeployabilityCheck(value.deployabilityCheck);
+  const parameterValues = Array.isArray(value.parameterValues)
+    ? value.parameterValues.map((entry) => parseFddTaskParameterValue(entry)).filter((entry): entry is FddTaskParameterValue => entry !== null)
+    : undefined;
+  if (!algorithmSnapshot || (value.deployabilityCheck !== undefined && !deployabilityCheck) || (Array.isArray(value.parameterValues) && parameterValues?.length !== value.parameterValues.length)) return null;
+  return {
+    id: value.id,
+    projectId: value.projectId,
+    source: value.source,
+    sharingScope: value.sharingScope,
+    ...(typeof value.globalAlgorithmId === "string" ? { globalAlgorithmId: value.globalAlgorithmId } : {}),
+    algorithmSnapshot,
+    status: value.status,
+    ...(deployabilityCheck ? { deployabilityCheck } : {}),
+    ...(parameterValues ? { parameterValues } : {}),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt
+  };
 }
 
 function parseChatMessageImages(value: unknown, message: string): ChatMessageImage[] | undefined {
@@ -1963,6 +2533,184 @@ export async function updateDerivedMetricMaterialization(
     throw malformed("Derived metric materialization returned an unexpected metric.");
   }
   return { metric, requestId: response.requestId };
+}
+
+export async function deleteDerivedMetric(
+  token: string,
+  projectId: string,
+  instanceId: string
+): Promise<{ deleted: boolean; instanceId: string; deletedDashboardIds: string[]; updatedDashboardIds: string[]; requestId: string }> {
+  const response = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/derived-metrics/${encodeURIComponent(instanceId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(response) || typeof response.deleted !== "boolean" || typeof response.instanceId !== "string" || typeof response.requestId !== "string") {
+    throw malformed("Derived metric delete returned an unexpected response.");
+  }
+  return {
+    deleted: response.deleted,
+    instanceId: response.instanceId,
+    deletedDashboardIds: Array.isArray(response.deletedDashboardIds) ? response.deletedDashboardIds.filter((entry): entry is string => typeof entry === "string") : [],
+    updatedDashboardIds: Array.isArray(response.updatedDashboardIds) ? response.updatedDashboardIds.filter((entry): entry is string => typeof entry === "string") : [],
+    requestId: response.requestId
+  };
+}
+
+export async function getFddLibrary(token: string, projectId: string): Promise<FddLibraryResponse> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-library`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || !Array.isArray(payload.algorithms) || !Array.isArray(payload.checks) || !Array.isArray(payload.tasks) || typeof payload.projectId !== "string" || typeof payload.requestId !== "string") {
+    throw malformed("FDD library returned an unexpected response.");
+  }
+  const algorithms = payload.algorithms.map((entry) => parseFddAlgorithm(entry));
+  const checks = payload.checks.map((entry) => parseFddDeployabilityCheck(entry));
+  const tasks = payload.tasks.map((entry) => parseProjectFddTask(entry));
+  if (algorithms.some((entry) => entry === null) || checks.some((entry) => entry === null) || tasks.some((entry) => entry === null)) {
+    throw malformed("FDD library returned an unexpected entry.");
+  }
+  return {
+    projectId: payload.projectId,
+    algorithms: algorithms as FddAlgorithm[],
+    checks: checks as FddDeployabilityCheck[],
+    tasks: tasks as ProjectFddTask[],
+    requestId: payload.requestId
+  };
+}
+
+export async function testFddAlgorithm(token: string, projectId: string, algorithmId: string): Promise<{ algorithm: FddAlgorithm; check: FddDeployabilityCheck; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-library/${encodeURIComponent(algorithmId)}/test`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.requestId !== "string") {
+    throw malformed("FDD algorithm test returned an unexpected response.");
+  }
+  const algorithm = parseFddAlgorithm(payload.algorithm);
+  const check = parseFddDeployabilityCheck(payload.check);
+  if (!algorithm || !check) {
+    throw malformed("FDD algorithm test returned an unexpected entry.");
+  }
+  return { algorithm, check, requestId: payload.requestId };
+}
+
+export async function deployFddAlgorithm(token: string, projectId: string, algorithmId: string): Promise<{ task: ProjectFddTask; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-library/${encodeURIComponent(algorithmId)}/deploy`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.requestId !== "string") {
+    throw malformed("FDD algorithm deploy returned an unexpected response.");
+  }
+  const task = parseProjectFddTask(payload.task);
+  if (!task) {
+    throw malformed("FDD algorithm deploy returned an unexpected task.");
+  }
+  return { task, requestId: payload.requestId };
+}
+
+export async function getFddTasks(token: string, projectId: string): Promise<{ tasks: ProjectFddTask[]; totalCount: number; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks`, { headers: authHeaders(token) });
+  if (!isRecord(payload) || !Array.isArray(payload.tasks) || typeof payload.requestId !== "string") {
+    throw malformed("FDD tasks returned an unexpected response.");
+  }
+  const tasks = payload.tasks.map((entry) => parseProjectFddTask(entry));
+  if (tasks.some((entry) => entry === null)) {
+    throw malformed("FDD tasks returned an unexpected task.");
+  }
+  return {
+    tasks: tasks as ProjectFddTask[],
+    totalCount: typeof payload.totalCount === "number" ? payload.totalCount : payload.tasks.length,
+    requestId: payload.requestId
+  };
+}
+
+export async function createFddTask(token: string, projectId: string, payload: CreateFddTaskPayload): Promise<{ task: ProjectFddTask; algorithm: FddAlgorithm | null; requestId: string }> {
+  const response = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload)
+  });
+  if (!isRecord(response) || typeof response.requestId !== "string") {
+    throw malformed("FDD task create returned an unexpected response.");
+  }
+  const task = parseProjectFddTask(response.task);
+  const algorithm = response.algorithm === null || response.algorithm === undefined ? null : parseFddAlgorithm(response.algorithm);
+  if (!task || (response.algorithm !== null && response.algorithm !== undefined && !algorithm)) {
+    throw malformed("FDD task create returned an unexpected entry.");
+  }
+  return { task, algorithm, requestId: response.requestId };
+}
+
+export async function testFddTask(token: string, projectId: string, taskId: string): Promise<{ task: ProjectFddTask; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks/${encodeURIComponent(taskId)}/test`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.requestId !== "string") {
+    throw malformed("FDD task test returned an unexpected response.");
+  }
+  const task = parseProjectFddTask(payload.task);
+  if (!task) {
+    throw malformed("FDD task test returned an unexpected task.");
+  }
+  return { task, requestId: payload.requestId };
+}
+
+export async function deployFddTask(token: string, projectId: string, taskId: string): Promise<{ task: ProjectFddTask; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks/${encodeURIComponent(taskId)}/deploy`, {
+    method: "POST",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.requestId !== "string") {
+    throw malformed("FDD task deploy returned an unexpected response.");
+  }
+  const task = parseProjectFddTask(payload.task);
+  if (!task) {
+    throw malformed("FDD task deploy returned an unexpected task.");
+  }
+  return { task, requestId: payload.requestId };
+}
+
+export async function deleteFddTask(
+  token: string,
+  projectId: string,
+  taskId: string
+): Promise<{ deleted: boolean; taskId: string; deletedMetricIds: string[]; deletedDashboardIds: string[]; updatedDashboardIds: string[]; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token)
+  });
+  if (!isRecord(payload) || typeof payload.deleted !== "boolean" || typeof payload.taskId !== "string" || typeof payload.requestId !== "string") {
+    throw malformed("FDD task delete returned an unexpected response.");
+  }
+  return {
+    deleted: payload.deleted,
+    taskId: payload.taskId,
+    deletedMetricIds: Array.isArray(payload.deletedMetricIds) ? payload.deletedMetricIds.filter((entry): entry is string => typeof entry === "string") : [],
+    deletedDashboardIds: Array.isArray(payload.deletedDashboardIds) ? payload.deletedDashboardIds.filter((entry): entry is string => typeof entry === "string") : [],
+    updatedDashboardIds: Array.isArray(payload.updatedDashboardIds) ? payload.updatedDashboardIds.filter((entry): entry is string => typeof entry === "string") : [],
+    requestId: payload.requestId
+  };
+}
+
+export async function updateFddTaskParameters(
+  token: string,
+  projectId: string,
+  taskId: string,
+  parameters: Array<{ key: string; value: FddParameterValue }>
+): Promise<{ task: ProjectFddTask; requestId: string }> {
+  const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks/${encodeURIComponent(taskId)}/parameters`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ parameters })
+  });
+  if (!isRecord(payload) || typeof payload.requestId !== "string") {
+    throw malformed("FDD task parameters returned an unexpected response.");
+  }
+  const task = parseProjectFddTask(payload.task);
+  if (!task) {
+    throw malformed("FDD task parameters returned an unexpected task.");
+  }
+  return { task, requestId: payload.requestId };
 }
 
 export async function createDashboard(token: string, projectId: string, payload: Partial<DashboardRecord> & Pick<DashboardRecord, "title" | "layout" | "widgets">): Promise<{ dashboard: DashboardRecord; path: string; requestId: string }> {

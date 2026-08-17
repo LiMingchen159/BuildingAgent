@@ -12,9 +12,10 @@ export async function proxyBmsCollector(
   fetchImpl: FetchLike,
   pathname: string,
   search: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  baseUrlOverride?: string
 ): Promise<BmsCollectorProxyResult> {
-  const base = bmsCollectorBaseUrl(env);
+  const base = baseUrlOverride?.replace(/\/+$/, "") || bmsCollectorBaseUrl(env);
   const url = bmsCollectorPath(base, pathname, search);
   const response = await fetchImpl(url, init);
   const contentType = response.headers.get("content-type");

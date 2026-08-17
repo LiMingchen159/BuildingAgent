@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildServer } from "./server.js";
+import { buildServer, fddPersistenceWindowGraceMs } from "./server.js";
 import { createSeedStore } from "./seed.js";
 import { DerivedMetricStore } from "./derivedMetrics.js";
+import type { ChatProvider } from "./providers.js";
 
 const adaToken = "seed-token-ada";
 const buildingGptToken = "seed-token-buildinggpt";
@@ -53,6 +54,70 @@ function dashboardPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe("dashboard project APIs", () => {
+  it("allows a small cadence grace for FDD persistence windows", () => {
+    expect(fddPersistenceWindowGraceMs(5)).toBe(60_000);
+    expect(fddPersistenceWindowGraceMs(30)).toBe(120_000);
+    expect(28.97 * 60_000).toBeGreaterThanOrEqual(30 * 60_000 - fddPersistenceWindowGraceMs(30));
+  });
+
+  it("requires an overall summary in generated FDD attribution text", async () => {
+    const calls: Parameters<ChatProvider["complete"]>[0][] = [];
+    const provider: ChatProvider = {
+      metadata: { id: "fdd-test-provider", mode: "real", model: "fake-model", status: "configured" },
+      async complete(request) {
+        calls.push(request);
+        return {
+          text: calls.length === 1
+            ? [
+                "**Likely cause:** WCC-4 has a stuck CHW flow input.",
+                "**Equipment:** WCC-4",
+                "**Problem input:** WCC-L1-04-CHWFWR (Chilled Water Flow Rate)",
+                "**Data evidence:** CHW flow is zero while the chiller is running and the FDD output is faulted.",
+                "**Data-based next check:** Check WCC-L1-04-CHWFWR on WCC-4."
+              ].join("\n\n")
+            : [
+                "**Overall summary:** Over the last 7 days, 1 of 8 analyzed chillers showed fault samples; 788/9604 valid FDD output samples were faults (8.2%). The strongest evidence is on WCC-4.",
+                "**Likely cause:** WCC-4 has a stuck CHW flow input.",
+                "**Equipment:** WCC-4",
+                "**Problem input:** WCC-L1-04-CHWFWR (Chilled Water Flow Rate)",
+                "**Data evidence:** CHW flow is zero while the chiller is running and the FDD output is faulted.",
+                "**Data-based next check:** Check WCC-L1-04-CHWFWR on WCC-4."
+              ].join("\n\n"),
+          provider: provider.metadata,
+          fallbackUsed: false
+        };
+      }
+    };
+    const app = buildServer({
+      store: createSeedStore(),
+      chatProvider: provider,
+      env: { ...isolatedDataEnv(), DERIVED_METRIC_MATERIALIZER_DISABLED: "1" }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/fdd-attribution-analysis",
+      headers: bearer(adaToken),
+      payload: {
+        summary: {
+          outputSummary: {
+            faultyEquipmentCount: 1,
+            validOutputSamples: 9604,
+            faultOutputSamples: 788,
+            overallFaultRate: 0.082,
+            boundInputCount: 32
+          },
+          faultEntities: [{ equipment: "WCC-4", outputFaultSamples: 788 }]
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, content: expect.stringContaining("**Overall summary:**") });
+    expect(calls).toHaveLength(2);
+  });
+
   it("creates, lists, and retrieves a private dashboard for its owner", async () => {
     const app = buildServer({ store: createSeedStore() });
 
@@ -360,6 +425,7 @@ describe("dashboard project APIs", () => {
               },
               {
                 source: "bms",
+                bmsSourceId: "src_element_001",
                 pointName: "WCC-L1-04_Q",
                 entityId: "WCC_04",
                 groupId: "WCC_04",
@@ -388,6 +454,7 @@ describe("dashboard project APIs", () => {
       }),
       expect.objectContaining({
         source: "bms",
+        bmsSourceId: "src_element_001",
         pointName: "WCC-L1-04_Q",
         entityId: "WCC_04",
         groupId: "WCC_04",
@@ -600,6 +667,112 @@ describe("dashboard project APIs", () => {
       status: "paused"
     });
   });
+
+  it("migrates persisted FDD comparison dashboards into 7-day fault-cause analysis on boot", async () => {
+    const env = { ...isolatedDataEnv(), DERIVED_METRIC_MATERIALIZER_DISABLED: "1" };
+    const metrics = new DerivedMetricStore(env.BUILDING_AGENT_DATA_DIR);
+    const metric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "chiller_low_cop_detection",
+      entityId: "WCC_04",
+      displayName: "WCC-04 Low COP Detection",
+      unit: "boolean",
+      formula: "FDD low COP rule",
+      formulaDescription: "COP below threshold for configured persistence window.",
+      dependencies: [
+        { role: "chiller_status", sourceType: "raw_point", sourceId: "WCC_4_Run_Status", pointName: "WCC_4_Run_Status", label: "Chiller status" },
+        { role: "chw_supply_temp", sourceType: "raw_point", sourceId: "WCC-L1-04_CHWST", pointName: "WCC-L1-04_CHWST", label: "CHW supply temp" }
+      ],
+      metadata: {
+        fddParameters: [
+          { key: "window_minutes", value: 30, source: "test" },
+          { key: "cop_threshold", value: 4, source: "test" }
+        ]
+      }
+    });
+    const store = createSeedStore();
+    store.dashboardsByProject.project_element = [{
+      id: "dash_legacy_fdd",
+      projectId: "project_element",
+      ownerUserId: "user_ada",
+      visibility: "project",
+      title: "Legacy FDD dashboard",
+      layoutVersion: 2,
+      layout: [
+        { widgetId: "status_wcc04", x: 0, y: 0, w: 1, h: 1 },
+        { widgetId: "fdd_fault_status_comparison", x: 0, y: 1, w: 6, h: 4 },
+        { widgetId: "trend_wcc04", x: 0, y: 5, w: 6, h: 4 },
+        { widgetId: "note_logic", x: 0, y: 9, w: 3, h: 2 }
+      ],
+      widgets: [{
+        id: "fdd_fault_status_comparison",
+        kind: "fdd_fault_rate_comparison",
+        title: "Fault Rate Comparison",
+        content: "**Likely cause:** WCC-4 CHW flow is stuck at 0 in the aligned FDD samples.",
+        pointBindings: [{ source: "derived_metric", metricInstanceId: metric.instance.instanceId, label: "Fault status" }]
+      }, {
+        id: "status_wcc04",
+        kind: "status_grid",
+        title: "WCC-04",
+        pointBindings: [{ source: "derived_metric", metricInstanceId: metric.instance.instanceId, label: "Fault status" }]
+      }, {
+        id: "trend_wcc04",
+        kind: "timeseries_chart",
+        title: "WCC-04 Trend",
+        pointBindings: [{ source: "derived_metric", metricInstanceId: metric.instance.instanceId, label: "Fault status" }]
+      }, {
+        id: "note_logic",
+        kind: "note",
+        title: "Detection Logic",
+        content: "Low COP while running.",
+        pointBindings: []
+      }],
+      sections: [
+        { id: "overview", title: "Overview", kind: "overview", widgetIds: ["status_wcc04"] },
+        { id: "trends", title: "Trends", kind: "trends", widgetIds: ["trend_wcc04"] },
+        { id: "attribution", title: "Attribution", kind: "analysis", widgetIds: ["fdd_fault_status_comparison", "note_logic"] }
+      ],
+      createdAt: "2026-06-27T00:00:00.000Z",
+      updatedAt: "2026-06-27T00:00:00.000Z"
+    } as any];
+
+    const app = buildServer({ store, env });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+
+    const fetched = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_element/dashboards/dash_legacy_fdd",
+      headers: bearer(adaToken)
+    });
+
+	    expect(fetched.statusCode).toBe(200);
+	    const dashboard = fetched.json().dashboard;
+	    expect(dashboard.layout).toEqual(expect.arrayContaining([{ widgetId: "fdd_fault_status_comparison", x: 0, y: 1, w: 6, h: 4 }]));
+	    expect(dashboard.widgets[0]).toMatchObject({
+	      kind: "fdd_attribution_analysis",
+	      title: "Fault Cause Analysis",
+	      defaultTimeRange: "7d",
+	      content: "**Likely cause:** WCC-4 CHW flow is stuck at 0 in the aligned FDD samples."
+	    });
+	    expect(dashboard.widgets[0].pointBindings).toEqual(expect.arrayContaining([
+	      expect.objectContaining({
+	        source: "derived_metric",
+	        metricInstanceId: metric.instance.instanceId,
+	        dependencyRole: "output",
+	        defaultVisible: true,
+	        description: "COP below threshold for configured persistence window.",
+	        fddParameters: expect.arrayContaining([expect.objectContaining({ key: "window_minutes", value: 30 })])
+	      }),
+	      expect.objectContaining({ source: "bms", pointName: "WCC_4_Run_Status", role: "chiller_status", dependencyRole: "input", defaultVisible: false }),
+	      expect.objectContaining({ source: "bms", pointName: "WCC-L1-04_CHWST", role: "chw_supply_temp", dependencyRole: "input", defaultVisible: false, description: "Chilled Water Supply Temperature" })
+	    ]));
+	    expect(dashboard.sections.map((section: { id: string }) => section.id)).toEqual(["overview", "analysis", "trends", "notes"]);
+	    expect(dashboard.sections).toEqual(expect.arrayContaining([
+	      expect.objectContaining({ id: "analysis", title: "Fault Cause Analysis", kind: "analysis", widgetIds: ["fdd_fault_status_comparison"] }),
+	      expect.objectContaining({ id: "trends", title: "Chiller Trends", kind: "trends", collapsed: true }),
+	      expect.objectContaining({ id: "notes", title: "Notes", kind: "custom", widgetIds: ["note_logic"] })
+	    ]));
+	  });
 
   it("accepts note dashboard widgets without point bindings", async () => {
     const app = buildServer({ store: createSeedStore() });

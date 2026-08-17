@@ -8,6 +8,8 @@ export interface BmsTimeseriesRow {
   value?: string;
   value_num?: number | null;
   value_text?: string | null;
+  quality?: string | null;
+  status?: string | null;
 }
 
 import { bmsCollectorBaseUrl } from "./bmsCollectorUrl.js";

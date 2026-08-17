@@ -1,5 +1,6 @@
 import { seedSkillsByProject } from "./projectSkills.js";
 import type { DashboardRecord } from "./dashboards.js";
+import type { FddAlgorithm, FddDeployabilityCheck, ProjectFddLibraryCheckRun, ProjectFddTask } from "./fddLibrary.js";
 
 export type Permission = "chat:read" | "chat:write" | "project:configure";
 export type PlaceholderStatus = "placeholder" | "mock" | "not_configured";
@@ -165,6 +166,10 @@ export interface SeedStore {
   knowledgeBaseByProject: Record<string, KnowledgeBaseDocument[]>;
   repositoryByProject: Record<string, RepositoryArtifact[]>;
   dashboardsByProject: Record<string, DashboardRecord[]>;
+  fddAlgorithms?: FddAlgorithm[];
+  fddTasksByProject?: Record<string, ProjectFddTask[]>;
+  fddChecksByProject?: Record<string, FddDeployabilityCheck[]>;
+  fddLibraryCheckRunsByProject?: Record<string, ProjectFddLibraryCheckRun[]>;
   runtimeProviders: PlaceholderRuntimeProvider[];
   tools: PlaceholderTool[];
   skills: PlaceholderSkill[];
@@ -387,12 +392,20 @@ export function createSeedStore(): SeedStore {
         password: "buildinggpt123",
         loginAliases: ["buildinggpt@test.local"],
         passwordAliases: ["buildinggpt-test"]
+      },
+      {
+        id: "user_mortar_guest",
+        name: "Cambridge Tester",
+        email: "cambridge@example.test",
+        password: "cambridge-test-2026",
+        loginAliases: ["mortar@example.test"]
       }
     ],
     tokens: {
       "seed-token-ada": "user_ada",
       "seed-token-grace": "user_grace",
-      "seed-token-buildinggpt": "user_buildinggpt"
+      "seed-token-buildinggpt": "user_buildinggpt",
+      "seed-token-mortar-guest": "user_mortar_guest"
     },
     projects,
     memberships: [
@@ -411,6 +424,11 @@ export function createSeedStore(): SeedStore {
         userId: "user_buildinggpt",
         projectId: "project_mortar",
         permissions: ["chat:read", "chat:write", "project:configure"]
+      },
+      {
+        userId: "user_mortar_guest",
+        projectId: "project_mortar",
+        permissions: ["chat:read", "chat:write", "project:configure"]
       }
     ],
     messagesByProject,
@@ -418,6 +436,10 @@ export function createSeedStore(): SeedStore {
     knowledgeBaseByProject: Object.fromEntries(projects.map((project) => [project.id, [] as KnowledgeBaseDocument[]])),
     repositoryByProject: Object.fromEntries(projects.map((project) => [project.id, [] as RepositoryArtifact[]])),
     dashboardsByProject: Object.fromEntries(projects.map((project) => [project.id, [] as DashboardRecord[]])),
+    fddAlgorithms: [],
+    fddTasksByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ProjectFddTask[]])),
+    fddChecksByProject: Object.fromEntries(projects.map((project) => [project.id, [] as FddDeployabilityCheck[]])),
+    fddLibraryCheckRunsByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ProjectFddLibraryCheckRun[]])),
     runtimeProviders,
     tools,
     skills,
@@ -484,6 +506,25 @@ export function cloneStore(store: SeedStore): SeedStore {
             pointBindings: widget.pointBindings.map((binding) => ({ ...binding }))
           }))
         }))
+      ])
+    ),
+    fddAlgorithms: (store.fddAlgorithms ?? []).map((algorithm) => ({ ...algorithm })),
+    fddTasksByProject: Object.fromEntries(
+      Object.entries(store.fddTasksByProject ?? {}).map(([projectId, tasks]) => [
+        projectId,
+        tasks.map((task) => ({ ...task }))
+      ])
+    ),
+    fddChecksByProject: Object.fromEntries(
+      Object.entries(store.fddChecksByProject ?? {}).map(([projectId, checks]) => [
+        projectId,
+        checks.map((check) => ({ ...check }))
+      ])
+    ),
+    fddLibraryCheckRunsByProject: Object.fromEntries(
+      Object.entries(store.fddLibraryCheckRunsByProject ?? {}).map(([projectId, runs]) => [
+        projectId,
+        runs.map((run) => ({ ...run, algorithmIds: [...run.algorithmIds] }))
       ])
     ),
     runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),

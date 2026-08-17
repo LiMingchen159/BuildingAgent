@@ -1,8 +1,71 @@
 import { describe, expect, it, vi } from "vitest";
 import { createGenericToolRegistry } from "./genericTools.js";
 import { AgentMemoryStore } from "./memory.js";
+import { BMS_SOURCE_NOT_CONFIGURED, type ProjectBmsAccessResolver } from "../bmsProjectAccess.js";
+
+const elementBmsAccess: ProjectBmsAccessResolver = (projectId) => projectId === "project_element"
+  ? {
+      ok: true,
+      projectId,
+      sourceId: "src_element_test",
+      sourceName: "Element test BMS",
+      baseUrl: "http://127.0.0.1:8765"
+    }
+  : {
+      ok: false,
+      projectId,
+      error: BMS_SOURCE_NOT_CONFIGURED,
+      message: "No BMS source is configured for this project."
+    };
+
+function createRegistry(projectBmsAccess: ProjectBmsAccessResolver = elementBmsAccess) {
+  return createGenericToolRegistry(
+    new AgentMemoryStore("/tmp/ba-test-memory"),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    projectBmsAccess
+  );
+}
 
 describe("bms query tools", () => {
+  it("returns no-source for live BMS collector tools when the project has no BMS source", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ total: 1, items: [{ name: "WCC_3_Chilled_Water_Temp" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const registry = createRegistry();
+    const context = {
+      projectId: "project_mortar",
+      userId: "user_test",
+      requestId: "req_test",
+      conversationId: "conv_test",
+      canConfigure: false,
+      messages: []
+    };
+    const pointsTool = registry.list().find((candidate) => candidate.name === "bms_points_query");
+    const historyTool = registry.list().find((candidate) => candidate.name === "bms_timeseries_query");
+
+    const points = await pointsTool!.run({ q: "WCC_3_Chilled_Water_Temp" }, context);
+    const history = await historyTool!.run({ name: "WCC_3_Chilled_Water_Temp", from: "2026-06-24T00:00:00.000Z" }, context);
+
+    vi.unstubAllGlobals();
+
+    expect(points).toMatchObject({ error: BMS_SOURCE_NOT_CONFIGURED, projectId: "project_mortar" });
+    expect(history).toMatchObject({ error: BMS_SOURCE_NOT_CONFIGURED, projectId: "project_mortar" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("bms_points_query calls local collector points API", async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(JSON.stringify({ total: 1, items: [{ name: "WCC_3_Chilled_Water_Temp", last_value: "8.6" }] }), {
@@ -12,7 +75,7 @@ describe("bms query tools", () => {
     );
     vi.stubGlobal("fetch", fetchImpl);
 
-    const registry = createGenericToolRegistry(new AgentMemoryStore("/tmp/ba-test-memory"));
+    const registry = createRegistry();
     const tool = registry.list().find((candidate) => candidate.name === "bms_points_query");
     expect(tool).toBeDefined();
     const result = await tool!.run({ q: "WCC_3_Chilled_Water_Temp", limit: 1 }, {
@@ -42,7 +105,7 @@ describe("bms query tools", () => {
     );
     vi.stubGlobal("fetch", fetchImpl);
 
-    const registry = createGenericToolRegistry(new AgentMemoryStore("/tmp/ba-test-memory"));
+    const registry = createRegistry();
     const tool = registry.list().find((candidate) => candidate.name === "bms_points_query");
     const result = await tool!.run({ q: "WCC-06 TLKW" }, {
       projectId: "project_element",
@@ -69,7 +132,7 @@ describe("bms query tools", () => {
     );
     vi.stubGlobal("fetch", fetchImpl);
 
-    const registry = createGenericToolRegistry(new AgentMemoryStore("/tmp/ba-test-memory"));
+    const registry = createRegistry();
     const tool = registry.list().find((candidate) => candidate.name === "bms_timeseries_query");
     expect(tool).toBeDefined();
 
@@ -121,7 +184,7 @@ describe("bms query tools", () => {
     });
     vi.stubGlobal("fetch", fetchImpl);
 
-    const registry = createGenericToolRegistry(new AgentMemoryStore("/tmp/ba-test-memory"));
+    const registry = createRegistry();
     const tool = registry.list().find((candidate) => candidate.name === "bms_timeseries_query");
     const result = await tool!.run(
       {

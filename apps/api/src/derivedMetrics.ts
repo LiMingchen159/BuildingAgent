@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import type { DerivedMetricAlignmentPolicy } from "./derivedMetricAlignment.js";
 
 export type DerivedMetricSourceType = "raw_point" | "metric";
-export type DerivedMetricFormulaKind = "ratio" | "difference";
+export type DerivedMetricFormulaKind = "ratio" | "difference" | "fdd_rule";
 export type DerivedMetricInvalidValuePolicy = "null" | "zero";
 
 export interface DerivedMetricDependencyInput {
@@ -471,19 +471,121 @@ export class DerivedMetricStore {
       throw new Error("dependencies are required");
     }
 
-    const existing = this.findInstance(projectId, metricKey, entityId);
-    if (existing) {
-      return { created: false, instance: existing };
-    }
-
     const now = new Date().toISOString();
-    let definitionId = stableId("mdef", [projectId, metricKey], 18);
     const version = optional(input.formulaVersion) ?? "v1";
-    let versionId = stableId("mver", [definitionId, version], 18);
-    const instanceId = stableId("minst", [projectId, entityId, metricKey], 22);
     const metricType = optional(input.metricType) ?? "derived";
     const displayName = optional(input.displayName) ?? `${entityId} ${metricKey}`;
     const metadataJson = serializeMetadata(input.metadata);
+    const existing = this.findInstance(projectId, metricKey, entityId);
+    if (existing) {
+      const existingDisplayName = optional(input.displayName) ?? existing.displayName;
+      const existingMetricType = optional(input.metricType) ?? existing.metricType;
+      let versionId = stableId("mver", [existing.definitionId, version], 18);
+      const tx = this.db.transaction(() => {
+        this.db.prepare(`
+          UPDATE metric_definitions
+          SET
+            display_name = @display_name,
+            metric_type = @metric_type,
+            default_unit = COALESCE(@default_unit, default_unit),
+            metadata_json = COALESCE(@metadata_json, metadata_json),
+            updated_at = @updated_at
+          WHERE definition_id = @definition_id
+        `).run({
+          definition_id: existing.definitionId,
+          display_name: existingDisplayName,
+          metric_type: existingMetricType,
+          default_unit: optional(input.unit),
+          metadata_json: metadataJson,
+          updated_at: now
+        });
+
+        this.db.prepare(`
+          INSERT INTO metric_versions (
+            version_id, definition_id, version, formula, formula_description, metadata_json, created_at
+          ) VALUES (
+            @version_id, @definition_id, @version, @formula, @formula_description, @metadata_json, @created_at
+          )
+          ON CONFLICT(definition_id, version) DO UPDATE SET
+            formula = excluded.formula,
+            formula_description = COALESCE(excluded.formula_description, metric_versions.formula_description),
+            metadata_json = COALESCE(excluded.metadata_json, metric_versions.metadata_json)
+        `).run({
+          version_id: versionId,
+          definition_id: existing.definitionId,
+          version,
+          formula,
+          formula_description: optional(input.formulaDescription),
+          metadata_json: metadataJson,
+          created_at: now
+        });
+        const versionRow = this.db.prepare(`
+          SELECT version_id FROM metric_versions
+          WHERE definition_id = ? AND version = ?
+        `).get(existing.definitionId, version) as { version_id: string } | undefined;
+        versionId = versionRow?.version_id ?? versionId;
+
+        this.db.prepare(`
+          UPDATE metric_instances
+          SET
+            version_id = @version_id,
+            entity_name = COALESCE(@entity_name, entity_name),
+            display_name = @display_name,
+            unit = COALESCE(@unit, unit),
+            formula_version = @formula_version,
+            formula = @formula,
+            formula_description = COALESCE(@formula_description, formula_description),
+            created_by = COALESCE(@created_by, created_by),
+            metadata_json = COALESCE(@metadata_json, metadata_json),
+            updated_at = @updated_at
+          WHERE instance_id = @instance_id
+        `).run({
+          instance_id: existing.instanceId,
+          version_id: versionId,
+          entity_name: optional(input.entityName),
+          display_name: existingDisplayName,
+          unit: optional(input.unit),
+          formula_version: version,
+          formula,
+          formula_description: optional(input.formulaDescription),
+          created_by: optional(input.createdBy),
+          metadata_json: metadataJson,
+          updated_at: now
+        });
+
+        this.db.prepare("DELETE FROM metric_dependencies WHERE instance_id = ?").run(existing.instanceId);
+        for (const dependency of input.dependencies) {
+          const role = trimRequired(dependency.role, "dependency.role");
+          const sourceId = trimRequired(dependency.sourceId, "dependency.sourceId");
+          const sourceType = dependency.sourceType ?? "raw_point";
+          const dependencyId = stableId("mdep", [existing.instanceId, role, sourceType, sourceId], 22);
+          this.db.prepare(`
+            INSERT INTO metric_dependencies (
+              dependency_id, instance_id, role, source_type, source_id, point_name, object_ref, unit, label, metadata_json
+            ) VALUES (
+              @dependency_id, @instance_id, @role, @source_type, @source_id, @point_name, @object_ref, @unit, @label, @metadata_json
+            )
+          `).run({
+            dependency_id: dependencyId,
+            instance_id: existing.instanceId,
+            role,
+            source_type: sourceType,
+            source_id: sourceId,
+            point_name: optional(dependency.pointName),
+            object_ref: optional(dependency.objectRef),
+            unit: optional(dependency.unit),
+            label: optional(dependency.label),
+            metadata_json: serializeMetadata(dependency.metadata)
+          });
+        }
+      });
+      tx();
+      return { created: false, instance: this.getInstance(existing.instanceId) ?? existing };
+    }
+
+    let definitionId = stableId("mdef", [projectId, metricKey], 18);
+    let versionId = stableId("mver", [definitionId, version], 18);
+    const instanceId = stableId("minst", [projectId, entityId, metricKey], 22);
 
     const tx = this.db.transaction(() => {
       this.db.prepare(`
@@ -653,6 +755,22 @@ export class DerivedMetricStore {
       WHERE i.instance_id = ?
     `).get(instanceId) as InstanceRow | undefined;
     return row ? this.instanceFromRow(row) : null;
+  }
+
+  deleteInstance(projectId: string, instanceId: string): DerivedMetricInstance | null {
+    const instance = this.getInstance(trimRequired(instanceId, "instanceId"));
+    if (!instance || instance.projectId !== trimRequired(projectId, "projectId")) {
+      return null;
+    }
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM metric_materialization WHERE instance_id = ?").run(instance.instanceId);
+      this.db.prepare("DELETE FROM metric_latest WHERE instance_id = ?").run(instance.instanceId);
+      this.db.prepare("DELETE FROM metric_samples WHERE instance_id = ?").run(instance.instanceId);
+      this.db.prepare("DELETE FROM metric_dependencies WHERE instance_id = ?").run(instance.instanceId);
+      this.db.prepare("DELETE FROM metric_instances WHERE instance_id = ?").run(instance.instanceId);
+    });
+    tx();
+    return instance;
   }
 
   recordSample(input: DerivedMetricRecordSampleInput): DerivedMetricSample {
