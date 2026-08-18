@@ -1647,7 +1647,11 @@ describe("BuildingGPT Web flow", () => {
       ...(deployableRuntime ? {} : { definitionStatus: "implementation_ready" })
     });
     const ch01 = fddAlgorithm("chiller_ch_01_commanded_chiller_fails_to_start", "CH-01 Commanded Chiller Fails to Start");
-    const ch51 = fddAlgorithm("chiller_ch_51_heat_balance_sensor_consistency", "CH-51 Heat Balance Sensor Consistency Fault");
+    const ch51 = {
+      ...fddAlgorithm("chiller_ch_51_heat_balance_sensor_consistency", "CH-51 Heat Balance Sensor Consistency Fault"),
+      categoryKey: "sensor",
+      categoryLabel: "Sensor"
+    };
     const oldChiller = fddAlgorithm("chiller_low_cop_detection", "Chiller Low COP Detection");
     const oldAhu = fddAlgorithm("ahu_supply_air_flow_sensor_fault", "AHU Supply Air Flow Sensor Fault", "ahu");
     const ahu01 = fddAlgorithm("ahu_fdd_01", "AHU-01 AHU Start Failure", "ahu", "docx:AHU_FDD_Library.docx:sha", false);
@@ -1744,13 +1748,31 @@ describe("BuildingGPT Web flow", () => {
     await user.click(screen.getByRole("button", { name: /open fdd library/i }));
 
     expect((await screen.findAllByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i })).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /AHU-01 AHU Start Failure/i })).not.toBeInTheDocument();
-    const equipmentTabs = screen.getAllByRole("tab");
+    const equipmentTabList = screen.getByRole("tablist", { name: "FDD equipment" });
+    const equipmentTabs = within(equipmentTabList).getAllByRole("tab");
     expect(equipmentTabs).toHaveLength(6);
     expect(screen.getByRole("tab", { name: /Chiller/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("6 assets detected")).toBeInTheDocument();
+    expect(screen.getByText("Evaluators implemented")).toBeInTheDocument();
+    expect(screen.getByText("Deployable now")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Deploy CH-01 Commanded Chiller Fails to Start/i })).toBeDisabled();
+    const categoryTabList = screen.getByRole("tablist", { name: "Chiller fault categories" });
+    const categoryTabs = within(categoryTabList).getAllByRole("tab");
+    expect(categoryTabs).toHaveLength(2);
+    expect(within(categoryTabList).getByRole("tab", { name: /Operation/i })).toHaveAttribute("aria-selected", "true");
+    await user.click(within(categoryTabList).getByRole("tab", { name: /Sensor/i }));
+    expect(screen.getAllByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i })).not.toBeInTheDocument();
+    const sensorTab = within(categoryTabList).getByRole("tab", { name: /Sensor/i });
+    sensorTab.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(within(categoryTabList).getByRole("tab", { name: /Operation/i })).toHaveFocus();
+    expect(screen.getAllByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i }).length).toBeGreaterThan(0);
+    for (const tab of categoryTabs) {
+      expect(document.getElementById(tab.getAttribute("aria-controls")!)).not.toBeNull();
+    }
     const chillerTab = screen.getByRole("tab", { name: /Chiller/i });
     chillerTab.focus();
     await user.keyboard("{ArrowRight}");

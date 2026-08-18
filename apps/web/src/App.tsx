@@ -4003,8 +4003,10 @@ function FddLibraryPanel({
   const [query, setQuery] = useState("");
   const [selectedAlgorithmId, setSelectedAlgorithmId] = useState<string | null>(null);
   const [activeEquipmentType, setActiveEquipmentType] = useState<FddEquipmentType>("chiller");
+  const [activeCategoryKey, setActiveCategoryKey] = useState<string | null>(null);
   const panelProjectRef = useRef<string | null>(null);
   const equipmentTabRefs = useRef<Partial<Record<FddEquipmentType, HTMLButtonElement | null>>>({});
+  const categoryTabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const algorithms = library?.algorithms ?? [];
   const checks = library?.checks ?? [];
   const tasks = library?.tasks ?? [];
@@ -4067,12 +4069,27 @@ function FddLibraryPanel({
     };
   });
   const activeEquipmentSection = equipmentSections.find((section) => section.id === activeEquipmentType) ?? equipmentSections[0]!;
+  const activeCategory = activeEquipmentSection.categories.find((category) => category.key === activeCategoryKey)
+    ?? activeEquipmentSection.categories[0];
+  const activeCategorySignature = activeEquipmentSection.categories.map((category) => category.key).join("|");
   const activeEquipmentAvailable = activeEquipmentSection?.availability?.status === "available";
   const activeEquipmentUnavailable = activeEquipmentSection?.availability?.status === "not_available";
   const activeEquipmentUnknown = !activeEquipmentAvailable && !activeEquipmentUnavailable;
   const categoryCount = new Set(curatedAlgorithms.map((algorithm) => algorithm.categoryKey)).size;
   const runtimeReadyCount = curatedAlgorithms.filter((algorithm) => algorithm.deployableRuntime).length;
   const specificationOnlyCount = curatedAlgorithms.length - runtimeReadyCount;
+  const availableEquipmentCount = equipmentSections.filter((section) => section.availability?.status === "available").length;
+  const deployableNowCount = curatedAlgorithms.filter((algorithm) => {
+    if (!algorithm.deployableRuntime) return false;
+    const targetAvailability = equipmentAvailability.get(algorithm.equipmentType);
+    return currentEquipmentFirstFddCheck(
+      checks,
+      algorithm,
+      library?.projectId,
+      library?.equipmentInventorySignature,
+      targetAvailability
+    )?.status === "can_deploy";
+  }).length;
   const selectedAlgorithm = curatedAlgorithms.find((algorithm) => algorithm.id === selectedAlgorithmId) ?? null;
   const selectedEquipmentAvailability = selectedAlgorithm ? equipmentAvailability.get(selectedAlgorithm.equipmentType) : undefined;
   const selectedEquipmentAvailable = selectedEquipmentAvailability?.status === "available";
@@ -4098,14 +4115,27 @@ function FddLibraryPanel({
     panelProjectRef.current = library.projectId;
     setQuery("");
     setSelectedAlgorithmId(null);
+    setActiveCategoryKey(null);
     const firstAvailable = equipmentOrder.find((equipmentType) => equipmentAvailability.get(equipmentType)?.status === "available");
     setActiveEquipmentType(firstAvailable ?? "chiller");
   }, [library?.projectId, library?.equipmentAvailability]);
 
+  useEffect(() => {
+    if (activeCategory && activeCategory.key === activeCategoryKey) return;
+    setActiveCategoryKey(activeCategory?.key ?? null);
+  }, [activeCategoryKey, activeCategorySignature, activeEquipmentType]);
+
   const activateEquipmentTab = (equipmentType: FddEquipmentType, moveFocus = false) => {
     setActiveEquipmentType(equipmentType);
+    setActiveCategoryKey(null);
     setSelectedAlgorithmId(null);
     if (moveFocus) equipmentTabRefs.current[equipmentType]?.focus();
+  };
+
+  const activateCategoryTab = (categoryKey: string, moveFocus = false) => {
+    setActiveCategoryKey(categoryKey);
+    setSelectedAlgorithmId(null);
+    if (moveFocus) categoryTabRefs.current[categoryKey]?.focus();
   };
 
   const handleEquipmentTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, equipmentType: FddEquipmentType) => {
@@ -4118,6 +4148,19 @@ function FddLibraryPanel({
     if (nextIndex === null) return;
     event.preventDefault();
     activateEquipmentTab(equipmentOrder[nextIndex]!, true);
+  };
+
+  const handleCategoryTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, categoryKey: string) => {
+    const categoryKeys = activeEquipmentSection.categories.map((category) => category.key);
+    const currentIndex = categoryKeys.indexOf(categoryKey);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % categoryKeys.length;
+    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + categoryKeys.length) % categoryKeys.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = categoryKeys.length - 1;
+    if (nextIndex === null || !categoryKeys[nextIndex]) return;
+    event.preventDefault();
+    activateCategoryTab(categoryKeys[nextIndex]!, true);
   };
 
   useEffect(() => {
@@ -4158,17 +4201,22 @@ function FddLibraryPanel({
         <div>
           <span>Curated rules</span>
           <strong>{curatedAlgorithms.length}</strong>
-          <small>6 equipment types</small>
+          <small>{categoryCount} fault categories</small>
         </div>
         <div>
-          <span>Categories</span>
-          <strong>{categoryCount}</strong>
-          <small>document fault groups</small>
+          <span>Equipment available</span>
+          <strong>{availableEquipmentCount} / {equipmentOrder.length}</strong>
+          <small>confirmed in this project</small>
         </div>
         <div>
-          <span>Runtime ready</span>
+          <span>Evaluators implemented</span>
           <strong>{runtimeReadyCount}</strong>
-          <small>executable evaluators registered</small>
+          <small>executable rules in this curated view</small>
+        </div>
+        <div>
+          <span>Deployable now</span>
+          <strong>{deployableNowCount}</strong>
+          <small>{library?.checksPending ? "project matching in progress" : "equipment and data checks passed"}</small>
         </div>
         <div>
           <span>Spec only</span>
@@ -4177,7 +4225,7 @@ function FddLibraryPanel({
         </div>
       </section>
 
-      <div className="fdd-equipment-nav fdd-category-nav" role="tablist" aria-label="FDD equipment">
+      <div className="fdd-equipment-nav fdd-equipment-tabs" role="tablist" aria-label="FDD equipment">
         {equipmentSections.map((section) => {
           const availability = section.availability;
           const presenceLabel = availability?.status === "available"
@@ -4265,13 +4313,51 @@ function FddLibraryPanel({
               {loading ? "Curated FDD rules will appear here as soon as they load." : "Change the search query or choose another equipment tab."}
             </EmptyState>
           ) : (
-            <div className="fdd-category-stack">
-              {activeEquipmentSection.categories.map((category) => (
-                <section className="fdd-category-section" id={`fdd-category-${activeEquipmentSection.id}-${category.key}`} key={category.key}>
+            <div className="fdd-category-browser">
+              <div className="fdd-fault-category-nav" role="tablist" aria-label={`${activeEquipmentSection.label} fault categories`}>
+                {activeEquipmentSection.categories.map((category) => (
+                  <button
+                    id={`fdd-category-tab-${activeEquipmentSection.id}-${category.key}`}
+                    className={activeCategory?.key === category.key ? "is-active" : undefined}
+                    key={category.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeCategory?.key === category.key}
+                    aria-controls={`fdd-category-panel-${activeEquipmentSection.id}-${category.key}`}
+                    tabIndex={activeCategory?.key === category.key ? 0 : -1}
+                    ref={(element) => {
+                      categoryTabRefs.current[category.key] = element;
+                    }}
+                    onKeyDown={(event) => handleCategoryTabKeyDown(event, category.key)}
+                    onClick={() => activateCategoryTab(category.key)}
+                  >
+                    <span>{category.label}</span>
+                    <small>{category.algorithms.length}</small>
+                  </button>
+                ))}
+              </div>
+              {activeEquipmentSection.categories
+                .filter((category) => category.key !== activeCategory?.key)
+                .map((category) => (
+                  <section
+                    key={category.key}
+                    id={`fdd-category-panel-${activeEquipmentSection.id}-${category.key}`}
+                    role="tabpanel"
+                    aria-labelledby={`fdd-category-tab-${activeEquipmentSection.id}-${category.key}`}
+                    hidden
+                  />
+                ))}
+              {activeCategory ? (
+                <section
+                  className="fdd-category-section"
+                  id={`fdd-category-panel-${activeEquipmentSection.id}-${activeCategory.key}`}
+                  role="tabpanel"
+                  aria-labelledby={`fdd-category-tab-${activeEquipmentSection.id}-${activeCategory.key}`}
+                >
                   <header className="fdd-category-header">
                     <div>
-                      <h4>{category.label}</h4>
-                      <p>{category.algorithms.length} algorithms</p>
+                      <h4>{activeCategory.label}</h4>
+                      <p>{activeCategory.algorithms.length} algorithms</p>
                     </div>
                   </header>
                   <div className="fdd-library-main">
@@ -4290,7 +4376,7 @@ function FddLibraryPanel({
                         </tr>
                       </thead>
                       <tbody>
-                        {category.algorithms.map((algorithm) => {
+                        {activeCategory.algorithms.map((algorithm) => {
                           const check = currentEquipmentFirstFddCheck(
                             checks,
                             algorithm,
@@ -4346,6 +4432,7 @@ function FddLibraryPanel({
                                 <div className="fdd-table-actions">
                                   <button type="button" title="Details" aria-label={`Open ${algorithm.name} details`} onClick={() => setSelectedAlgorithmId(algorithm.id)}>
                                     <Icon name="book-open" />
+                                    <span>Details</span>
                                   </button>
                                   <button
                                     type="button"
@@ -4355,10 +4442,12 @@ function FddLibraryPanel({
                                     onClick={() => onTestAlgorithm(algorithm.id)}
                                   >
                                     <Icon name="activity" />
+                                    <span>Check</span>
                                   </button>
                                   {deployedTask ? (
                                     <button type="button" title="Open deployed task" aria-label={`Open deployed ${algorithm.name} task`} onClick={() => onOpenTask(deployedTask.id)}>
                                       <Icon name="file-search" />
+                                      <span>Task</span>
                                     </button>
                                   ) : (
                                     <button
@@ -4369,6 +4458,7 @@ function FddLibraryPanel({
                                       onClick={() => onDeployAlgorithm(algorithm.id)}
                                     >
                                       <Icon name="zap" />
+                                      <span>Deploy</span>
                                     </button>
                                   )}
                                 </div>
@@ -4380,7 +4470,7 @@ function FddLibraryPanel({
                     </table>
                   </div>
                 </section>
-              ))}
+              ) : null}
             </div>
           )}
         </section>
