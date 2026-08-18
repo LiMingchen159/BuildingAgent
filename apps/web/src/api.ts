@@ -267,6 +267,8 @@ export type FddAlgorithmScope = "global_builtin" | "global_community";
 export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "vav" | "sensor";
 export type FddMethod = "rule_based" | "bayesian_network" | "performance_indicator" | "statistical";
 export type FddDeployabilityStatus = "can_deploy" | "uncertain" | "cannot_deploy";
+export type FddApplicability = "applicable" | "no_equipment" | "unknown";
+export type FddEquipmentAvailabilityStatus = "available" | "not_available" | "unknown";
 export type FddTaskStatus = "checking" | "ready" | "running" | "paused" | "cannot_deploy";
 export type FddTaskSource = "global_library" | "project_upload" | "buildinggpt_generated";
 export type FddSharingScope = "project_only" | "global_community";
@@ -404,6 +406,15 @@ export interface FddEntityDeployability {
   confidence: number;
 }
 
+export interface FddEquipmentAvailability {
+  equipmentType: FddEquipmentType;
+  status: FddEquipmentAvailabilityStatus;
+  entityCount: number;
+  entityKeys?: string[];
+  reason?: string;
+  evidenceSources?: string[];
+}
+
 export interface FddCheckAgentWorkflow {
   agentId: "buildinggpt";
   skillId: string;
@@ -431,6 +442,9 @@ export interface FddDeployabilityCheck {
   checkPolicyVersion?: string;
   projectId: string;
   status: FddDeployabilityStatus;
+  applicability?: FddApplicability;
+  equipmentAvailability?: FddEquipmentAvailability;
+  equipmentInventorySignature?: string;
   pointCandidates: FddPointCandidate[];
   exampleEntityKey?: string;
   selectedMappings?: FddPointMapping[];
@@ -464,6 +478,8 @@ export interface FddLibraryResponse {
   algorithms: FddAlgorithm[];
   checks: FddDeployabilityCheck[];
   tasks: ProjectFddTask[];
+  equipmentAvailability?: FddEquipmentAvailability[];
+  equipmentInventorySignature?: string;
   checksPending?: boolean;
   requestId: string;
 }
@@ -2206,6 +2222,33 @@ function parseFddAlgorithm(value: unknown): FddAlgorithm | null {
   };
 }
 
+function parseFddEquipmentAvailability(value: unknown): FddEquipmentAvailability | null {
+  if (!isRecord(value)
+    || (value.equipmentType !== "ahu" && value.equipmentType !== "chiller" && value.equipmentType !== "pump" && value.equipmentType !== "cooling_tower" && value.equipmentType !== "fcu" && value.equipmentType !== "vav" && value.equipmentType !== "sensor")
+    || (value.status !== "available" && value.status !== "not_available" && value.status !== "unknown")
+    || typeof value.entityCount !== "number"
+    || !Number.isInteger(value.entityCount)
+    || value.entityCount < 0) {
+    return null;
+  }
+  const entityKeys = Array.isArray(value.entityKeys)
+    ? value.entityKeys.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+  const evidenceSources = Array.isArray(value.evidenceSources)
+    ? value.evidenceSources.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+  if (Array.isArray(value.entityKeys) && entityKeys?.length !== value.entityKeys.length) return null;
+  if (Array.isArray(value.evidenceSources) && evidenceSources?.length !== value.evidenceSources.length) return null;
+  return {
+    equipmentType: value.equipmentType,
+    status: value.status,
+    entityCount: value.entityCount,
+    ...(entityKeys ? { entityKeys } : {}),
+    ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
+    ...(evidenceSources ? { evidenceSources } : {})
+  };
+}
+
 function parseFddPointCandidate(value: unknown): FddPointCandidate | null {
   if (!isRecord(value) || typeof value.slot !== "string" || typeof value.pointName !== "string" || typeof value.confidence !== "number" || typeof value.reason !== "string") return null;
   const unitCompatibility = value.unitCompatibility === "match" || value.unitCompatibility === "convertible" || value.unitCompatibility === "mismatch" || value.unitCompatibility === "unknown"
@@ -2321,12 +2364,20 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
   const deployableEntities = Array.isArray(value.deployableEntities)
     ? value.deployableEntities.map((entry) => parseFddEntityDeployability(entry)).filter((entry): entry is FddEntityDeployability => entry !== null)
     : undefined;
+  const equipmentAvailability = value.equipmentAvailability === undefined
+    ? undefined
+    : parseFddEquipmentAvailability(value.equipmentAvailability);
   const agentWorkflow = value.agentWorkflow === undefined ? undefined : parseFddCheckAgentWorkflow(value.agentWorkflow);
   if (pointCandidates.length !== value.pointCandidates.length) return null;
   if (Array.isArray(value.selectedMappings) && selectedMappings?.length !== value.selectedMappings.length) return null;
   if (Array.isArray(value.ambiguousInputs) && ambiguousInputs.length !== value.ambiguousInputs.length) return null;
   if (Array.isArray(value.rejectedCandidates) && rejectedCandidates.length !== value.rejectedCandidates.length) return null;
   if (Array.isArray(value.deployableEntities) && deployableEntities?.length !== value.deployableEntities.length) return null;
+  if (value.equipmentAvailability !== undefined && !equipmentAvailability) return null;
+  if (value.applicability !== undefined
+    && value.applicability !== "applicable"
+    && value.applicability !== "no_equipment"
+    && value.applicability !== "unknown") return null;
   if (value.agentWorkflow !== undefined && !agentWorkflow) return null;
   return {
     ...(typeof value.algorithmId === "string" ? { algorithmId: value.algorithmId } : {}),
@@ -2335,6 +2386,11 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
     ...(typeof value.checkPolicyVersion === "string" ? { checkPolicyVersion: value.checkPolicyVersion } : {}),
     projectId: value.projectId,
     status: value.status,
+    ...(value.applicability === "applicable" || value.applicability === "no_equipment" || value.applicability === "unknown"
+      ? { applicability: value.applicability }
+      : {}),
+    ...(equipmentAvailability ? { equipmentAvailability } : {}),
+    ...(typeof value.equipmentInventorySignature === "string" ? { equipmentInventorySignature: value.equipmentInventorySignature } : {}),
     pointCandidates,
     ...(typeof value.exampleEntityKey === "string" ? { exampleEntityKey: value.exampleEntityKey } : typeof value.selectedEntityKey === "string" ? { exampleEntityKey: value.selectedEntityKey } : {}),
     ...(selectedMappings ? { selectedMappings } : {}),
@@ -2643,7 +2699,13 @@ export async function getFddLibrary(token: string, projectId: string): Promise<F
   const algorithms = payload.algorithms.map((entry) => parseFddAlgorithm(entry));
   const checks = payload.checks.map((entry) => parseFddDeployabilityCheck(entry));
   const tasks = payload.tasks.map((entry) => parseProjectFddTask(entry));
-  if (algorithms.some((entry) => entry === null) || checks.some((entry) => entry === null) || tasks.some((entry) => entry === null)) {
+  const equipmentAvailability = Array.isArray(payload.equipmentAvailability)
+    ? payload.equipmentAvailability.map((entry) => parseFddEquipmentAvailability(entry))
+    : undefined;
+  if (algorithms.some((entry) => entry === null)
+    || checks.some((entry) => entry === null)
+    || tasks.some((entry) => entry === null)
+    || (equipmentAvailability?.some((entry) => entry === null) ?? false)) {
     throw malformed("FDD library returned an unexpected entry.");
   }
   return {
@@ -2651,6 +2713,8 @@ export async function getFddLibrary(token: string, projectId: string): Promise<F
     algorithms: algorithms as FddAlgorithm[],
     checks: checks as FddDeployabilityCheck[],
     tasks: tasks as ProjectFddTask[],
+    ...(equipmentAvailability ? { equipmentAvailability: equipmentAvailability as FddEquipmentAvailability[] } : {}),
+    ...(typeof payload.equipmentInventorySignature === "string" ? { equipmentInventorySignature: payload.equipmentInventorySignature } : {}),
     ...(typeof payload.checksPending === "boolean" ? { checksPending: payload.checksPending } : {}),
     requestId: payload.requestId
   };

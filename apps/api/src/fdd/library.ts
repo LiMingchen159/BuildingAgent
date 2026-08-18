@@ -6,6 +6,8 @@ export type FddAlgorithmScope = "global_builtin" | "global_community";
 export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "vav" | "sensor";
 export type FddMethod = "rule_based" | "bayesian_network" | "performance_indicator" | "statistical";
 export type FddDeployabilityStatus = "can_deploy" | "uncertain" | "cannot_deploy";
+export type FddApplicability = "applicable" | "no_equipment" | "unknown";
+export type FddEquipmentAvailabilityStatus = "available" | "not_available" | "unknown";
 export type FddTaskSource = "global_library" | "project_upload" | "buildinggpt_generated";
 export type FddSharingScope = "project_only" | "global_community";
 export type FddTaskStatus = "checking" | "ready" | "running" | "paused" | "cannot_deploy";
@@ -21,7 +23,16 @@ export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended"
 // Cached deployability checks are persisted in the project store. Bump this
 // contract whenever the evidence required for `can_deploy` changes so a check
 // produced by older, weaker validation cannot authorize a deployment.
-export const FDD_DEPLOYABILITY_POLICY_VERSION = "v2-observed-history";
+export const FDD_DEPLOYABILITY_POLICY_VERSION = "v3-equipment-first";
+
+export interface FddEquipmentAvailability {
+  equipmentType: FddEquipmentType;
+  status: FddEquipmentAvailabilityStatus;
+  entityCount: number;
+  entityKeys?: string[];
+  reason?: string;
+  evidenceSources?: string[];
+}
 
 export interface FddRequiredPoint {
   slot: string;
@@ -176,6 +187,9 @@ export interface FddDeployabilityCheck {
   checkPolicyVersion?: string;
   projectId: string;
   status: FddDeployabilityStatus;
+  applicability?: FddApplicability;
+  equipmentAvailability?: FddEquipmentAvailability;
+  equipmentInventorySignature?: string;
   pointCandidates: FddPointCandidate[];
   exampleEntityKey?: string;
   selectedMappings?: FddPointMapping[];
@@ -1173,6 +1187,9 @@ export function evaluateFddDeployability(input: {
   rejectedCandidates?: FddPointCandidate[];
   deployableEntities?: FddEntityDeployability[];
   historyIssues?: string[];
+  applicability?: FddApplicability;
+  equipmentAvailability?: FddEquipmentAvailability;
+  equipmentInventorySignature?: string;
   checkedAt?: string;
   projectTaskId?: string;
 }): FddDeployabilityCheck {
@@ -1182,6 +1199,29 @@ export function evaluateFddDeployability(input: {
   const selectedMappings: FddPointMapping[] = [];
   const ambiguousInputs: FddAmbiguousInput[] = [];
   let uncertain = false;
+
+  if (input.applicability === "no_equipment" || input.applicability === "unknown") {
+    return {
+      algorithmId: input.algorithm.id,
+      ...(input.projectTaskId ? { projectTaskId: input.projectTaskId } : {}),
+      algorithmVersion: input.algorithm.version,
+      checkPolicyVersion: FDD_DEPLOYABILITY_POLICY_VERSION,
+      projectId: input.projectId,
+      status: "cannot_deploy",
+      applicability: input.applicability,
+      ...(input.equipmentAvailability ? { equipmentAvailability: input.equipmentAvailability } : {}),
+      ...(input.equipmentInventorySignature ? { equipmentInventorySignature: input.equipmentInventorySignature } : {}),
+      pointCandidates: [],
+      deployableEntities: [],
+      ambiguousInputs: [],
+      rejectedCandidates: [],
+      missingPoints: [],
+      historyIssues,
+      checkedAt: input.checkedAt ?? new Date().toISOString(),
+      source: input.source,
+      projectDataSignature: input.projectDataSignature
+    };
+  }
 
   for (const point of required) {
     const candidates = sortFddPointCandidatesForRequiredPoint(
@@ -1194,7 +1234,7 @@ export function evaluateFddDeployability(input: {
       continue;
     }
     const closeAlternatives = fddAmbiguousAlternativesForPoint(point, best, candidates.slice(1));
-    if (closeAlternatives.length > 0 || best.confidence < 0.68) {
+    if (closeAlternatives.length > 0 || best.confidence < 0.68 || best.unitCompatibility === "unknown") {
       uncertain = true;
       ambiguousInputs.push({
         slot: point.slot,
@@ -1229,6 +1269,9 @@ export function evaluateFddDeployability(input: {
     checkPolicyVersion: FDD_DEPLOYABILITY_POLICY_VERSION,
     projectId: input.projectId,
     status,
+    ...(input.applicability ? { applicability: input.applicability } : {}),
+    ...(input.equipmentAvailability ? { equipmentAvailability: input.equipmentAvailability } : {}),
+    ...(input.equipmentInventorySignature ? { equipmentInventorySignature: input.equipmentInventorySignature } : {}),
     pointCandidates: input.pointCandidates,
     ...(input.exampleEntityKey ? { exampleEntityKey: input.exampleEntityKey } : {}),
     ...(selectedMappings.length > 0 ? { selectedMappings } : {}),

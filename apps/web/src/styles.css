@@ -9249,8 +9249,10 @@ p {
 
 .fdd-equipment-nav {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.5rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .fdd-category-nav {
@@ -9270,9 +9272,14 @@ p {
   font-weight: 650;
   gap: 0.45rem;
   padding: 0.55rem 0.85rem;
+  white-space: nowrap;
 }
 
-.fdd-equipment-nav button span {
+.fdd-equipment-nav button strong {
+  font-size: 0.82rem;
+}
+
+.fdd-equipment-nav .fdd-equipment-tab-count {
   background: #eef2ff;
   border-radius: 999px;
   color: #1d4ed8;
@@ -9280,18 +9287,43 @@ p {
   padding: 0.12rem 0.42rem;
 }
 
+.fdd-equipment-nav .fdd-equipment-tab-presence {
+  border-left: 1px solid rgba(148, 163, 184, 0.45);
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 750;
+  padding-left: 0.45rem;
+}
+
+.fdd-equipment-nav .fdd-equipment-tab-presence.is-available {
+  color: #15803d;
+}
+
+.fdd-equipment-nav .fdd-equipment-tab-presence.is-not_available {
+  color: #64748b;
+}
+
 .fdd-equipment-nav button:hover,
-.fdd-equipment-nav button:focus-visible {
+.fdd-equipment-nav button:focus-visible,
+.fdd-equipment-nav button.is-active {
   background: #0f172a;
   border-color: #0f172a;
   color: #ffffff;
   outline: none;
 }
 
-.fdd-equipment-nav button:hover span,
-.fdd-equipment-nav button:focus-visible span {
+.fdd-equipment-nav button:hover .fdd-equipment-tab-count,
+.fdd-equipment-nav button:focus-visible .fdd-equipment-tab-count,
+.fdd-equipment-nav button.is-active .fdd-equipment-tab-count {
   background: rgba(255, 255, 255, 0.16);
   color: #ffffff;
+}
+
+.fdd-equipment-nav button:hover .fdd-equipment-tab-presence,
+.fdd-equipment-nav button:focus-visible .fdd-equipment-tab-presence,
+.fdd-equipment-nav button.is-active .fdd-equipment-tab-presence {
+  border-left-color: rgba(255, 255, 255, 0.28);
+  color: #e2e8f0;
 }
 
 .fdd-library-sections {
@@ -9321,6 +9353,52 @@ p {
 .fdd-equipment-section-header p {
   color: #64748b;
   font-size: 0.78rem;
+  margin: 0;
+}
+
+.fdd-equipment-availability {
+  align-items: flex-start;
+  background: #f8fafc;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 0.55rem;
+  color: #475569;
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+}
+
+.fdd-equipment-availability-icon {
+  align-items: center;
+  background: #e2e8f0;
+  border-radius: 999px;
+  color: #475569;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.65rem;
+  justify-content: center;
+  width: 1.65rem;
+}
+
+.fdd-equipment-availability-icon svg {
+  height: 0.9rem;
+  width: 0.9rem;
+}
+
+.fdd-equipment-availability div {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.fdd-equipment-availability strong {
+  color: #0f172a;
+  font-size: 0.84rem;
+}
+
+.fdd-equipment-availability p,
+.fdd-equipment-availability small {
+  color: #64748b;
+  font-size: 0.76rem;
+  line-height: 1.45;
   margin: 0;
 }
 
@@ -9397,6 +9475,15 @@ p {
 
 .fdd-library-table tr.is-deployed:hover td {
   background: #ecfdf5;
+}
+
+.fdd-library-table tr.is-not-applicable td {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.fdd-library-table tr.is-not-applicable:hover td {
+  background: #f1f5f9;
 }
 
 .fdd-library-table tr:last-child td {
@@ -9545,6 +9632,13 @@ p {
   font-size: 0.8rem;
   line-height: 1.5;
   margin: 0;
+}
+
+.fdd-detail-not-applicable {
+  background: #f8fafc;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 0.55rem;
+  padding: 0.65rem 0.75rem;
 }
 
 .fdd-formula-markdown {

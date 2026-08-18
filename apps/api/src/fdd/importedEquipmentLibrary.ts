@@ -8,6 +8,11 @@ import type {
   FddRequiredPoint
 } from "./library.js";
 import { IMPORTED_EQUIPMENT_FDD_CATALOG, type ImportedEquipmentFddRule } from "./importedEquipmentCatalog.js";
+import {
+  importedEquipmentCategoryDisplayLabel,
+  importedEquipmentRuleDisplayName,
+  importedEquipmentSourceDescription
+} from "./importedEquipmentEnglish.js";
 
 const IMPORTED_EQUIPMENT_LIBRARY_VERSION = "v1";
 
@@ -163,9 +168,7 @@ function sourceForRule(rule: ImportedEquipmentFddRule) {
 }
 
 function sourceDescription(rule: ImportedEquipmentFddRule, symbol: string): string | undefined {
-  const source = sourceForRule(rule);
-  const compact = compactSymbol(symbol);
-  return source?.variables.find((variable) => compactSymbol(variable.symbol) === compact)?.description;
+  return importedEquipmentSourceDescription(rule.equipmentType, symbol);
 }
 
 function splitTopLevelCommas(value: string): string[] {
@@ -343,10 +346,10 @@ function importedRequiredPoint(rule: ImportedEquipmentFddRule, symbols: string[]
 }
 
 function categoryForRule(rule: ImportedEquipmentFddRule): { key: string; label: string } {
-  const label = rule.category || (rule.id === "PMP-17" ? "传感器" : "未分类");
+  const sourceLabel = rule.category || (rule.id === "PMP-17" ? "传感器" : "未分类");
   return {
-    key: CATEGORY_KEYS[rule.equipmentType][label] ?? `${rule.equipmentType}-Uncategorized`,
-    label
+    key: CATEGORY_KEYS[rule.equipmentType][sourceLabel] ?? `${rule.equipmentType}-Uncategorized`,
+    label: importedEquipmentCategoryDisplayLabel(rule)
   };
 }
 
@@ -412,7 +415,7 @@ function importedEquipmentAlgorithm(rule: ImportedEquipmentFddRule): FddAlgorith
     scope: "global_builtin",
     algorithmKey,
     version,
-    name: `${rule.id} ${rule.name}`,
+    name: `${rule.id} ${importedEquipmentRuleDisplayName(rule.id)}`,
     equipmentType: rule.equipmentType,
     faultType: category.label,
     method: "rule_based",

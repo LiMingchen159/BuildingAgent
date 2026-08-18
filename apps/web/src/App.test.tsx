@@ -2,8 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
-import type { DashboardRecord } from "./api";
+import App, { isCurrentEquipmentFirstFddCheck } from "./App";
+import type { DashboardRecord, FddAlgorithm, FddDeployabilityCheck, FddEquipmentAvailability } from "./api";
 import { DashboardView } from "./ui/DashboardView";
 
 beforeEach(() => {
@@ -328,6 +328,118 @@ afterEach(async () => {
   window.localStorage.clear();
   window.sessionStorage.clear();
   window.history.replaceState({}, "", "/");
+});
+
+describe("equipment-first FDD check guard", () => {
+  const nowMs = Date.parse("2026-08-18T08:00:00.000Z");
+  const requiredPoint = (slot: string, label: string, semantic: string): FddAlgorithm["requiredPoints"][number] => ({
+    slot,
+    label,
+    semantic,
+    required: true,
+    quantityKind: "power",
+    unitRoleDescription: "Project data input"
+  });
+  const algorithm = {
+    id: "fddalg_chiller_ch_01",
+    version: "3.0.0",
+    equipmentType: "chiller",
+    requiredPoints: [requiredPoint("chiller_power", "Chiller power", "Chiller electrical power")]
+  } satisfies Pick<FddAlgorithm, "id" | "version" | "equipmentType" | "requiredPoints">;
+  const available: FddEquipmentAvailability = {
+    equipmentType: "chiller",
+    status: "available",
+    entityCount: 2,
+    entityKeys: ["CH1", "CH2"]
+  };
+  const currentCheck = (overrides: Partial<FddDeployabilityCheck> = {}): FddDeployabilityCheck => ({
+    algorithmId: algorithm.id,
+    algorithmVersion: algorithm.version,
+    checkPolicyVersion: "v3-equipment-first",
+    projectId: "project_alpha",
+    status: "can_deploy",
+    applicability: "applicable",
+    equipmentAvailability: available,
+    equipmentInventorySignature: "inventory-current",
+    pointCandidates: [],
+    ambiguousInputs: [],
+    rejectedCandidates: [],
+    missingPoints: [],
+    historyIssues: [],
+    checkedAt: "2026-08-18T07:00:00.000Z",
+    source: "auto",
+    projectDataSignature: "project-data-current",
+    ...overrides
+  });
+  const accepted = (
+    check: FddDeployabilityCheck | undefined,
+    inventorySignature: string | undefined = "inventory-current",
+    targetAvailability: FddEquipmentAvailability | undefined = available
+  ) => isCurrentEquipmentFirstFddCheck(
+    check,
+    algorithm,
+    "project_alpha",
+    inventorySignature,
+    targetAvailability,
+    nowMs
+  );
+
+  it("accepts only a fresh v3 check for the current authoritative inventory", () => {
+    expect(accepted(currentCheck())).toBe(true);
+    expect(accepted(currentCheck({ checkPolicyVersion: "v2-observed-history" }))).toBe(false);
+    expect(accepted(currentCheck({ checkedAt: "2026-08-17T07:59:59.999Z" }))).toBe(false);
+    expect(accepted(currentCheck(), "inventory-replaced")).toBe(false);
+    expect(isCurrentEquipmentFirstFddCheck(currentCheck(), algorithm, "project_alpha", undefined, available, nowMs)).toBe(false);
+  });
+
+  it("fails closed when the saved or current equipment state is absent or unknown", () => {
+    const absent: FddEquipmentAvailability = {
+      equipmentType: "chiller",
+      status: "not_available",
+      entityCount: 0,
+      entityKeys: []
+    };
+    const unknown: FddEquipmentAvailability = {
+      equipmentType: "chiller",
+      status: "unknown",
+      entityCount: 0,
+      entityKeys: []
+    };
+
+    expect(accepted(currentCheck({ applicability: "no_equipment", equipmentAvailability: absent }))).toBe(false);
+    expect(accepted(currentCheck({ applicability: "unknown", equipmentAvailability: unknown }))).toBe(false);
+    expect(accepted(currentCheck(), "inventory-current", absent)).toBe(false);
+    expect(accepted(currentCheck(), "inventory-current", unknown)).toBe(false);
+  });
+
+  it("maps sensor algorithms to the same physical target equipment as the backend", () => {
+    const chillerSensorAlgorithm = {
+      ...algorithm,
+      id: "fddalg_chiller_sensor_bias",
+      equipmentType: "sensor" as const,
+      requiredPoints: [requiredPoint("chw_supply_temperature", "CHW supply temperature", "Chilled water temperature sensor")]
+    };
+    const pumpSensorAlgorithm = {
+      ...algorithm,
+      id: "fddalg_pump_sensor_bias",
+      equipmentType: "sensor" as const,
+      requiredPoints: [requiredPoint("pump_discharge_pressure", "Pump discharge pressure", "Pump pressure sensor")]
+    };
+    const pumpAvailability: FddEquipmentAvailability = {
+      equipmentType: "pump",
+      status: "available",
+      entityCount: 1,
+      entityKeys: ["P1"]
+    };
+    const sensorCheck = (targetAlgorithm: typeof chillerSensorAlgorithm, availability: FddEquipmentAvailability) => currentCheck({
+      algorithmId: targetAlgorithm.id,
+      equipmentAvailability: availability
+    });
+
+    expect(isCurrentEquipmentFirstFddCheck(sensorCheck(chillerSensorAlgorithm, available), chillerSensorAlgorithm, "project_alpha", "inventory-current", available, nowMs)).toBe(true);
+    expect(isCurrentEquipmentFirstFddCheck(sensorCheck(pumpSensorAlgorithm, pumpAvailability), pumpSensorAlgorithm, "project_alpha", "inventory-current", pumpAvailability, nowMs)).toBe(true);
+    expect(isCurrentEquipmentFirstFddCheck(sensorCheck(chillerSensorAlgorithm, available), { ...chillerSensorAlgorithm, requiredPoints: [requiredPoint("temperature", "Temperature", "Generic sensor")] }, "project_alpha", "inventory-current", available, nowMs)).toBe(false);
+  });
 });
 
 describe("BuildingGPT Web flow", () => {
@@ -1506,6 +1618,7 @@ describe("BuildingGPT Web flow", () => {
   it("shows curated FDD rules across six equipment types and blocks spec-only deployment", async () => {
     const project = alphaProject;
     const now = "2026-08-11T00:00:00.000Z";
+    const equipmentInventorySignature = "inventory-facts-v3-test";
     const fddAlgorithm = (algorithmKey: string, name: string, equipmentType = "chiller", sourcePaperId?: string, deployableRuntime = true) => ({
       id: `fddalg_${algorithmKey}`,
       scope: "global_builtin",
@@ -1537,11 +1650,11 @@ describe("BuildingGPT Web flow", () => {
     const ch51 = fddAlgorithm("chiller_ch_51_heat_balance_sensor_consistency", "CH-51 Heat Balance Sensor Consistency Fault");
     const oldChiller = fddAlgorithm("chiller_low_cop_detection", "Chiller Low COP Detection");
     const oldAhu = fddAlgorithm("ahu_supply_air_flow_sensor_fault", "AHU Supply Air Flow Sensor Fault", "ahu");
-    const ahu01 = fddAlgorithm("ahu_fdd_01", "AHU-01 AHU启动失败", "ahu", "docx:AHU_FDD_Library.docx:sha", false);
-    const vav01 = fddAlgorithm("vav_fdd_01", "VAV-01 区域温度过高", "vav", "docx:VAV_Box_FDD_Library.docx:sha", false);
-    const fcu01 = fddAlgorithm("fcu_fdd_01", "FCU-01 FCU有命令但未运行", "fcu", "docx:FCU_FDD_Library.docx:sha", false);
-    const pump01 = fddAlgorithm("pump_fdd_01", "PMP-01 水泵有命令但未运行", "pump", "docx:Pump_FDD_Library.docx:sha", false);
-    const ct01 = fddAlgorithm("cooling_tower_fdd_01", "CT-01 冷却塔有命令但未运行", "cooling_tower", "docx:Cooling_Tower_FDD_Library.docx:sha", false);
+    const ahu01 = fddAlgorithm("ahu_fdd_01", "AHU-01 AHU Start Failure", "ahu", "docx:AHU_FDD_Library.docx:sha", false);
+    const vav01 = fddAlgorithm("vav_fdd_01", "VAV-01 High Zone Temperature", "vav", "docx:VAV_Box_FDD_Library.docx:sha", false);
+    const fcu01 = fddAlgorithm("fcu_fdd_01", "FCU-01 FCU Fails to Run on Command", "fcu", "docx:FCU_FDD_Library.docx:sha", false);
+    const pump01 = fddAlgorithm("pump_fdd_01", "PMP-01 Pump Fails to Run on Command", "pump", "docx:Pump_FDD_Library.docx:sha", false);
+    const ct01 = fddAlgorithm("cooling_tower_fdd_01", "CT-01 Cooling Tower Fails to Run on Command", "cooling_tower", "docx:Cooling_Tower_FDD_Library.docx:sha", false);
     const oldTask = {
       id: "fddtask_old",
       projectId: project.id,
@@ -1591,7 +1704,33 @@ describe("BuildingGPT Web flow", () => {
         return jsonResponse({
           projectId: project.id,
           algorithms: [oldAhu, oldChiller, ct01, pump01, fcu01, vav01, ahu01, ch51, ch01],
-          checks: [],
+          equipmentAvailability: [
+            { equipmentType: "chiller", status: "available", entityCount: 6, entityKeys: ["CH1", "CH2", "CH3", "CH4", "CH5", "CH6"] },
+            { equipmentType: "ahu", status: "not_available", entityCount: 0, reason: "No AHU entities were found in the project model." },
+            { equipmentType: "vav", status: "unknown", entityCount: 0, reason: "The authoritative equipment inventory has not loaded." },
+            { equipmentType: "fcu", status: "not_available", entityCount: 0 },
+            { equipmentType: "pump", status: "not_available", entityCount: 0 },
+            { equipmentType: "cooling_tower", status: "not_available", entityCount: 0 }
+          ],
+          equipmentInventorySignature,
+          checks: [{
+            algorithmId: ch01.id,
+            algorithmVersion: ch01.version,
+            checkPolicyVersion: "v2-observed-history",
+            projectId: project.id,
+            status: "can_deploy",
+            applicability: "applicable",
+            equipmentAvailability: { equipmentType: "chiller", status: "available", entityCount: 6, entityKeys: ["CH1", "CH2", "CH3", "CH4", "CH5", "CH6"] },
+            equipmentInventorySignature,
+            pointCandidates: [],
+            ambiguousInputs: [],
+            rejectedCandidates: [],
+            missingPoints: [],
+            historyIssues: [],
+            checkedAt: now,
+            source: "auto",
+            projectDataSignature: "project-data-signature"
+          }],
           tasks: [oldTask],
           requestId: "req_fdd_library"
         });
@@ -1606,12 +1745,41 @@ describe("BuildingGPT Web flow", () => {
 
     expect((await screen.findAllByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i })).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /AHU-01 AHU启动失败/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /VAV-01 区域温度过高/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /FCU-01 FCU有命令但未运行/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /PMP-01 水泵有命令但未运行/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: /CT-01 冷却塔有命令但未运行/i }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Deploy VAV-01 区域温度过高/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /AHU-01 AHU Start Failure/i })).not.toBeInTheDocument();
+    const equipmentTabs = screen.getAllByRole("tab");
+    expect(equipmentTabs).toHaveLength(6);
+    expect(screen.getByRole("tab", { name: /Chiller/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("6 assets detected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Deploy CH-01 Commanded Chiller Fails to Start/i })).toBeDisabled();
+    const chillerTab = screen.getByRole("tab", { name: /Chiller/i });
+    chillerTab.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: /^AHU/i })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: /^AHU/i })).toHaveAttribute("aria-selected", "true");
+    for (const tab of equipmentTabs) {
+      expect(document.getElementById(tab.getAttribute("aria-controls")!)).not.toBeNull();
+    }
+
+    await user.click(screen.getByRole("tab", { name: /Pump/i }));
+    expect(screen.getByRole("tab", { name: /Pump/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByText("No equipment in this project").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /PMP-01 Pump Fails to Run on Command/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Test PMP-01 Pump Fails to Run on Command with project data/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Deploy PMP-01 Pump Fails to Run on Command/i })).toBeDisabled();
+    expect(screen.getAllByText("Not applicable").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("tab", { name: /Cooling Tower/i }));
+    expect(screen.getAllByRole("button", { name: /CT-01 Cooling Tower Fails to Run on Command/i }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("tab", { name: /AHU/i }));
+    expect(screen.getAllByRole("button", { name: /AHU-01 AHU Start Failure/i }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("tab", { name: /FCU/i }));
+    expect(screen.getAllByRole("button", { name: /FCU-01 FCU Fails to Run on Command/i }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("tab", { name: /VAV/i }));
+    expect(screen.getAllByRole("button", { name: /VAV-01 High Zone Temperature/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Deploy VAV-01 High Zone Temperature/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Test VAV-01 High Zone Temperature with project data/i })).toBeDisabled();
+    expect(screen.getAllByText("Equipment availability unknown").length).toBeGreaterThan(0);
+    expect(screen.getByText("The authoritative equipment inventory has not loaded.")).toBeInTheDocument();
     expect(screen.getByText("FDD Algorithm Library")).toBeInTheDocument();
     expect(screen.queryByText("Chiller Low COP Detection")).not.toBeInTheDocument();
     expect(screen.queryByText("AHU Supply Air Flow Sensor Fault")).not.toBeInTheDocument();

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DerivedMetricStore } from "./derivedMetrics.js";
@@ -11,6 +11,26 @@ const adaToken = "seed-token-ada";
 
 function bearer(value = adaToken) {
   return { authorization: `Bearer ${value}` };
+}
+
+function writeEquipmentInventoryFixture(
+  dataDir: string,
+  projectId: string,
+  equipment: Array<{ prefix: string; brickClass: string; count: number }>
+): void {
+  const kbDir = path.join(dataDir, projectId, "kb");
+  mkdirSync(kbDir, { recursive: true });
+  writeFileSync(path.join(kbDir, "KB_CATALOG_SUMMARY.md"), "# Test catalog\n\n## Full equipment inventory\n", "utf8");
+  const ttl = [
+    "@prefix brick: <https://brickschema.org/schema/Brick#> .",
+    "@prefix test: <urn:test#> .",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+    ...equipment.flatMap(({ prefix, brickClass, count }) => Array.from({ length: count }, (_, index) => {
+      const suffix = String(index + 1).padStart(2, "0");
+      return `test:${prefix}_${suffix} a brick:${brickClass} ;\n    rdfs:label \"${prefix} ${index + 1}\" .`;
+    }))
+  ].join("\n\n");
+  writeFileSync(path.join(kbDir, "brick_model.ttl"), ttl, "utf8");
 }
 
 describe("BMS API contract", () => {
@@ -317,6 +337,78 @@ describe("BMS API contract", () => {
     )).toBe(true);
   });
 
+  it("uses Brick equipment facts before algorithm matching for WKGO and Element", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-equipment-inventory-"));
+    writeEquipmentInventoryFixture(dataDir, "project_msxh8iar_dfs1hk", [{ prefix: "WKGO_CHILLER", brickClass: "Chiller", count: 6 }]);
+    writeEquipmentInventoryFixture(dataDir, "project_element", [
+      { prefix: "WCC", brickClass: "Water_Cooled_Chiller", count: 8 },
+      { prefix: "CHP", brickClass: "Chilled_Water_Pump", count: 10 },
+      { prefix: "SWP", brickClass: "Water_Pump", count: 5 }
+    ]);
+    const incompleteKbDir = path.join(dataDir, "project_incomplete_inventory", "kb");
+    mkdirSync(incompleteKbDir, { recursive: true });
+    writeFileSync(path.join(incompleteKbDir, "KB_CATALOG_SUMMARY.md"), "# Test catalog\n\n## Full equipment inventory\n", "utf8");
+    const store = createSeedStore();
+    const wkgoProjectId = "project_msxh8iar_dfs1hk";
+    store.projects.push({ id: wkgoProjectId, name: "WKGO" });
+    store.memberships.push({ userId: "user_ada", projectId: wkgoProjectId, permissions: ["chat:read", "chat:write"] });
+    store.projects.push({ id: "project_incomplete_inventory", name: "Incomplete Inventory" });
+    store.memberships.push({ userId: "user_ada", projectId: "project_incomplete_inventory", permissions: ["chat:read", "chat:write"] });
+    store.knowledgeBaseByProject[wkgoProjectId] = [];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ total: 0, items: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    const app = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: { BUILDING_AGENT_DATA_DIR: dataDir, DERIVED_METRIC_MATERIALIZER_DISABLED: "1" }
+    });
+
+    await app.inject({ method: "POST", url: `/api/projects/${wkgoProjectId}/select`, headers: bearer() });
+    const wkgoLibrary = await app.inject({ method: "GET", url: `/api/projects/${wkgoProjectId}/fdd-library`, headers: bearer() });
+    expect(wkgoLibrary.statusCode).toBe(200);
+    expect(wkgoLibrary.json().equipmentAvailability).toEqual([
+      expect.objectContaining({ equipmentType: "chiller", status: "available", entityCount: 6 }),
+      expect.objectContaining({ equipmentType: "pump", status: "not_available", entityCount: 0 }),
+      expect.objectContaining({ equipmentType: "cooling_tower", status: "not_available", entityCount: 0 }),
+      expect.objectContaining({ equipmentType: "ahu", status: "not_available", entityCount: 0 }),
+      expect.objectContaining({ equipmentType: "fcu", status: "not_available", entityCount: 0 }),
+      expect.objectContaining({ equipmentType: "vav", status: "not_available", entityCount: 0 })
+    ]);
+    const pumpAlgorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "pump_fdd_01");
+    expect(pumpAlgorithm).toBeTruthy();
+    if (!pumpAlgorithm) return;
+    const pumpCheck = await app.inject({
+      method: "POST",
+      url: `/api/projects/${wkgoProjectId}/fdd-library/${pumpAlgorithm.id}/test`,
+      headers: bearer()
+    });
+    expect(pumpCheck.json().check).toMatchObject({
+      status: "cannot_deploy",
+      applicability: "no_equipment",
+      pointCandidates: [],
+      missingPoints: [],
+      equipmentAvailability: { equipmentType: "pump", status: "not_available", entityCount: 0 }
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer() });
+    const elementLibrary = await app.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers: bearer() });
+    expect(elementLibrary.json().equipmentAvailability).toEqual(expect.arrayContaining([
+      expect.objectContaining({ equipmentType: "chiller", status: "available", entityCount: 8 }),
+      expect.objectContaining({ equipmentType: "pump", status: "available", entityCount: 15 })
+    ]));
+
+    await app.inject({ method: "POST", url: "/api/projects/project_incomplete_inventory/select", headers: bearer() });
+    const incompleteLibrary = await app.inject({ method: "GET", url: "/api/projects/project_incomplete_inventory/fdd-library", headers: bearer() });
+    expect(incompleteLibrary.json().equipmentAvailability).toEqual(expect.arrayContaining([
+      expect.objectContaining({ equipmentType: "chiller", status: "unknown", entityCount: 0 }),
+      expect.objectContaining({ equipmentType: "pump", status: "unknown", entityCount: 0 })
+    ]));
+    await app.close();
+  });
+
   it("allows catalog checks but rejects deployment for specification-only DOCX algorithms", async () => {
     const store = createSeedStore();
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ total: 0, items: [] }), {
@@ -407,16 +499,16 @@ describe("BMS API contract", () => {
     });
     expect(checked.statusCode).toBe(200);
     expect(checked.json().task.status).toBe("cannot_deploy");
-    expect(checked.json().task.deployabilityCheck.pointCandidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ pointName: "VAV_01_Zone_Temperature", historyDays: expect.any(Number) })
-    ]));
-    expect(checked.json().task.deployabilityCheck.historyIssues).not.toContain(expect.stringContaining("history coverage is unverified"));
+    expect(checked.json().task.deployabilityCheck).toMatchObject({
+      applicability: "no_equipment",
+      equipmentAvailability: { equipmentType: "vav", status: "not_available", entityCount: 0 },
+      pointCandidates: [],
+      missingPoints: []
+    });
     const historyProbeUrls = fetchMock.mock.calls
       .map((call) => String(call[0]))
       .filter((href) => href.includes("/api/v1/readings?"));
-    expect(historyProbeUrls.length).toBeGreaterThanOrEqual(2);
-    expect(historyProbeUrls.every((href) => new URL(href).searchParams.get("order") === "desc")).toBe(true);
-    expect(historyProbeUrls.some((href) => new URL(href).searchParams.has("to"))).toBe(true);
+    expect(historyProbeUrls).toEqual([]);
 
     const deployed = await app.inject({
       method: "POST",
@@ -452,7 +544,7 @@ describe("BMS API contract", () => {
     expect(checked.statusCode).toBe(200);
     expect(checked.json().check).toMatchObject({
       status: "cannot_deploy",
-      checkPolicyVersion: "v2-observed-history"
+      checkPolicyVersion: "v3-equipment-first"
     });
 
     const legacyCheck = store.fddChecksByProject?.project_element?.[0];
@@ -474,7 +566,7 @@ describe("BMS API contract", () => {
     expect(store.fddChecksByProject?.project_element?.[0]).not.toBe(legacyCheck);
     expect(store.fddChecksByProject?.project_element?.[0]).toMatchObject({
       status: "cannot_deploy",
-      checkPolicyVersion: "v2-observed-history"
+      checkPolicyVersion: "v3-equipment-first"
     });
 
     const staleCheck = store.fddChecksByProject?.project_element?.[0];
@@ -494,7 +586,7 @@ describe("BMS API contract", () => {
     expect(store.fddChecksByProject?.project_element?.[0]?.checkedAt).not.toBe("2026-01-01T00:00:00.000Z");
   });
 
-  it("pauses legacy running FDD materializations until policy-v2 revalidation", async () => {
+  it("pauses legacy running FDD materializations until equipment-first revalidation", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-policy-migration-"));
     const env = {
       BUILDING_AGENT_DATA_DIR: dataDir,
@@ -579,8 +671,11 @@ describe("BMS API contract", () => {
     await app.close();
   });
 
-  it("keeps a current policy-v2 FDD authorization across source reconstruction", async () => {
+  it("keeps a current equipment-first FDD authorization across source reconstruction", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-policy-restart-"));
+    writeEquipmentInventoryFixture(dataDir, "project_element", [
+      { prefix: "WCC", brickClass: "Water_Cooled_Chiller", count: 1 }
+    ]);
     const env = {
       BUILDING_AGENT_DATA_DIR: dataDir,
       DERIVED_METRIC_MATERIALIZER_DISABLED: "1",
@@ -602,15 +697,18 @@ describe("BMS API contract", () => {
       headers: bearer()
     });
     const check = store.fddChecksByProject?.project_element?.[0];
-    expect(check?.checkPolicyVersion).toBe("v2-observed-history");
+    expect(check?.checkPolicyVersion).toBe("v3-equipment-first");
     if (!check) return;
     check.status = "can_deploy";
     check.missingPoints = [];
     check.historyIssues = [];
+    const selectedMappings = algorithm.requiredPoints
+      .filter((point) => point.required)
+      .map((point) => ({ slot: point.slot, pointName: `CHILLER_01_${point.slot}` }));
     check.deployableEntities = [{
       entityKey: "CHILLER_01",
       status: "can_deploy",
-      selectedMappings: [],
+      selectedMappings,
       ambiguousInputs: [],
       missingPoints: [],
       historyIssues: [],
@@ -651,26 +749,46 @@ describe("BMS API contract", () => {
 
   it("defers source-signature invalidation while a post-start source is absent", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-policy-bootstrap-"));
+    writeEquipmentInventoryFixture(dataDir, "project_alpha", [
+      { prefix: "CHILLER", brickClass: "Chiller", count: 1 }
+    ]);
     const env = {
       BUILDING_AGENT_DATA_DIR: dataDir,
       DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
     };
     const store = createSeedStore();
-    ensureStoreFddLibrary(store);
+    const fixtureApp = buildServer({ store, env });
+    await fixtureApp.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer() });
     const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_low_cop_detection");
     expect(algorithm).toBeTruthy();
     if (!algorithm) return;
-    const check = evaluateFddDeployability({
-      algorithm,
-      projectId: "project_alpha",
-      source: "auto",
-      projectDataSignature: "signature-from-restored-source",
-      pointCandidates: [],
-      deployableEntities: []
+    await fixtureApp.inject({
+      method: "POST",
+      url: `/api/projects/project_alpha/fdd-library/${algorithm.id}/test`,
+      headers: bearer()
     });
+    const check = store.fddChecksByProject?.project_alpha?.[0];
+    expect(check?.applicability).toBe("applicable");
+    expect(check?.equipmentAvailability?.status).toBe("available");
+    expect(check?.equipmentInventorySignature).toBeTruthy();
+    if (!check) return;
+    await fixtureApp.close();
+    check.projectDataSignature = "signature-from-restored-source";
     check.status = "can_deploy";
     check.missingPoints = [];
     check.historyIssues = [];
+    const selectedMappings = algorithm.requiredPoints
+      .filter((point) => point.required)
+      .map((point) => ({ slot: point.slot, pointName: `CHILLER_01_${point.slot}` }));
+    check.deployableEntities = [{
+      entityKey: "CHILLER_01",
+      status: "can_deploy",
+      selectedMappings,
+      ambiguousInputs: [],
+      missingPoints: [],
+      historyIssues: [],
+      confidence: 1
+    }];
     const task: ProjectFddTask = {
       id: "fddtask_source_bootstrap",
       projectId: "project_alpha",
@@ -702,6 +820,103 @@ describe("BMS API contract", () => {
     expect(new DerivedMetricStore(dataDir).readMaterialization(instance.instanceId)?.enabled).toBe(true);
     await app.close();
   });
+
+  it("disables a specification-only FDD materialization after it is manually re-enabled", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-spec-materializer-"));
+    writeEquipmentInventoryFixture(dataDir, "project_element", [
+      { prefix: "VAV", brickClass: "VAV", count: 1 }
+    ]);
+    const disabledEnv = {
+      BUILDING_AGENT_DATA_DIR: dataDir,
+      DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+    };
+    const store = createSeedStore();
+    const fixtureApp = buildServer({ store, env: disabledEnv });
+    await fixtureApp.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer() });
+    const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "vav_fdd_01");
+    expect(algorithm).toMatchObject({ deployableRuntime: false });
+    if (!algorithm) return;
+    await fixtureApp.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers: bearer()
+    });
+    const check = store.fddChecksByProject?.project_element?.find((entry) => entry.algorithmId === algorithm.id);
+    expect(check?.applicability).toBe("applicable");
+    expect(check?.equipmentAvailability?.status).toBe("available");
+    if (!check) return;
+    const selectedMappings = algorithm.requiredPoints
+      .filter((point) => point.required)
+      .map((point) => ({ slot: point.slot, pointName: `VAV_01_${point.slot}` }));
+    check.status = "can_deploy";
+    check.missingPoints = [];
+    check.historyIssues = [];
+    check.ambiguousInputs = [];
+    check.exampleEntityKey = "VAV_01";
+    check.selectedMappings = selectedMappings;
+    check.deployableEntities = [{
+      entityKey: "VAV_01",
+      status: "can_deploy",
+      selectedMappings,
+      ambiguousInputs: [],
+      missingPoints: [],
+      historyIssues: [],
+      confidence: 1
+    }];
+    const task: ProjectFddTask = {
+      id: "fddtask_spec_only_materializer",
+      projectId: "project_element",
+      source: "global_library",
+      sharingScope: "global_community",
+      globalAlgorithmId: algorithm.id,
+      algorithmSnapshot: { ...algorithm },
+      status: "cannot_deploy",
+      deployabilityCheck: check,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    store.fddTasksByProject ??= {};
+    store.fddTasksByProject.project_element = [task];
+    const metrics = new DerivedMetricStore(dataDir);
+    const instance = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: algorithm.algorithmKey,
+      entityId: "VAV_01",
+      metricType: "fdd",
+      formula: algorithm.formula,
+      metadata: { fddTaskId: task.id, fddAlgorithmId: algorithm.id },
+      dependencies: selectedMappings.map((mapping) => ({
+        role: mapping.slot,
+        sourceId: mapping.pointName,
+        pointName: mapping.pointName
+      }))
+    }).instance;
+    metrics.configureMaterialization({ instanceId: instance.instanceId, enabled: true, formulaKind: "fdd_rule" });
+    await fixtureApp.close();
+
+    const app = buildServer({ store, env: { BUILDING_AGENT_DATA_DIR: dataDir } });
+    expect(metrics.readMaterialization(instance.instanceId)?.enabled).toBe(false);
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer() });
+    const enabled = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/project_element/derived-metrics/${instance.instanceId}/materialization`,
+      headers: bearer(),
+      payload: { enabled: true }
+    });
+    expect(enabled.statusCode).toBe(200);
+    expect(enabled.json().metric.materialization.enabled).toBe(true);
+
+    const deadline = Date.now() + 7_000;
+    while (metrics.readMaterialization(instance.instanceId)?.enabled && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(metrics.readMaterialization(instance.instanceId)).toMatchObject({
+      enabled: false,
+      status: "authorization_required",
+      lastError: "fdd_equipment_inventory_revalidation_required"
+    });
+    await app.close();
+  }, 10_000);
 
   it("rejects dashboard history batches over 32 queries", async () => {
     const app = buildServer();

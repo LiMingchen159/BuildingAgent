@@ -134,6 +134,7 @@ import {
   type FddCheckAgentWorkflow,
   type FddDeployabilityCheck,
   type FddEntityDeployability,
+  type FddEquipmentAvailability,
   type FddEquipmentType,
   type FddPointCandidate,
   type FddPointMapping,
@@ -147,6 +148,12 @@ import {
   materializerNearestNumericPoint,
   materializerSortedSeries
 } from "./fdd/evaluator.js";
+import {
+  fddEngineeringUnitIsAccepted,
+  fddInventoryEvidenceSignature,
+  fddKbSummaryHasCompleteEquipmentInventory,
+  parseMinimalBrickFacts
+} from "./fdd/equipmentEvidence.js";
 import { isExecutableFddAlgorithm } from "./fdd/runtimeRegistry.js";
 export { fddPersistenceWindowGraceMs } from "./fdd/evaluator.js";
 
@@ -2698,7 +2705,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   }
 
-  function fddDeployabilityAgentWorkflow(context: BuildingGptFddSkillContext): FddCheckAgentWorkflow {
+  function fddDeployabilityAgentWorkflow(
+    context: BuildingGptFddSkillContext,
+    availability?: FddEquipmentAvailability
+  ): FddCheckAgentWorkflow {
     const skill = skills.get(FDD_DEPLOYABILITY_SKILL_ID);
     const groundingRuleNames = context.groundingRules
       .map((rule) => rule.name ?? rule.id)
@@ -2722,10 +2732,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         context.excludedEntityKeys.length > 0
           ? `Applied grounding entity exclusions: ${context.excludedEntityKeys.join(", ")}.`
           : "No grounding entity exclusions applied.",
-        "Read project Knowledge Base catalog context for entity inventory and naming aliases.",
-        "Generated formula-driven candidate point names and queried the BMS catalog.",
-        "Grouped candidates by canonical entity, selected one example entity for review, and listed all complete deployable entities.",
-        "Validated required inputs by quantity kind, unit dimension, history requirement, and ambiguity rules.",
+        "Read the project Brick model and Knowledge Base catalog before evaluating algorithm inputs.",
+        availability
+          ? `Resolved target equipment availability as ${availability.status} (${availability.entityCount} entities).`
+          : "Resolved target equipment availability from project evidence.",
+        availability?.status === "available"
+          ? "Matched Brick point classes to formula roles, verified exact labels in the BMS catalog, and used metadata queries only as fallback."
+          : "Skipped formula point matching and history queries because target equipment availability was not confirmed.",
+        availability?.status === "available"
+          ? "Grouped candidates by canonical entity, selected one example entity for review, and listed all complete deployable entities."
+          : "Returned an equipment-level applicability result without fabricating missing point evidence.",
+        availability?.status === "available"
+          ? "Validated required inputs by quantity kind, unit dimension, history requirement, and ambiguity rules."
+          : "Did not evaluate point or history coverage for a non-applicable algorithm.",
         "Persisted a structured can_deploy/uncertain/cannot_deploy result for this project and algorithm version."
       ]
     };
@@ -2749,7 +2768,26 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     searchTermsByQuantityKind: Map<FddQuantityKind, string[]>;
     kbTextByPointName: Map<string, string>;
     kbClassByPointName: Map<string, string>;
+    brickPoints: FddBrickPointFact[];
+    brickEquipment: FddBrickEquipmentFact[];
+    brickEquipmentKeysByType: Map<FddEquipmentType, Set<string>>;
+    inventoryEvidenceSources: Set<string>;
+    authoritativeInventory: boolean;
     sourceDocuments: string[];
+  }
+
+  interface FddBrickPointFact {
+    subjectKey: string;
+    pointName: string;
+    entityKey: string;
+    brickClass: string;
+    unit?: string;
+  }
+
+  interface FddBrickEquipmentFact {
+    entityKey: string;
+    equipmentType: FddEquipmentType;
+    brickClass: string;
   }
 
   function createEmptyFddEntityContext(): FddEntityContext {
@@ -2760,6 +2798,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       searchTermsByQuantityKind: new Map(),
       kbTextByPointName: new Map(),
       kbClassByPointName: new Map(),
+      brickPoints: [],
+      brickEquipment: [],
+      brickEquipmentKeysByType: new Map(),
+      inventoryEvidenceSources: new Set(),
+      authoritativeInventory: false,
       sourceDocuments: []
     };
   }
@@ -2834,14 +2877,56 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   function inferFddEquipmentTypeFromKbText(text: string): FddEntityEquipmentType {
-    const normalized = text.toLowerCase();
-    if (/\b(chiller|冷机|制冷机)\b/u.test(normalized)) return "chiller";
-    if (/\b(pump|泵)\b/u.test(normalized)) return "pump";
-    if (/\bcooling tower\b|冷却塔/u.test(normalized)) return "cooling_tower";
-    if (/\bahu\b|air handling/u.test(normalized)) return "ahu";
-    if (/\bfcu\b|fan coil/u.test(normalized)) return "fcu";
-    if (/\bvav\b|variable air volume|变风量/u.test(normalized)) return "vav";
+    const normalized = text.replace(/[-_]/gu, " ").toLowerCase();
+    if (/\b(chiller|wcc|冷机|制冷机)\b/u.test(normalized)) return "chiller";
+    if (/\b(pump|chp|swp|pmp|泵)\b/u.test(normalized)) return "pump";
+    if (/\b(cooling tower|ct)\b|冷却塔/u.test(normalized)) return "cooling_tower";
+    if (/\b(ahu|air handling(?: unit)?)\b/u.test(normalized)) return "ahu";
+    if (/\b(fcu|fan coil(?: unit)?)\b/u.test(normalized)) return "fcu";
+    if (/\b(vav|variable air volume(?: box)?)\b|变风量/u.test(normalized)) return "vav";
     return "unknown";
+  }
+
+  function fddEquipmentTypeFromBrickClass(brickClass: string): FddEntityEquipmentType {
+    if (/(?:^|_)Chiller$/u.test(brickClass)) return "chiller";
+    if (/(?:^|_)Pump$/u.test(brickClass)) return "pump";
+    if (/(?:^|_)Cooling_Tower$/u.test(brickClass)) return "cooling_tower";
+    if (/^(?:AHU|Air_Handling_Unit)$/u.test(brickClass)) return "ahu";
+    if (/^(?:FCU|Fan_Coil_Unit)$/u.test(brickClass)) return "fcu";
+    if (/^(?:VAV|Variable_Air_Volume_Box)$/u.test(brickClass)) return "vav";
+    return "unknown";
+  }
+
+  function registerFddFactsFromBrickModel(context: FddEntityContext, ttl: string): void {
+    for (const fact of parseMinimalBrickFacts(ttl)) {
+      const equipmentType = fddEquipmentTypeFromBrickClass(fact.brickClass);
+      if (equipmentType !== "unknown") {
+        addFddEntityHint(context, {
+          canonicalKey: fact.subjectKey,
+          equipmentType,
+          aliases: [fact.subjectKey]
+        });
+        const existing = context.brickEquipmentKeysByType.get(equipmentType) ?? new Set<string>();
+        existing.add(fact.subjectKey);
+        context.brickEquipmentKeysByType.set(equipmentType, existing);
+        context.brickEquipment.push({
+          entityKey: fact.subjectKey,
+          equipmentType,
+          brickClass: fact.brickClass
+        });
+        continue;
+      }
+      if (!fact.parentEntityKey) continue;
+      const pointName = fact.label || fact.subjectKey;
+      context.brickPoints.push({
+        subjectKey: fact.subjectKey,
+        pointName,
+        entityKey: fact.parentEntityKey,
+        brickClass: fact.brickClass,
+        ...(fact.unit ? { unit: fact.unit } : {})
+      });
+      context.kbClassByPointName.set(normalizeFddEntityAlias(pointName), fact.brickClass);
+    }
   }
 
   function splitMarkdownTableRow(line: string): string[] {
@@ -2860,7 +2945,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (existing && existing.length > 0) {
       return existing;
     }
-    const rootDir = kbRootForProject(projectId);
+    const rootDir = kbRootForProject(projectId, env);
     const documents = await indexKnowledgeBase(projectId, { rootDir });
     store.knowledgeBaseByProject[projectId] = documents;
     return documents;
@@ -2871,10 +2956,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const summary = documents.find((document) => path.basename(document.path) === "KB_CATALOG_SUMMARY.md");
     if (!summary) return null;
     try {
-      const rootDir = kbRootForProject(projectId);
+      const rootDir = kbRootForProject(projectId, env);
       return {
         path: summary.path,
         text: await readFile(path.join(rootDir, summary.path), "utf8")
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function readFddBrickModel(projectId: string): Promise<{ path: string; text: string } | null> {
+    const documents = await fddKnowledgeBaseDocuments(projectId);
+    const model = documents.find((document) => path.basename(document.path) === "brick_model.ttl");
+    if (!model) return null;
+    try {
+      const rootDir = kbRootForProject(projectId, env);
+      return {
+        path: model.path,
+        text: await readFile(path.join(rootDir, model.path), "utf8")
       };
     } catch {
       return null;
@@ -3000,13 +3100,140 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
   async function buildFddEntityContext(projectId: string): Promise<FddEntityContext> {
     const context = createEmptyFddEntityContext();
+    let inventoryDeclaredComplete = false;
     const summary = await readFddKbCatalogSummary(projectId);
-    if (!summary) return context;
-    context.sourceDocuments.push(summary.path);
-    registerFddEntityHintsFromKbTables(context, summary.text);
-    registerFddEntityHintsFromKbHeadings(context, summary.text);
-    registerFddKbSearchTerms(context, summary.text);
+    if (summary) {
+      context.sourceDocuments.push(summary.path);
+      context.inventoryEvidenceSources.add(summary.path);
+      inventoryDeclaredComplete = fddKbSummaryHasCompleteEquipmentInventory(summary.text);
+      registerFddEntityHintsFromKbTables(context, summary.text);
+      registerFddEntityHintsFromKbHeadings(context, summary.text);
+      registerFddKbSearchTerms(context, summary.text);
+    }
+    const brickModel = await readFddBrickModel(projectId);
+    if (brickModel) {
+      if (!context.sourceDocuments.includes(brickModel.path)) context.sourceDocuments.push(brickModel.path);
+      context.inventoryEvidenceSources.add(brickModel.path);
+      registerFddFactsFromBrickModel(context, brickModel.text);
+    }
+    context.authoritativeInventory = inventoryDeclaredComplete && context.brickEquipment.length > 0;
     return context;
+  }
+
+  function buildFddEntityContextSync(projectId: string): FddEntityContext {
+    const context = createEmptyFddEntityContext();
+    let inventoryDeclaredComplete = false;
+    const rootDir = kbRootForProject(projectId, env);
+    try {
+      const summaryText = readFileSync(path.join(rootDir, "KB_CATALOG_SUMMARY.md"), "utf8");
+      inventoryDeclaredComplete = fddKbSummaryHasCompleteEquipmentInventory(summaryText);
+      registerFddEntityHintsFromKbTables(context, summaryText);
+      registerFddEntityHintsFromKbHeadings(context, summaryText);
+      registerFddKbSearchTerms(context, summaryText);
+    } catch {
+      // Missing KB evidence intentionally yields an unknown inventory.
+    }
+    try {
+      registerFddFactsFromBrickModel(context, readFileSync(path.join(rootDir, "brick_model.ttl"), "utf8"));
+    } catch {
+      // Missing Brick evidence intentionally yields an unknown inventory.
+    }
+    context.authoritativeInventory = inventoryDeclaredComplete && context.brickEquipment.length > 0;
+    return context;
+  }
+
+  const FDD_PHYSICAL_EQUIPMENT_TYPES: readonly FddEquipmentType[] = [
+    "chiller",
+    "pump",
+    "cooling_tower",
+    "ahu",
+    "fcu",
+    "vav"
+  ];
+
+  function fddEquipmentAvailabilityFromContext(context: FddEntityContext): FddEquipmentAvailability[] {
+    const hasBrickInventory = context.brickEquipmentKeysByType.size > 0;
+    const evidenceSources = [...context.inventoryEvidenceSources].sort();
+    return FDD_PHYSICAL_EQUIPMENT_TYPES.map((equipmentType) => {
+      const entityKeys = hasBrickInventory
+        ? [...(context.brickEquipmentKeysByType.get(equipmentType) ?? new Set<string>())]
+        : [...context.hintsByCanonical.values()]
+          .filter((hint) => hint.equipmentType === equipmentType)
+          .map((hint) => hint.canonicalKey);
+      const uniqueEntityKeys = [...new Set(entityKeys.map((key) => canonicalFddEntityKey(key, context)))]
+        .sort((left, right) => left.localeCompare(right));
+      if (uniqueEntityKeys.length > 0) {
+        return {
+          equipmentType,
+          status: "available",
+          entityCount: uniqueEntityKeys.length,
+          entityKeys: uniqueEntityKeys,
+          reason: `The project equipment inventory contains ${uniqueEntityKeys.length} ${equipmentType} entit${uniqueEntityKeys.length === 1 ? "y" : "ies"}.`,
+          evidenceSources
+        };
+      }
+      if (context.authoritativeInventory) {
+        return {
+          equipmentType,
+          status: "not_available",
+          entityCount: 0,
+          entityKeys: [],
+          reason: `The authoritative project equipment inventory contains no ${equipmentType} entities.`,
+          evidenceSources
+        };
+      }
+      return {
+        equipmentType,
+        status: "unknown",
+        entityCount: 0,
+        entityKeys: [],
+        reason: `No authoritative project equipment inventory is currently available for ${equipmentType}.`,
+        evidenceSources
+      };
+    });
+  }
+
+  function fddEquipmentInventorySignature(context: FddEntityContext, availability: FddEquipmentAvailability[]): string {
+    return fddInventoryEvidenceSignature({
+      authoritativeInventory: context.authoritativeInventory,
+      availability,
+      equipment: context.brickEquipment,
+      points: context.brickPoints.map((point) => ({
+        subjectKey: point.subjectKey,
+        pointName: point.pointName,
+        parentEntityKey: point.entityKey,
+        brickClass: point.brickClass,
+        ...(point.unit ? { unit: point.unit } : {})
+      }))
+    });
+  }
+
+  function currentFddEquipmentInventorySignatureSync(projectId: string): string {
+    const context = buildFddEntityContextSync(projectId);
+    return fddEquipmentInventorySignature(context, fddEquipmentAvailabilityFromContext(context));
+  }
+
+  function fddAvailabilityForAlgorithm(
+    algorithm: FddAlgorithm,
+    availability: FddEquipmentAvailability[]
+  ): FddEquipmentAvailability {
+    const targetType = fddTargetEntityType(algorithm);
+    if (targetType) {
+      return availability.find((entry) => entry.equipmentType === targetType) ?? {
+        equipmentType: targetType,
+        status: "unknown",
+        entityCount: 0,
+        entityKeys: [],
+        reason: `Equipment availability is unknown for ${targetType}.`
+      };
+    }
+    return {
+      equipmentType: algorithm.equipmentType,
+      status: "unknown",
+      entityCount: 0,
+      entityKeys: [],
+      reason: "The algorithm does not identify a physical target equipment type."
+    };
   }
 
   function canonicalFddEntityKey(rawEntityKey: string, context: FddEntityContext): string {
@@ -3236,6 +3463,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     if (actualKind === expectedKind) {
       const acceptableUnitText = point.acceptableUnits?.length ? ` Acceptable units: ${point.acceptableUnits.join(", ")}.` : "";
+      if (point.acceptableUnits?.length && !unit) {
+        return {
+          unitCompatibility: "unknown",
+          dimensionReason: `Formula input expects ${expectedKind}, and Brick/catalog semantics indicate ${actualKind}, but the engineering unit is unknown.${acceptableUnitText}`
+        };
+      }
+      if (unit && point.acceptableUnits?.length && !fddEngineeringUnitIsAccepted(unit, point.acceptableUnits)) {
+        const rejectionReason = `Formula input "${point.label}" accepts ${point.acceptableUnits.join(", ")}, but the candidate unit is ${unit}; no unit conversion is declared.`;
+        return {
+          unitCompatibility: "mismatch",
+          dimensionReason: rejectionReason,
+          rejectionReason
+        };
+      }
       return {
         unitCompatibility: "match",
         dimensionReason: `Formula input expects ${expectedKind}; catalog metadata indicates ${actualKind}.${acceptableUnitText}`
@@ -3271,6 +3512,68 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return promise;
   }
 
+  function fddBrickPointMatchesRequiredPoint(point: FddAlgorithm["requiredPoints"][number], fact: FddBrickPointFact): boolean {
+    const factText = `${fact.pointName} ${fact.brickClass}`.replace(/[-_]/gu, " ").toLowerCase();
+    const pointText = `${point.slot} ${point.label} ${point.semantic}`.replace(/[-_]/gu, " ").toLowerCase();
+    const actualKind = inferFddCandidateQuantityKind({ semantic_class: fact.brickClass, ...(fact.unit ? { unit: fact.unit } : {}) }, fact.pointName);
+    if (point.quantityKind !== "unknown" && actualKind !== point.quantityKind) return false;
+    const expectsChilledWater = /\b(chw|chilled water)\b/u.test(pointText);
+    const expectsCondenserWater = /\b(cw|condenser water)\b/u.test(pointText);
+    if (expectsChilledWater && /\bcondenser water\b/u.test(factText)) return false;
+    if (expectsCondenserWater && /\bchilled water\b/u.test(factText)) return false;
+    if (expectsChilledWater && point.quantityKind === "temperature" && !/\bchilled water\b/u.test(factText)) return false;
+    if (expectsCondenserWater && point.quantityKind === "temperature" && !/\bcondenser water\b/u.test(factText)) return false;
+    if (/\bsupply\b/u.test(pointText) && /\bentering\b/u.test(factText)) return false;
+    if (/\breturn\b/u.test(pointText) && /\bleaving\b/u.test(factText)) return false;
+    if (/\bsupply\b/u.test(pointText) && point.quantityKind === "temperature" && !/\bleaving\b/u.test(factText)) return false;
+    if (/\breturn\b/u.test(pointText) && point.quantityKind === "temperature" && !/\bentering\b/u.test(factText)) return false;
+    return true;
+  }
+
+  async function addFddBrickPointCandidates(input: {
+    algorithm: FddAlgorithm;
+    point: FddAlgorithm["requiredPoints"][number];
+    context: FddEntityContext;
+    base: string;
+    candidates: FddPointCandidate[];
+    seen: Set<string>;
+  }): Promise<boolean> {
+    const matchingFacts = input.context.brickPoints.filter((fact) =>
+      fddEntityAllowedForAlgorithm(fact.entityKey, input.context, input.algorithm)
+      && fddBrickPointMatchesRequiredPoint(input.point, fact)
+    );
+    if (matchingFacts.length === 0) return false;
+    let verified = false;
+    await mapWithConcurrency(matchingFacts, 8, async (fact) => {
+      const items = await fetchFddCatalogItems(input.base, fact.pointName, 8);
+      const exactItem = items.find((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(fact.pointName));
+      if (!exactItem) return;
+      verified = true;
+      const semanticItem = {
+        ...exactItem,
+        name: fact.pointName,
+        equipment_name: fact.entityKey,
+        semantic_class: fact.brickClass,
+        brick_class: fact.brickClass,
+        ...(fact.unit ? { unit: fact.unit } : {})
+      };
+      addFddPointCandidateFromItem({
+        algorithm: input.algorithm,
+        point: input.point,
+        item: semanticItem,
+        query: fact.pointName,
+        context: input.context,
+        candidates: input.candidates,
+        seen: input.seen,
+        reason: `Verified exact BMS point from Brick class ${fact.brickClass}.`,
+        minConfidence: 0.5,
+        confidenceOverride: 0.96,
+        entityKeyOverride: fact.entityKey
+      });
+    });
+    return verified;
+  }
+
   function addFddPointCandidateFromItem(input: {
     algorithm: FddAlgorithm;
     point: FddAlgorithm["requiredPoints"][number];
@@ -3282,12 +3585,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     reason: string;
     minConfidence?: number;
     confidenceOverride?: number;
+    entityKeyOverride?: string;
   }): void {
     const pointName = fddPointName(input.item);
     if (!pointName) return;
     const key = `${input.point.slot}:${pointName}`;
     if (input.seen.has(key)) return;
-    const entityKey = fddCandidateEntityKey(pointName, input.context);
+    const entityKey = input.entityKeyOverride
+      ? canonicalFddEntityKey(input.entityKeyOverride, input.context)
+      : fddCandidateEntityKey(pointName, input.context);
     if (!fddEntityAllowedForAlgorithm(entityKey, input.context, input.algorithm)) return;
     const kbText = input.context.kbTextByPointName.get(normalizeFddEntityAlias(pointName));
     const kbClass = input.context.kbClassByPointName.get(normalizeFddEntityAlias(pointName));
@@ -3523,6 +3829,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     const base = access.baseUrl;
     for (const point of [...algorithm.requiredPoints, ...supplementalPoints]) {
+      const verifiedFromBrick = await addFddBrickPointCandidates({
+        algorithm,
+        point,
+        context,
+        base,
+        candidates,
+        seen
+      });
+      if (verifiedFromBrick) continue;
       const queries = fddSearchQueriesForPoint(point, skillContext, context);
       for (const query of queries) {
         const items = await fetchFddCatalogItems(base, query, 50);
@@ -3733,7 +4048,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         continue;
       }
       const closeAlternatives = fddAmbiguousAlternativesForPoint(point, best, slotCandidates.slice(1));
-      if (closeAlternatives.length > 0 || best.confidence < 0.68) {
+      if (closeAlternatives.length > 0 || best.confidence < 0.68 || best.unitCompatibility === "unknown") {
         uncertain = true;
         ambiguousInputs.push({
           slot: point.slot,
@@ -3826,8 +4141,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   function fddCheckHasEntityCoverage(check: FddDeployabilityCheck, algorithm: FddAlgorithm): boolean {
-    if (!isExecutableFddAlgorithm(algorithm)) return true;
-    return Array.isArray(check.deployableEntities);
+    if (!check.applicability || !check.equipmentAvailability || !check.equipmentInventorySignature) return false;
+    if (check.applicability !== "applicable" || check.equipmentAvailability.status !== "available") return false;
+    if (!Array.isArray(check.deployableEntities)) return false;
+    const requiredSlots = algorithm.requiredPoints
+      .filter((point) => point.required)
+      .map((point) => point.slot);
+    return check.deployableEntities.some((entity) => {
+      if (entity.status !== "can_deploy") return false;
+      const mappedSlots = new Set(entity.selectedMappings.map((mapping) => mapping.slot));
+      return requiredSlots.every((slot) => mappedSlots.has(slot));
+    });
   }
 
   function fddCheckMatchesCurrentProjectSignature(projectId: string, check: FddDeployabilityCheck): boolean {
@@ -3848,15 +4172,33 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return check.algorithmId === algorithm.id && check.algorithmVersion === algorithm.version;
   }
 
-  function latestUsableFddCheck(projectId: string, checks: FddDeployabilityCheck[], algorithm: FddAlgorithm): FddDeployabilityCheck | null {
+  function latestUsableFddCheck(
+    projectId: string,
+    checks: FddDeployabilityCheck[],
+    algorithm: FddAlgorithm,
+    equipmentInventorySignature: string
+  ): FddDeployabilityCheck | null {
     const latest = latestFddCheck(checks, algorithm.id, algorithm.version);
     return latest
       && fddCheckMatchesCurrentProjectSignature(projectId, latest)
       && fddCheckMatchesCurrentPolicy(latest)
       && fddCheckIsFresh(latest)
       && fddCheckHasEntityCoverage(latest, algorithm)
+      && latest.equipmentInventorySignature === equipmentInventorySignature
       ? latest
       : null;
+  }
+
+  function persistFddDeployabilityCheck(projectId: string, check: FddDeployabilityCheck, projectTaskId?: string): void {
+    const checks = store.fddChecksByProject![projectId] ?? [];
+    store.fddChecksByProject![projectId] = [
+      check,
+      ...checks.filter((entry) =>
+        projectTaskId
+          ? entry.projectTaskId !== projectTaskId
+          : entry.algorithmId !== check.algorithmId || entry.algorithmVersion !== check.algorithmVersion
+      )
+    ];
   }
 
   async function runFddDeployabilityCheck(
@@ -3865,11 +4207,37 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     algorithm: FddAlgorithm,
     source: FddCheckSource,
     projectTaskId?: string,
-    entityContext?: FddEntityContext
+    entityContext?: FddEntityContext,
+    equipmentAvailability?: FddEquipmentAvailability[]
   ): Promise<FddDeployabilityCheck> {
     ensureProjectFddCollections(projectId);
     const context = entityContext ?? await buildFddEntityContext(projectId);
+    const inventory = equipmentAvailability ?? fddEquipmentAvailabilityFromContext(context);
+    const inventorySignature = fddEquipmentInventorySignature(context, inventory);
+    const targetAvailability = fddAvailabilityForAlgorithm(algorithm, inventory);
     const skillContext = await buildBuildingGptFddSkillContext(projectId, userId, algorithm, context);
+    if (targetAvailability.status !== "available") {
+      const access = resolveProjectBmsAccess(projectId);
+      const applicability = targetAvailability.status === "not_available" ? "no_equipment" : "unknown";
+      const check = evaluateFddDeployability({
+        algorithm,
+        projectId,
+        source,
+        projectDataSignature: fddProjectDataSignature(projectId),
+        pointCandidates: [],
+        deployableEntities: [],
+        applicability,
+        equipmentAvailability: targetAvailability,
+        equipmentInventorySignature: inventorySignature,
+        ...(applicability === "unknown"
+          ? { historyIssues: [!access.ok ? access.message : targetAvailability.reason].filter((issue): issue is string => Boolean(issue)) }
+          : {}),
+        ...(projectTaskId ? { projectTaskId } : {})
+      });
+      check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
+      persistFddDeployabilityCheck(projectId, check, projectTaskId);
+      return check;
+    }
     const excludedEntityKeys = new Set(skillContext.excludedEntityKeys.map(normalizeFddEntityAlias));
     const candidateResult = await queryFddPointCandidates(projectId, algorithm, context, skillContext);
     const rawCandidates = candidateResult.candidates
@@ -3891,6 +4259,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId,
       source,
       projectDataSignature: fddProjectDataSignature(projectId),
+      applicability: "applicable",
+      equipmentAvailability: targetAvailability,
+      equipmentInventorySignature: inventorySignature,
       pointCandidates: alignedCandidates.candidates,
       ...(alignedCandidates.exampleEntityKey ? { exampleEntityKey: alignedCandidates.exampleEntityKey } : {}),
       rejectedCandidates: rejectedCandidates.slice(0, 40),
@@ -3900,20 +4271,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         : {}),
       ...(projectTaskId ? { projectTaskId } : {})
     });
-    check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext);
-    const checks = store.fddChecksByProject![projectId] ?? [];
-    store.fddChecksByProject![projectId] = [
-      check,
-      ...checks.filter((entry) =>
-        projectTaskId
-          ? entry.projectTaskId !== projectTaskId
-          : entry.algorithmId !== algorithm.id || entry.algorithmVersion !== algorithm.version
-      )
-    ];
+    check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
+    persistFddDeployabilityCheck(projectId, check, projectTaskId);
     return check;
   }
 
-  function missingAutomaticFddAlgorithms(projectId: string): FddAlgorithm[] {
+  function missingAutomaticFddAlgorithms(projectId: string, equipmentInventorySignature: string): FddAlgorithm[] {
     ensureProjectFddCollections(projectId);
     const checks = store.fddChecksByProject![projectId] ?? [];
     return (store.fddAlgorithms ?? [])
@@ -3921,14 +4284,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       // point-catalog queries synchronously on every library open would block
       // the page without making those algorithms executable.
       .filter(isExecutableFddAlgorithm)
-      .filter((algorithm) => !latestUsableFddCheck(projectId, checks, algorithm));
+      .filter((algorithm) => !latestUsableFddCheck(projectId, checks, algorithm, equipmentInventorySignature));
   }
 
-  async function ensureAutomaticFddLibraryChecks(projectId: string, userId: string): Promise<void> {
-    const missing = missingAutomaticFddAlgorithms(projectId);
+  async function ensureAutomaticFddLibraryChecks(
+    projectId: string,
+    userId: string,
+    entityContext?: FddEntityContext,
+    equipmentAvailability?: FddEquipmentAvailability[]
+  ): Promise<void> {
+    const context = entityContext ?? await buildFddEntityContext(projectId);
+    const inventory = equipmentAvailability ?? fddEquipmentAvailabilityFromContext(context);
+    const missing = missingAutomaticFddAlgorithms(projectId, fddEquipmentInventorySignature(context, inventory));
     if (missing.length === 0) return;
-    const entityContext = await buildFddEntityContext(projectId);
-    const checked = await mapWithConcurrency(missing, 4, (algorithm) => runFddDeployabilityCheck(projectId, userId, algorithm, "auto", undefined, entityContext));
+    const checked = await mapWithConcurrency(missing, 4, (algorithm) => runFddDeployabilityCheck(projectId, userId, algorithm, "auto", undefined, context, inventory));
     store.fddLibraryCheckRunsByProject![projectId] = [
       {
         id: `fddrun_${randomUUID()}`,
@@ -3942,10 +4311,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     persistSoon();
   }
 
-  function scheduleAutomaticFddLibraryChecks(projectId: string, userId: string): boolean {
-    if (missingAutomaticFddAlgorithms(projectId).length === 0) return false;
+  function scheduleAutomaticFddLibraryChecks(
+    projectId: string,
+    userId: string,
+    entityContext: FddEntityContext,
+    equipmentAvailability: FddEquipmentAvailability[]
+  ): boolean {
+    if (missingAutomaticFddAlgorithms(projectId, fddEquipmentInventorySignature(entityContext, equipmentAvailability)).length === 0) return false;
     if (automaticFddCheckRuns.has(projectId)) return true;
-    const run = ensureAutomaticFddLibraryChecks(projectId, userId)
+    const run = ensureAutomaticFddLibraryChecks(projectId, userId, entityContext, equipmentAvailability)
       .then(() => {
         broadcastToProject(projectId, { type: "fdd_library_updated", projectId });
       })
@@ -4109,7 +4483,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
   function invalidateLegacyFddRuntimeAuthorizations(): number {
     let changes = 0;
+    const currentInventorySignatures = new Map<string, string>();
     for (const [projectId, tasks] of Object.entries(store.fddTasksByProject ?? {})) {
+      const currentInventorySignature = currentInventorySignatures.get(projectId)
+        ?? currentFddEquipmentInventorySignatureSync(projectId);
+      currentInventorySignatures.set(projectId, currentInventorySignature);
       for (const task of tasks) {
         const check = task.deployabilityCheck;
         const hasCurrentBmsSource = projectBmsSources(projectId).length > 0;
@@ -4124,6 +4502,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           && (!hasCurrentBmsSource || fddCheckMatchesCurrentProjectSignature(projectId, check))
           && fddCheckMatchesAlgorithm(check, task.algorithmSnapshot)
           && fddCheckHasEntityCoverage(check, task.algorithmSnapshot)
+          && check.equipmentInventorySignature === currentInventorySignature
           && isExecutableFddAlgorithm(task.algorithmSnapshot)
         );
         if (currentlyAuthorized) continue;
@@ -4568,6 +4947,40 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     instance: DerivedMetricInstance,
     materialization: DerivedMetricMaterialization
   ): Promise<void> {
+    const taskId = typeof instance.metadata?.fddTaskId === "string" ? instance.metadata.fddTaskId : undefined;
+    const algorithmId = typeof instance.metadata?.fddAlgorithmId === "string" ? instance.metadata.fddAlgorithmId : undefined;
+    const task = (store.fddTasksByProject?.[instance.projectId] ?? []).find((candidate) =>
+      (taskId ? candidate.id === taskId : false)
+      || (!taskId && algorithmId ? candidate.algorithmSnapshot.id === algorithmId || candidate.globalAlgorithmId === algorithmId : false)
+    );
+    const check = task?.deployabilityCheck;
+    const hasCurrentBmsSource = projectBmsSources(instance.projectId).length > 0;
+    const currentlyAuthorized = Boolean(
+      task
+      && check
+      && isExecutableFddAlgorithm(task.algorithmSnapshot)
+      && check.status === "can_deploy"
+      && fddCheckMatchesCurrentPolicy(check)
+      && fddCheckIsFresh(check)
+      && (!hasCurrentBmsSource || fddCheckMatchesCurrentProjectSignature(instance.projectId, check))
+      && fddCheckMatchesAlgorithm(check, task.algorithmSnapshot)
+      && fddCheckHasEntityCoverage(check, task.algorithmSnapshot)
+      && check.equipmentInventorySignature === currentFddEquipmentInventorySignatureSync(instance.projectId)
+    );
+    if (!currentlyAuthorized) {
+      if (task && (task.status === "running" || task.status === "ready")) {
+        task.status = "checking";
+        task.updatedAt = new Date().toISOString();
+      }
+      derivedMetrics.configureMaterialization({
+        instanceId: materialization.instanceId,
+        enabled: false,
+        status: "authorization_required",
+        lastError: "fdd_equipment_inventory_revalidation_required"
+      });
+      persistSoon();
+      return;
+    }
     if (instance.dependencies.length === 0) {
       throw new Error("fdd_materializer_dependencies_not_found");
     }
@@ -6560,12 +6973,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const readable = requirePermission(request, reply, membership, "chat:read");
     if (isReply(readable)) return readable;
 
+    const entityContext = await buildFddEntityContext(request.params.projectId);
+    const equipmentAvailability = fddEquipmentAvailabilityFromContext(entityContext);
     const bmsAccess = resolveProjectBmsAccess(request.params.projectId);
     let checksPending = false;
     if (bmsAccess.ok) {
-      checksPending = scheduleAutomaticFddLibraryChecks(request.params.projectId, session.userId);
+      checksPending = scheduleAutomaticFddLibraryChecks(request.params.projectId, session.userId, entityContext, equipmentAvailability);
     } else {
-      await ensureAutomaticFddLibraryChecks(request.params.projectId, session.userId);
+      await ensureAutomaticFddLibraryChecks(request.params.projectId, session.userId, entityContext, equipmentAvailability);
     }
     ensureProjectFddCollections(request.params.projectId);
     return {
@@ -6574,6 +6989,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       checks: bounded(store.fddChecksByProject![request.params.projectId] ?? [], store.maxListSize * 4),
       tasks: bounded(fddTasksForProject(request.params.projectId), store.maxListSize),
       checkRuns: bounded(store.fddLibraryCheckRunsByProject![request.params.projectId] ?? [], store.maxListSize),
+      equipmentAvailability,
+      equipmentInventorySignature: fddEquipmentInventorySignature(entityContext, equipmentAvailability),
       checksPending,
       requestId: requestIdFor(request)
     };
@@ -6627,8 +7044,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return sendError(request, reply, 422, "fdd_runtime_not_supported", "This FDD definition is specification-only because no executable evaluator is registered.");
     }
     ensureProjectFddCollections(request.params.projectId);
-    const check = latestUsableFddCheck(request.params.projectId, store.fddChecksByProject![request.params.projectId] ?? [], algorithm)
-      ?? await runFddDeployabilityCheck(request.params.projectId, session.userId, algorithm, "auto");
+    const entityContext = await buildFddEntityContext(request.params.projectId);
+    const equipmentAvailability = fddEquipmentAvailabilityFromContext(entityContext);
+    const check = latestUsableFddCheck(
+      request.params.projectId,
+      store.fddChecksByProject![request.params.projectId] ?? [],
+      algorithm,
+      fddEquipmentInventorySignature(entityContext, equipmentAvailability)
+    ) ?? await runFddDeployabilityCheck(request.params.projectId, session.userId, algorithm, "auto", undefined, entityContext, equipmentAvailability);
     if (check.status !== "can_deploy") {
       return sendError(request, reply, 422, "fdd_cannot_deploy", "This FDD algorithm requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first.");
     }
@@ -6835,14 +7258,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (!isExecutableFddAlgorithm(task.algorithmSnapshot)) {
       return sendError(request, reply, 422, "fdd_runtime_not_supported", "This FDD definition is specification-only because no executable evaluator is registered.");
     }
+    const entityContext = await buildFddEntityContext(request.params.projectId);
+    const equipmentAvailability = fddEquipmentAvailabilityFromContext(entityContext);
+    const currentInventorySignature = fddEquipmentInventorySignature(entityContext, equipmentAvailability);
     const check = task.deployabilityCheck
       && fddCheckMatchesCurrentProjectSignature(request.params.projectId, task.deployabilityCheck)
       && fddCheckMatchesCurrentPolicy(task.deployabilityCheck)
       && fddCheckIsFresh(task.deployabilityCheck)
       && fddCheckMatchesAlgorithm(task.deployabilityCheck, task.algorithmSnapshot)
       && fddCheckHasEntityCoverage(task.deployabilityCheck, task.algorithmSnapshot)
+      && task.deployabilityCheck.equipmentInventorySignature === currentInventorySignature
       ? task.deployabilityCheck
-      : await runFddDeployabilityCheck(request.params.projectId, session.userId, task.algorithmSnapshot, "auto", task.id);
+      : await runFddDeployabilityCheck(request.params.projectId, session.userId, task.algorithmSnapshot, "auto", task.id, entityContext, equipmentAvailability);
     if (check.status !== "can_deploy") {
       return sendError(request, reply, 422, "fdd_cannot_deploy", "This FDD task requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first.");
     }

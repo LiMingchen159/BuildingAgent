@@ -1,4 +1,4 @@
-import { FormEvent, type CSSProperties, type ReactNode, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
@@ -61,6 +61,7 @@ import {
   type FddAlgorithm,
   type FddDeployabilityCheck,
   type FddDeployabilityStatus,
+  type FddEquipmentAvailability,
   type FddEquipmentType,
   type FddLibraryResponse,
   type FddMethod,
@@ -2705,6 +2706,20 @@ function fddEquipmentLabel(value: FddEquipmentType): string {
   return labels[value];
 }
 
+function fddEquipmentAvailabilityLabel(availability: FddEquipmentAvailability | undefined): string {
+  if (availability?.status === "available") {
+    return `${availability.entityCount} ${availability.entityCount === 1 ? "asset" : "assets"} detected`;
+  }
+  if (availability?.status === "not_available") return "No equipment in this project";
+  return "Equipment availability unknown";
+}
+
+function fddEquipmentAvailabilityTone(availability: FddEquipmentAvailability | undefined): "neutral" | "success" | "warning" {
+  if (availability?.status === "available") return "success";
+  if (availability?.status === "not_available") return "neutral";
+  return "warning";
+}
+
 function fddMethodLabel(value: FddMethod): string {
   const labels: Record<FddMethod, string> = {
     rule_based: "Rule-based",
@@ -2945,6 +2960,107 @@ function latestFddCheckForAlgorithm(checks: FddDeployabilityCheck[], algorithm: 
   return checks
     .filter((check) => check.algorithmId === algorithm.id && check.algorithmVersion === algorithm.version)
     .sort((left, right) => Date.parse(right.checkedAt) - Date.parse(left.checkedAt))[0];
+}
+
+const FDD_EQUIPMENT_FIRST_POLICY_VERSION = "v3-equipment-first";
+
+function fddTargetEquipmentType(
+  algorithm: Pick<FddAlgorithm, "equipmentType" | "requiredPoints">
+): FddEquipmentType | undefined {
+  if (algorithm.equipmentType !== "sensor") return algorithm.equipmentType;
+  const requiredPointText = algorithm.requiredPoints
+    .map((point) => `${point.slot} ${point.label} ${point.semantic}`)
+    .join(" ")
+    .toLowerCase();
+  if (/\b(chiller|chw|chilled water)\b/u.test(requiredPointText)) return "chiller";
+  if (/\bpump\b/u.test(requiredPointText)) return "pump";
+  return undefined;
+}
+
+function fddEquipmentAvailabilityMatches(
+  checkAvailability: FddEquipmentAvailability | undefined,
+  currentAvailability: FddEquipmentAvailability
+): boolean {
+  if (!checkAvailability
+    || checkAvailability.equipmentType !== currentAvailability.equipmentType
+    || checkAvailability.status !== "available"
+    || currentAvailability.status !== "available"
+    || checkAvailability.entityCount <= 0
+    || checkAvailability.entityCount !== currentAvailability.entityCount) {
+    return false;
+  }
+  const checkKeys = [...(checkAvailability.entityKeys ?? [])].sort();
+  const currentKeys = [...(currentAvailability.entityKeys ?? [])].sort();
+  return checkKeys.length === checkAvailability.entityCount
+    && currentKeys.length === currentAvailability.entityCount
+    && checkKeys.every((key, index) => key === currentKeys[index]);
+}
+
+export function isCurrentEquipmentFirstFddCheck(
+  check: FddDeployabilityCheck | undefined,
+  algorithm: Pick<FddAlgorithm, "id" | "version" | "equipmentType" | "requiredPoints">,
+  projectId: string | undefined,
+  equipmentInventorySignature: string | undefined,
+  targetAvailability: FddEquipmentAvailability | undefined,
+  nowMs = Date.now()
+): check is FddDeployabilityCheck {
+  const targetEquipmentType = fddTargetEquipmentType(algorithm);
+  if (!check
+    || !projectId
+    || !equipmentInventorySignature
+    || !targetEquipmentType
+    || targetAvailability?.equipmentType !== targetEquipmentType
+    || targetAvailability.status !== "available") {
+    return false;
+  }
+  const checkedAt = Date.parse(check.checkedAt);
+  const checkAgeMs = nowMs - checkedAt;
+  return Number.isFinite(checkedAt)
+    && checkAgeMs >= -5 * 60_000
+    && checkAgeMs <= 24 * 60 * 60_000
+    && check.algorithmId === algorithm.id
+    && check.algorithmVersion === algorithm.version
+    && check.projectId === projectId
+    && check.checkPolicyVersion === FDD_EQUIPMENT_FIRST_POLICY_VERSION
+    && check.applicability === "applicable"
+    && check.equipmentInventorySignature === equipmentInventorySignature
+    && fddEquipmentAvailabilityMatches(check.equipmentAvailability, targetAvailability);
+}
+
+function currentEquipmentFirstFddCheck(
+  checks: FddDeployabilityCheck[],
+  algorithm: FddAlgorithm,
+  projectId: string | undefined,
+  equipmentInventorySignature: string | undefined,
+  targetAvailability: FddEquipmentAvailability | undefined
+): FddDeployabilityCheck | undefined {
+  const latest = latestFddCheckForAlgorithm(checks, algorithm);
+  return isCurrentEquipmentFirstFddCheck(
+    latest,
+    algorithm,
+    projectId,
+    equipmentInventorySignature,
+    targetAvailability
+  ) ? latest : undefined;
+}
+
+function currentEquipmentFirstFddTaskCheck(
+  task: ProjectFddTask,
+  library: FddLibraryResponse | null
+): FddDeployabilityCheck | undefined {
+  if (!library || library.projectId !== task.projectId) return undefined;
+  const targetEquipmentType = fddTargetEquipmentType(task.algorithmSnapshot);
+  if (!targetEquipmentType) return undefined;
+  const targetAvailability = library.equipmentAvailability?.find(
+    (availability) => availability.equipmentType === targetEquipmentType
+  );
+  return isCurrentEquipmentFirstFddCheck(
+    task.deployabilityCheck,
+    task.algorithmSnapshot,
+    library.projectId,
+    library.equipmentInventorySignature,
+    targetAvailability
+  ) ? task.deployabilityCheck : undefined;
 }
 
 function fddDeployabilitySortRank(status: FddDeployabilityCheck["status"] | undefined): number {
@@ -3521,6 +3637,7 @@ function FddTaskParameterEditor({
 
 function FddTaskDetailPanel({
   task,
+  library,
   activeTaskId,
   metricGroup,
   dashboards,
@@ -3533,6 +3650,7 @@ function FddTaskDetailPanel({
   onToggleMetricMaterialization
 }: {
   task: ProjectFddTask | null;
+  library: FddLibraryResponse | null;
   activeTaskId: string | null;
   metricGroup: KpiMetricGroup | null;
   dashboards: DashboardRecord[];
@@ -3561,6 +3679,7 @@ function FddTaskDetailPanel({
 
   const algorithm = task.algorithmSnapshot;
   const check = task.deployabilityCheck;
+  const currentCheck = currentEquipmentFirstFddTaskCheck(task, library);
   const requiredPointBySlot = new Map(algorithm.requiredPoints.map((point) => [point.slot, point]));
   const requiredSlots = new Set(algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot));
   const selectedMappings = (check?.selectedMappings ?? []).filter((mapping) => requiredSlots.has(mapping.slot));
@@ -3569,7 +3688,7 @@ function FddTaskDetailPanel({
   const groupBackgroundStatus = metricGroup ? groupMaterializationStatus(metricGroup) : "Not deployed";
   const linkedDashboardIds = metricGroup ? linkedDashboardIdsForGroup(metricGroup) : new Set<string>();
   const linkedDashboards = dashboards.filter((dashboard) => linkedDashboardIds.has(dashboard.id));
-  const canDeploy = task.algorithmSnapshot.deployableRuntime && check?.status === "can_deploy";
+  const canDeploy = task.algorithmSnapshot.deployableRuntime && currentCheck?.status === "can_deploy";
   const editedCount = (task.parameterValues ?? []).filter((parameter) => parameter.source === "user_override").length;
   const isDeployed = Boolean(metricGroup?.metrics.length);
   const taskDeploymentProgress = deploymentProgress?.taskId === task.id ? deploymentProgress : null;
@@ -3681,7 +3800,7 @@ function FddTaskDetailPanel({
               <Icon name="activity" />
               Test with data
             </Button>
-            <Button type="button" loading={Boolean(taskDeploymentProgress)} disabled={!canDeploy} title={task.algorithmSnapshot.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented"} onClick={() => onDeployTask(task.id)}>
+            <Button type="button" loading={Boolean(taskDeploymentProgress)} disabled={!canDeploy} title={task.algorithmSnapshot.deployableRuntime ? canDeploy ? "Deploy" : "Run a current equipment and data check before deployment" : "Spec only: executable evaluator not implemented"} onClick={() => onDeployTask(task.id)}>
               {taskDeploymentProgress ? <span className="spinner" aria-hidden="true" /> : <Icon name="zap" />}
               {taskDeploymentProgress ? fddDeploymentPhaseLabel(taskDeploymentProgress.phase) : task.algorithmSnapshot.deployableRuntime ? "Deploy all" : "Evaluator required"}
             </Button>
@@ -3811,12 +3930,14 @@ function FddTaskDetailPanel({
 
 function WorkspaceFddTaskList({
   tasks,
+  library,
   activeTaskId,
   onOpenTask,
   onTestTask,
   onDeployTask,
 }: {
   tasks: ProjectFddTask[];
+  library: FddLibraryResponse | null;
   activeTaskId: string | null;
   onOpenTask: (taskId: string) => void;
   onTestTask: (taskId: string) => void;
@@ -3826,7 +3947,8 @@ function WorkspaceFddTaskList({
     <ul className="workspace-right-fdd-task-list" aria-label="Project FDD tasks">
       {tasks.map((task) => {
         const check = task.deployabilityCheck;
-        const canDeploy = task.algorithmSnapshot.deployableRuntime && check?.status === "can_deploy";
+        const currentCheck = currentEquipmentFirstFddTaskCheck(task, library);
+        const canDeploy = task.algorithmSnapshot.deployableRuntime && currentCheck?.status === "can_deploy";
         const isActive = activeTaskId === task.id;
         return (
           <li key={task.id} className={`workspace-right-fdd-task-row${isActive ? " is-active" : ""}`}>
@@ -3849,7 +3971,7 @@ function WorkspaceFddTaskList({
                 <Icon name="activity" />
                 <span>Test</span>
               </button>
-              <button type="button" className="is-primary" title={task.algorithmSnapshot.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented"} aria-label={`Deploy ${task.algorithmSnapshot.name}`} disabled={!canDeploy} onClick={(event) => { event.stopPropagation(); onDeployTask(task.id); }}>
+              <button type="button" className="is-primary" title={task.algorithmSnapshot.deployableRuntime ? canDeploy ? "Deploy" : "Run a current equipment and data check before deployment" : "Spec only: executable evaluator not implemented"} aria-label={`Deploy ${task.algorithmSnapshot.name}`} disabled={!canDeploy} onClick={(event) => { event.stopPropagation(); onDeployTask(task.id); }}>
                 <Icon name="zap" />
                 <span>Deploy</span>
               </button>
@@ -3880,6 +4002,9 @@ function FddLibraryPanel({
 }) {
   const [query, setQuery] = useState("");
   const [selectedAlgorithmId, setSelectedAlgorithmId] = useState<string | null>(null);
+  const [activeEquipmentType, setActiveEquipmentType] = useState<FddEquipmentType>("chiller");
+  const panelProjectRef = useRef<string | null>(null);
+  const equipmentTabRefs = useRef<Partial<Record<FddEquipmentType, HTMLButtonElement | null>>>({});
   const algorithms = library?.algorithms ?? [];
   const checks = library?.checks ?? [];
   const tasks = library?.tasks ?? [];
@@ -3926,27 +4051,74 @@ function FddLibraryPanel({
       });
   };
   const equipmentOrder: FddEquipmentType[] = ["chiller", "ahu", "vav", "fcu", "pump", "cooling_tower"];
-  const equipmentSections = equipmentOrder.flatMap((equipmentType) => {
+  const equipmentAvailability = new Map(
+    (library?.equipmentAvailability ?? []).map((entry) => [entry.equipmentType, entry] as const)
+  );
+  const equipmentSections = equipmentOrder.map((equipmentType) => {
     const equipmentAlgorithms = sortedAlgorithms.filter((algorithm) => algorithm.equipmentType === equipmentType);
-    return equipmentAlgorithms.length > 0
-      ? [{
-          id: equipmentType,
-          label: fddEquipmentLabel(equipmentType),
-          algorithms: equipmentAlgorithms,
-          categories: categorySectionsFor(equipmentAlgorithms)
-        }]
-      : [];
+    const allEquipmentAlgorithms = curatedAlgorithms.filter((algorithm) => algorithm.equipmentType === equipmentType);
+    return {
+      id: equipmentType,
+      label: fddEquipmentLabel(equipmentType),
+      algorithms: equipmentAlgorithms,
+      allAlgorithms: allEquipmentAlgorithms,
+      categories: categorySectionsFor(equipmentAlgorithms),
+      availability: equipmentAvailability.get(equipmentType)
+    };
   });
+  const activeEquipmentSection = equipmentSections.find((section) => section.id === activeEquipmentType) ?? equipmentSections[0]!;
+  const activeEquipmentAvailable = activeEquipmentSection?.availability?.status === "available";
+  const activeEquipmentUnavailable = activeEquipmentSection?.availability?.status === "not_available";
+  const activeEquipmentUnknown = !activeEquipmentAvailable && !activeEquipmentUnavailable;
   const categoryCount = new Set(curatedAlgorithms.map((algorithm) => algorithm.categoryKey)).size;
   const runtimeReadyCount = curatedAlgorithms.filter((algorithm) => algorithm.deployableRuntime).length;
   const specificationOnlyCount = curatedAlgorithms.length - runtimeReadyCount;
   const selectedAlgorithm = curatedAlgorithms.find((algorithm) => algorithm.id === selectedAlgorithmId) ?? null;
-  const selectedCheck = selectedAlgorithm ? latestFddCheckForAlgorithm(checks, selectedAlgorithm) : undefined;
+  const selectedEquipmentAvailability = selectedAlgorithm ? equipmentAvailability.get(selectedAlgorithm.equipmentType) : undefined;
+  const selectedEquipmentAvailable = selectedEquipmentAvailability?.status === "available";
+  const selectedEquipmentUnavailable = selectedEquipmentAvailability?.status === "not_available";
+  const selectedEquipmentUnknown = Boolean(selectedAlgorithm) && !selectedEquipmentAvailable && !selectedEquipmentUnavailable;
+  const selectedCheck = selectedAlgorithm
+    ? currentEquipmentFirstFddCheck(
+        checks,
+        selectedAlgorithm,
+        library?.projectId,
+        library?.equipmentInventorySignature,
+        selectedEquipmentAvailability
+      )
+    : undefined;
   const selectedRequiredSlots = new Set(selectedAlgorithm?.requiredPoints.filter((point) => point.required).map((point) => point.slot) ?? []);
   const selectedRequiredMappings = (selectedCheck?.selectedMappings ?? []).filter((mapping) => selectedRequiredSlots.has(mapping.slot));
   const selectedAmbiguousSlots = selectedCheck?.ambiguousInputs ?? [];
   const selectedDeploymentProgress = selectedAlgorithm && deploymentProgress?.algorithmId === selectedAlgorithm.id ? deploymentProgress : null;
   const selectedDeployedTask = selectedAlgorithm ? deployedFddTaskForAlgorithm(tasks, selectedAlgorithm) : undefined;
+
+  useEffect(() => {
+    if (!library?.projectId || panelProjectRef.current === library.projectId) return;
+    panelProjectRef.current = library.projectId;
+    setQuery("");
+    setSelectedAlgorithmId(null);
+    const firstAvailable = equipmentOrder.find((equipmentType) => equipmentAvailability.get(equipmentType)?.status === "available");
+    setActiveEquipmentType(firstAvailable ?? "chiller");
+  }, [library?.projectId, library?.equipmentAvailability]);
+
+  const activateEquipmentTab = (equipmentType: FddEquipmentType, moveFocus = false) => {
+    setActiveEquipmentType(equipmentType);
+    setSelectedAlgorithmId(null);
+    if (moveFocus) equipmentTabRefs.current[equipmentType]?.focus();
+  };
+
+  const handleEquipmentTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, equipmentType: FddEquipmentType) => {
+    const currentIndex = equipmentOrder.indexOf(equipmentType);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % equipmentOrder.length;
+    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + equipmentOrder.length) % equipmentOrder.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = equipmentOrder.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    activateEquipmentTab(equipmentOrder[nextIndex]!, true);
+  };
 
   useEffect(() => {
     if (!selectedAlgorithmId) return undefined;
@@ -4005,36 +4177,97 @@ function FddLibraryPanel({
         </div>
       </section>
 
-      <div className="fdd-equipment-nav fdd-category-nav" aria-label="FDD equipment sections">
-        {equipmentSections.map((section) => (
-          <button
-            key={section.id}
-            type="button"
-            onClick={() => document.getElementById(`fdd-equipment-${section.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          >
-            {section.label}
-            <span>{section.algorithms.length}</span>
-          </button>
-        ))}
+      <div className="fdd-equipment-nav fdd-category-nav" role="tablist" aria-label="FDD equipment">
+        {equipmentSections.map((section) => {
+          const availability = section.availability;
+          const presenceLabel = availability?.status === "available"
+            ? `${availability.entityCount} ${availability.entityCount === 1 ? "asset" : "assets"}`
+            : availability?.status === "not_available"
+              ? "N/A"
+              : "Unknown";
+          return (
+            <button
+              id={`fdd-equipment-tab-${section.id}`}
+              className={activeEquipmentType === section.id ? "is-active" : undefined}
+              key={section.id}
+              type="button"
+              role="tab"
+              aria-selected={activeEquipmentType === section.id}
+              aria-controls={`fdd-equipment-panel-${section.id}`}
+              tabIndex={activeEquipmentType === section.id ? 0 : -1}
+              ref={(element) => {
+                equipmentTabRefs.current[section.id] = element;
+              }}
+              onKeyDown={(event) => handleEquipmentTabKeyDown(event, section.id)}
+              onClick={() => activateEquipmentTab(section.id)}
+            >
+              <strong>{section.label}</strong>
+              <span className="fdd-equipment-tab-count">{section.allAlgorithms.length}</span>
+              <span className={`fdd-equipment-tab-presence is-${availability?.status ?? "unknown"}`}>{presenceLabel}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="fdd-library-sections">
-        {equipmentSections.length === 0 ? (
-          <EmptyState title={loading ? "Loading FDD rules" : "No matching FDD rules"}>
-            {loading ? "Curated FDD rules will appear here as soon as they load." : "Change the search query."}
-          </EmptyState>
-        ) : equipmentSections.map((section) => (
-          <section className="fdd-equipment-section" id={`fdd-equipment-${section.id}`} key={section.id}>
-            <header className="fdd-equipment-section-header">
+        {equipmentSections
+          .filter((section) => section.id !== activeEquipmentSection.id)
+          .map((section) => (
+            <section
+              key={section.id}
+              id={`fdd-equipment-panel-${section.id}`}
+              role="tabpanel"
+              aria-labelledby={`fdd-equipment-tab-${section.id}`}
+              hidden
+            />
+          ))}
+        <section
+          key={activeEquipmentSection.id}
+          className="fdd-equipment-section"
+          id={`fdd-equipment-panel-${activeEquipmentSection.id}`}
+          role="tabpanel"
+          aria-labelledby={`fdd-equipment-tab-${activeEquipmentSection.id}`}
+        >
+          <header className="fdd-equipment-section-header">
+            <div>
+              <h3>{activeEquipmentSection.label}</h3>
+              <p>{activeEquipmentSection.categories.length} categories · {activeEquipmentSection.algorithms.length} visible rules</p>
+            </div>
+            <Badge tone={fddEquipmentAvailabilityTone(activeEquipmentSection.availability)}>
+              {fddEquipmentAvailabilityLabel(activeEquipmentSection.availability)}
+            </Badge>
+          </header>
+
+          {activeEquipmentUnavailable ? (
+            <div className="fdd-equipment-availability is-not-available" role="status">
+              <span className="fdd-equipment-availability-icon" aria-hidden="true"><Icon name="info" /></span>
               <div>
-                <h3>{section.label}</h3>
-                <p>{section.categories.length} categories · {section.algorithms.length} visible rules</p>
+                <strong>No equipment in this project</strong>
+                <p>{activeEquipmentSection.label} algorithms remain visible for reference, but they are Not applicable to this project's data and cannot be tested or deployed.</p>
+                {activeEquipmentSection.availability?.reason ? <small>{activeEquipmentSection.availability.reason}</small> : null}
               </div>
-              <Badge tone="neutral">{section.algorithms.length} rules</Badge>
-            </header>
+            </div>
+          ) : null}
+
+          {activeEquipmentUnknown ? (
+            <div className="fdd-equipment-availability is-unknown" role="status">
+              <span className="fdd-equipment-availability-icon" aria-hidden="true"><Icon name="info" /></span>
+              <div>
+                <strong>Equipment availability unknown</strong>
+                <p>{activeEquipmentSection.label} algorithms remain visible, but testing and deployment are disabled until the project equipment inventory is confirmed.</p>
+                {activeEquipmentSection.availability?.reason ? <small>{activeEquipmentSection.availability.reason}</small> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {activeEquipmentSection.categories.length === 0 ? (
+            <EmptyState title={loading ? "Loading FDD rules" : "No matching FDD rules"}>
+              {loading ? "Curated FDD rules will appear here as soon as they load." : "Change the search query or choose another equipment tab."}
+            </EmptyState>
+          ) : (
             <div className="fdd-category-stack">
-              {section.categories.map((category) => (
-                <section className="fdd-category-section" id={`fdd-category-${category.key}`} key={category.key}>
+              {activeEquipmentSection.categories.map((category) => (
+                <section className="fdd-category-section" id={`fdd-category-${activeEquipmentSection.id}-${category.key}`} key={category.key}>
                   <header className="fdd-category-header">
                     <div>
                       <h4>{category.label}</h4>
@@ -4058,11 +4291,28 @@ function FddLibraryPanel({
                       </thead>
                       <tbody>
                         {category.algorithms.map((algorithm) => {
-                          const check = latestFddCheckForAlgorithm(checks, algorithm);
+                          const check = currentEquipmentFirstFddCheck(
+                            checks,
+                            algorithm,
+                            library?.projectId,
+                            library?.equipmentInventorySignature,
+                            activeEquipmentSection.availability
+                          );
                           const deployedTask = deployedFddTaskForAlgorithm(tasks, algorithm);
                           const algorithmProgress = deploymentProgress?.algorithmId === algorithm.id ? deploymentProgress : null;
+                          const rowClassName = activeEquipmentUnavailable || activeEquipmentUnknown
+                            ? "is-not-applicable"
+                            : deployedTask || algorithmProgress
+                              ? "is-deployed"
+                              : undefined;
+                          const unavailableTitle = `Not applicable: no ${activeEquipmentSection.label} equipment in this project`;
+                          const equipmentActionTitle = activeEquipmentUnavailable
+                            ? unavailableTitle
+                            : activeEquipmentUnknown
+                              ? `Equipment availability unknown for ${activeEquipmentSection.label}`
+                              : undefined;
                           return (
-                            <tr key={algorithm.id} className={deployedTask || algorithmProgress ? "is-deployed" : undefined}>
+                            <tr key={algorithm.id} className={rowClassName}>
                               <td>
                                 <button type="button" className="fdd-library-algorithm-link" onClick={() => setSelectedAlgorithmId(algorithm.id)}>
                                   <strong>{algorithm.name}</strong>
@@ -4073,10 +4323,18 @@ function FddLibraryPanel({
                               <td>{fddMethodLabel(algorithm.method)}</td>
                               <td>{algorithm.requiredPoints.filter((point) => point.required).length}</td>
                               <td><Badge tone={fddDefinitionTone(algorithm)}>{fddDefinitionLabel(algorithm)}</Badge></td>
-                              <td><Badge tone={fddDeployabilityTone(check?.status)}>{fddDeployabilityLabel(check?.status)}</Badge></td>
+                              <td>
+                                <Badge tone={activeEquipmentUnavailable ? "neutral" : activeEquipmentUnknown ? "warning" : fddDeployabilityTone(check?.status)}>
+                                  {activeEquipmentUnavailable ? "Not applicable" : activeEquipmentUnknown ? "Equipment availability unknown" : fddDeployabilityLabel(check?.status)}
+                                </Badge>
+                              </td>
                               <td><Badge tone={algorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(algorithm)}</Badge></td>
                               <td>
-                                {algorithmProgress ? (
+                                {activeEquipmentUnavailable ? (
+                                  <Badge tone="neutral">Not applicable</Badge>
+                                ) : activeEquipmentUnknown ? (
+                                  <Badge tone="warning">Availability unknown</Badge>
+                                ) : algorithmProgress ? (
                                   <Badge tone="info">{fddDeploymentPhaseLabel(algorithmProgress.phase)}</Badge>
                                 ) : deployedTask ? (
                                   <Badge tone="success">Deployed</Badge>
@@ -4089,7 +4347,13 @@ function FddLibraryPanel({
                                   <button type="button" title="Details" aria-label={`Open ${algorithm.name} details`} onClick={() => setSelectedAlgorithmId(algorithm.id)}>
                                     <Icon name="book-open" />
                                   </button>
-                                  <button type="button" title="Test with data" aria-label={`Test ${algorithm.name} with data`} onClick={() => onTestAlgorithm(algorithm.id)}>
+                                  <button
+                                    type="button"
+                                    title={equipmentActionTitle ?? "Test with project data"}
+                                    aria-label={`Test ${algorithm.name} with project data`}
+                                    disabled={!activeEquipmentAvailable}
+                                    onClick={() => onTestAlgorithm(algorithm.id)}
+                                  >
                                     <Icon name="activity" />
                                   </button>
                                   {deployedTask ? (
@@ -4099,9 +4363,9 @@ function FddLibraryPanel({
                                   ) : (
                                     <button
                                       type="button"
-                                      title={algorithm.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented"}
+                                      title={equipmentActionTitle ?? (algorithm.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented")}
                                       aria-label={`Deploy ${algorithm.name}`}
-                                      disabled={!algorithm.deployableRuntime || Boolean(deploymentProgress && !algorithmProgress) || check?.status !== "can_deploy"}
+                                      disabled={!activeEquipmentAvailable || !algorithm.deployableRuntime || Boolean(deploymentProgress && !algorithmProgress) || check?.status !== "can_deploy"}
                                       onClick={() => onDeployAlgorithm(algorithm.id)}
                                     >
                                       <Icon name="zap" />
@@ -4118,8 +4382,8 @@ function FddLibraryPanel({
                 </section>
               ))}
             </div>
-          </section>
-        ))}
+          )}
+        </section>
       </div>
 
       {selectedAlgorithm ? (
@@ -4131,12 +4395,18 @@ function FddLibraryPanel({
                 <h3>{selectedAlgorithm.name}</h3>
               </div>
               <div className="fdd-detail-status-badges">
-                <Badge tone={fddDeployabilityTone(selectedCheck?.status)}>{fddDeployabilityLabel(selectedCheck?.status)}</Badge>
+                {selectedEquipmentUnavailable ? (
+                  <Badge tone="neutral">Not applicable</Badge>
+                ) : selectedEquipmentUnknown ? (
+                  <Badge tone="warning">Equipment availability unknown</Badge>
+                ) : (
+                  <Badge tone={fddDeployabilityTone(selectedCheck?.status)}>{fddDeployabilityLabel(selectedCheck?.status)}</Badge>
+                )}
                 <Badge tone={selectedAlgorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(selectedAlgorithm)}</Badge>
                 <Badge tone={fddDefinitionTone(selectedAlgorithm)}>{fddDefinitionLabel(selectedAlgorithm)}</Badge>
-                {selectedDeploymentProgress ? (
+                {selectedEquipmentAvailable && selectedDeploymentProgress ? (
                   <Badge tone="info">{fddDeploymentPhaseLabel(selectedDeploymentProgress.phase)}</Badge>
-                ) : selectedDeployedTask ? (
+                ) : selectedEquipmentAvailable && selectedDeployedTask ? (
                   <Badge tone="success">Deployed</Badge>
                 ) : null}
               </div>
@@ -4149,8 +4419,22 @@ function FddLibraryPanel({
               <div><dt>Version</dt><dd>{selectedAlgorithm.version}</dd></div>
               <div><dt>Runtime</dt><dd>{fddRuntimeLabel(selectedAlgorithm)}</dd></div>
               <div><dt>Definition</dt><dd>{fddDefinitionLabel(selectedAlgorithm)}</dd></div>
-              <div><dt>Project</dt><dd>{selectedDeployedTask ? "Deployed" : selectedDeploymentProgress ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase) : "Not deployed"}</dd></div>
+              <div><dt>Project</dt><dd>{selectedEquipmentUnavailable ? "Not applicable" : selectedEquipmentUnknown ? "Equipment availability unknown" : selectedDeployedTask ? "Deployed" : selectedDeploymentProgress ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase) : "Not deployed"}</dd></div>
             </dl>
+            {selectedEquipmentUnavailable ? (
+              <section className="fdd-detail-section fdd-detail-not-applicable" role="status">
+                <h4>No equipment in this project</h4>
+                <p>This algorithm remains available in the library, but it is Not applicable to the current project's data. Project data testing and deployment are disabled.</p>
+                {selectedEquipmentAvailability?.reason ? <p>{selectedEquipmentAvailability.reason}</p> : null}
+              </section>
+            ) : null}
+            {selectedEquipmentUnknown ? (
+              <section className="fdd-detail-section fdd-detail-not-applicable" role="status">
+                <h4>Equipment availability unknown</h4>
+                <p>Project data testing and deployment are disabled until the equipment inventory is confirmed.</p>
+                {selectedEquipmentAvailability?.reason ? <p>{selectedEquipmentAvailability.reason}</p> : null}
+              </section>
+            ) : null}
             {selectedAlgorithm.definitionIssues?.length ? (
               <section className="fdd-detail-section">
                 <h4>Definition Validation</h4>
@@ -4275,14 +4559,20 @@ function FddLibraryPanel({
               </section>
             ) : null}
             <div className="fdd-detail-actions">
-              <Button type="button" variant="secondary" onClick={() => onTestAlgorithm(selectedAlgorithm.id)}>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!selectedEquipmentAvailable}
+                title={selectedEquipmentUnavailable ? `Not applicable: no ${fddEquipmentLabel(selectedAlgorithm.equipmentType)} equipment in this project` : selectedEquipmentUnknown ? "Equipment availability unknown" : "Test with project data"}
+                onClick={() => onTestAlgorithm(selectedAlgorithm.id)}
+              >
                 <Icon name="activity" />
-                Test with data
+                {selectedEquipmentUnavailable ? "Not applicable" : selectedEquipmentUnknown ? "Availability unknown" : "Test with project data"}
               </Button>
               <Button
                 type="button"
                 loading={Boolean(selectedDeploymentProgress)}
-                disabled={!selectedAlgorithm.deployableRuntime || Boolean(deploymentProgress && !selectedDeploymentProgress) || (!selectedDeployedTask && selectedCheck?.status !== "can_deploy")}
+                disabled={!selectedDeployedTask && (!selectedEquipmentAvailable || !selectedAlgorithm.deployableRuntime || Boolean(deploymentProgress && !selectedDeploymentProgress) || selectedCheck?.status !== "can_deploy")}
                 onClick={() => {
                   if (selectedDeployedTask) {
                     onOpenTask(selectedDeployedTask.id);
@@ -4296,6 +4586,10 @@ function FddLibraryPanel({
                   ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase)
                   : selectedDeployedTask
                     ? "Open task"
+                    : selectedEquipmentUnavailable
+                      ? "Not applicable"
+                    : selectedEquipmentUnknown
+                      ? "Availability unknown"
                     : selectedAlgorithm.deployableRuntime
                       ? "Deploy"
                       : "Evaluator required"}
@@ -4952,6 +5246,7 @@ function Workspace({
         {activeTab === "fdd-tasks" ? (
           <FddTaskDetailPanel
             task={activeFddTask}
+            library={fddLibrary}
             activeTaskId={visibleActiveFddTaskId}
             metricGroup={activeFddTaskMetricGroup}
             dashboards={dashboards}
@@ -5912,7 +6207,7 @@ export default function App() {
   }, [activeDashboardPointNamesSignature]);
 
   useEffect(() => {
-    if (!token || !selectedProject || activeTab !== "fdd-library") return;
+    if (!token || !selectedProject || (activeTab !== "fdd-library" && activeTab !== "fdd-tasks")) return;
     if (fddLibrary?.projectId === selectedProject.id && fddLibraryHasFullCuratedImport) return;
     let cancelled = false;
     const projectId = selectedProject.id;
@@ -5943,7 +6238,7 @@ export default function App() {
   }, [activeTab, fddLibrary?.projectId, fddLibraryHasFullCuratedImport, selectedProject?.id ?? null, token]);
 
   useEffect(() => {
-    if (!token || !selectedProject || activeTab !== "fdd-library" || !fddLibrary?.checksPending) return;
+    if (!token || !selectedProject || (activeTab !== "fdd-library" && activeTab !== "fdd-tasks") || !fddLibrary?.checksPending) return;
     let cancelled = false;
     let timer: number | null = null;
     const projectId = selectedProject.id;
