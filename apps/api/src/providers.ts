@@ -249,10 +249,17 @@ function normalizeProviderText(value: unknown, provider: ProviderMetadata): stri
   }
 
   const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > 4000) {
+  if (trimmed.length === 0) {
     throw new ProviderError("Provider response assistant text was invalid.", {
-      code: "provider_invalid_text",
+      code: "provider_empty_text",
       provider
+    });
+  }
+  if (trimmed.length > 8000) {
+    throw new ProviderError("Provider response assistant text was too long.", {
+      code: "provider_text_too_long",
+      provider,
+      responseDetail: `assistant content length ${trimmed.length}`
     });
   }
 

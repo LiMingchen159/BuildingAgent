@@ -115,9 +115,12 @@ const REPORT_TEMPLATES: ReportTemplate[] = [
 
 const WIDGET_KIND_LABELS: Record<DashboardRecord["widgets"][number]["kind"], { zh: string; en: string }> = {
   live_value_grid: { zh: "实时值", en: "Live values" },
+  status_grid: { zh: "状态", en: "Status" },
   timeseries_chart: { zh: "趋势", en: "Trend" },
   stat_value: { zh: "KPI", en: "KPI" },
   bar_comparison: { zh: "对比", en: "Comparison" },
+  fdd_fault_rate_comparison: { zh: "FDD 故障率对比", en: "FDD fault rate" },
+  fdd_attribution_analysis: { zh: "FDD 归因分析", en: "FDD attribution" },
   note: { zh: "运维备注", en: "Operator note" }
 };
 

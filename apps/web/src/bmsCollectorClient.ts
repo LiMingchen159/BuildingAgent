@@ -19,6 +19,8 @@ export interface BmsCollectorPoint {
   object_ref?: string;
   last_value?: string | null;
   last_polled_at?: string | null;
+  quality?: string | null;
+  status?: string | null;
 }
 
 export interface BmsCollectorPointsResponse {
@@ -34,6 +36,8 @@ export interface BmsCollectorTimeseriesRow {
   value?: string;
   value_num?: number | null;
   value_text?: string | null;
+  quality?: string | null;
+  status?: string | null;
 }
 
 export interface BmsCollectorTimeseriesResponse {
@@ -44,6 +48,7 @@ export interface BmsCollectorTimeseriesResponse {
 export interface BmsDashboardHistoryBatchQuery {
   key: string;
   source?: "bms" | "derived_metric";
+  bms_source_id?: string;
   name?: string;
   point_id?: string;
   object_ref?: string;
@@ -63,11 +68,14 @@ export interface BmsDashboardHistoryBatchResult {
   total: number;
   items: BmsCollectorTimeseriesRow[];
   error?: string;
+  sourceId?: string;
+  sourceName?: string;
 }
 
 export interface BmsDashboardLatestBatchQuery {
   key: string;
   source?: "bms" | "derived_metric";
+  bms_source_id?: string;
   name?: string;
   point_id?: string;
   object_ref?: string;
@@ -82,6 +90,26 @@ export interface BmsDashboardLatestBatchResult {
   total: number;
   point: BmsCollectorPoint | null;
   error?: string;
+  sourceId?: string;
+  sourceName?: string;
+}
+
+export interface FddAttributionAnalysisRequest {
+  widgetTitle?: string;
+  rangeLabel?: string;
+  summary: unknown;
+}
+
+export interface FddAttributionAnalysisResponse {
+  ok: boolean;
+  content?: string;
+  error?: string;
+  diagnostic?: {
+    code: string;
+    status?: number;
+    responseDetail?: string;
+  };
+  requestId: string;
 }
 
 function collectorUrl(prefix: string, path: string): string {
@@ -242,4 +270,32 @@ export async function queryBmsDashboardLatestBatch(
     throw new ApiClientError({ code: "api_malformed", message: "Unexpected BMS dashboard latest batch response." }, 200);
   }
   return payload as { results: BmsDashboardLatestBatchResult[]; requestId: string };
+}
+
+export async function generateFddAttributionAnalysis(
+  token: string,
+  projectId: string,
+  request: FddAttributionAnalysisRequest,
+  init: RequestInit = {}
+): Promise<FddAttributionAnalysisResponse> {
+  const headers = new Headers(authHeaders(token));
+  headers.set("content-type", "application/json");
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/fdd-attribution-analysis`, {
+    ...init,
+    method: "POST",
+    headers,
+    body: JSON.stringify(request)
+  });
+  const payload = await readJson(response);
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error?: { message?: string } }).error?.message ?? "BuildingGPT fault analysis failed.")
+        : "BuildingGPT fault analysis failed.";
+    throw new ApiClientError({ code: "fdd_attribution_analysis_error", message: detail }, response.status);
+  }
+  if (!payload || typeof payload !== "object" || typeof (payload as { ok?: unknown }).ok !== "boolean" || typeof (payload as { requestId?: unknown }).requestId !== "string") {
+    throw new ApiClientError({ code: "api_malformed", message: "Unexpected BuildingGPT fault analysis response." }, 200);
+  }
+  return payload as FddAttributionAnalysisResponse;
 }

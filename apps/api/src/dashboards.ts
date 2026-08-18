@@ -1,12 +1,13 @@
 export type DashboardVisibility = "private" | "project";
-export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart" | "stat_value" | "bar_comparison" | "note";
-export type DashboardSectionKind = "overview" | "comparison" | "trends" | "custom";
+export type DashboardWidgetKind = "live_value_grid" | "timeseries_chart" | "stat_value" | "bar_comparison" | "status_grid" | "fdd_fault_rate_comparison" | "fdd_attribution_analysis" | "note";
+export type DashboardSectionKind = "overview" | "analysis" | "comparison" | "trends" | "custom";
 export type DashboardNoteTone = "yellow" | "blue" | "green" | "pink" | "neutral";
 export type DashboardPointSource = "bms" | "derived_metric";
 
 export interface DashboardPointBinding {
   id?: string;
   source?: DashboardPointSource;
+  bmsSourceId?: string;
   pointName?: string;
   objectRef?: string;
   metricInstanceId?: string;
@@ -18,6 +19,8 @@ export interface DashboardPointBinding {
   defaultVisible?: boolean;
   groupId?: string;
   unit?: string;
+  description?: string;
+  fddParameters?: Array<Record<string, unknown>>;
 }
 
 export interface DashboardWidgetBase {
@@ -44,13 +47,29 @@ export interface BarComparisonWidget extends DashboardWidgetBase {
   kind: "bar_comparison";
 }
 
+export interface StatusGridWidget extends DashboardWidgetBase {
+  kind: "status_grid";
+}
+
+export interface FddFaultRateComparisonWidget extends DashboardWidgetBase {
+  kind: "fdd_fault_rate_comparison";
+  defaultTimeRange?: string;
+  content?: string;
+}
+
+export interface FddAttributionAnalysisWidget extends DashboardWidgetBase {
+  kind: "fdd_attribution_analysis";
+  defaultTimeRange?: string;
+  content?: string;
+}
+
 export interface NoteWidget extends DashboardWidgetBase {
   kind: "note";
   content: string;
   tone?: DashboardNoteTone;
 }
 
-export type DashboardWidget = LiveValueGridWidget | TimeseriesChartWidget | StatValueWidget | BarComparisonWidget | NoteWidget;
+export type DashboardWidget = LiveValueGridWidget | TimeseriesChartWidget | StatValueWidget | BarComparisonWidget | StatusGridWidget | FddFaultRateComparisonWidget | FddAttributionAnalysisWidget | NoteWidget;
 
 export interface DashboardLayoutItem {
   widgetId: string;
@@ -122,6 +141,16 @@ function booleanFrom(value: Record<string, unknown>, keys: string[]): boolean | 
   return undefined;
 }
 
+function arrayRecordFrom(value: Record<string, unknown>, keys: string[]): Array<Record<string, unknown>> | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (Array.isArray(candidate)) {
+      return candidate.filter((entry): entry is Record<string, unknown> => isRecord(entry));
+    }
+  }
+  return undefined;
+}
+
 function normalizeBindingSource(value: unknown): DashboardPointSource | undefined {
   if (value === "derived_metric" || value === "derived" || value === "metric") return "derived_metric";
   if (value === "bms" || value === "raw_point" || value === "point") return "bms";
@@ -136,6 +165,7 @@ function sanitizeBinding(value: unknown): DashboardPointBinding | null {
   const metricKey = stringFrom(value, ["metricKey", "metric_key"]);
   const entityId = stringFrom(value, ["entityId", "entity_id"]);
   const source = normalizeBindingSource(value.source) ?? (metricInstanceId || metricKey ? "derived_metric" : "bms");
+  const bmsSourceId = stringFrom(value, ["bmsSourceId", "bms_source_id"]);
   const role = asString(value.role)?.trim();
   const dependencyRole = stringFrom(value, ["dependencyRole", "dependency_role"]);
   const defaultVisible = booleanFrom(value, ["defaultVisible", "default_visible"]);
@@ -146,7 +176,9 @@ function sanitizeBinding(value: unknown): DashboardPointBinding | null {
     ...(dependencyRole ? { dependencyRole } : {}),
     ...(defaultVisible !== undefined ? { defaultVisible } : {}),
     ...(groupId ? { groupId } : {}),
-    ...(asString(value.unit)?.trim() ? { unit: asString(value.unit)!.trim() } : {})
+    ...(asString(value.unit)?.trim() ? { unit: asString(value.unit)!.trim() } : {}),
+    ...(asString(value.description)?.trim() ? { description: asString(value.description)!.trim() } : {}),
+    ...(arrayRecordFrom(value, ["fddParameters", "fdd_parameters"]) ? { fddParameters: arrayRecordFrom(value, ["fddParameters", "fdd_parameters"])! } : {})
   };
   if (source === "derived_metric") {
     if (!metricInstanceId && (!metricKey || !entityId)) return null;
@@ -163,6 +195,7 @@ function sanitizeBinding(value: unknown): DashboardPointBinding | null {
   return {
     ...(asString(value.id)?.trim() ? { id: asString(value.id)!.trim() } : {}),
     ...(source === "bms" && asString(value.source)?.trim() ? { source } : {}),
+    ...(bmsSourceId ? { bmsSourceId } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
     ...(entityId ? { entityId } : {}),
@@ -201,6 +234,19 @@ function sanitizeWidget(value: unknown): DashboardWidget | null {
   }
   if (kind === "bar_comparison") {
     return { id, kind, title, pointBindings };
+  }
+  if (kind === "status_grid") {
+    return { id, kind, title, pointBindings };
+  }
+  if (kind === "fdd_fault_rate_comparison" || kind === "fdd_attribution_analysis") {
+    return {
+      id,
+      kind,
+      title,
+      pointBindings,
+      ...(asString(value.defaultTimeRange)?.trim() ? { defaultTimeRange: asString(value.defaultTimeRange)!.trim() } : {}),
+      ...(asString(value.content)?.trim() ? { content: asString(value.content)!.trim() } : {})
+    };
   }
   if (kind === "timeseries_chart") {
     return {
@@ -243,7 +289,7 @@ function sanitizeSection(value: unknown): DashboardSection | null {
     ? value.widgetIds.map((entry) => asString(entry)?.trim()).filter((entry): entry is string => Boolean(entry))
     : [];
   if (!id || !title || widgetIds.length === 0) return null;
-  if (kind !== "overview" && kind !== "comparison" && kind !== "trends" && kind !== "custom") return null;
+  if (kind !== "overview" && kind !== "analysis" && kind !== "comparison" && kind !== "trends" && kind !== "custom") return null;
   return {
     id,
     title,

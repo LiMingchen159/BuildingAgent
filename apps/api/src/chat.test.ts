@@ -661,10 +661,10 @@ describe("project-scoped chat contract", () => {
     try {
       const app = buildServer({ store, chatProvider: provider });
 
-      await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+      await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
       const response = await app.inject({
         method: "POST",
-        url: "/api/projects/project_alpha/chat",
+        url: "/api/projects/project_element/chat",
         headers: bearer(adaToken),
         payload: { message: "请实时监控所有 chiller 的送回水温度" }
       });
@@ -674,9 +674,9 @@ describe("project-scoped chat contract", () => {
       expect(response.json().assistantMessage.content).not.toMatch(/api[_-]?key|bearer/i);
       assertNoSecrets(response.json());
 
-      const createdDashboards = store.dashboardsByProject.project_alpha ?? [];
+      const createdDashboards = store.dashboardsByProject.project_element ?? [];
       expect(createdDashboards).toHaveLength(1);
-      expect(response.json().assistantMessage.content).toContain(`/projects/project_alpha/dashboards/${createdDashboards[0]!.id}`);
+      expect(response.json().assistantMessage.content).toContain(`/projects/project_element/dashboards/${createdDashboards[0]!.id}`);
       expect(createdDashboards[0]).toMatchObject({
         title: "Chiller supply/return monitor",
           visibility: "project",

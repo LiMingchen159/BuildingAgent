@@ -1,4 +1,4 @@
-import { FormEvent, type CSSProperties, type ReactNode, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SVGProps, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, Avatar, Badge, Banner, Button, Card, EmptyState, Input, MockOnlyBadge, Surface, type BannerProps } from "./ui/primitives";
 import { WorkspaceShell } from "./ui/WorkspaceShell";
 import { Markdown } from "./ui/Markdown";
@@ -8,7 +8,6 @@ import { Repository, type RepositoryItem } from "./ui/Repository";
 import { BmsDataConfigPage } from "./ui/BmsDataConfig";
 import { DashboardView } from "./ui/DashboardView";
 import { AutoReport } from "./ui/AutoReport";
-import { ScheduledTasks } from "./ui/ScheduledTasks";
 import { CubeLogo } from "./ui/CubeLogo";
 import { ParticleField } from "./ui/ParticleField";
 import { instantConversationTitle, parseActivityLabel, parseAssistantContent, stripThinkingFromAnswer } from "./ui/activityThinking";
@@ -19,6 +18,8 @@ import {
   getDashboards,
   getDerivedMetric,
   getDerivedMetrics,
+  getFddLibrary,
+  getFddTasks,
   getChat,
   getActiveChatStreams,
   parseActiveChatStreamSnapshot,
@@ -41,12 +42,33 @@ import {
   deleteConversation,
   renameConversation,
   updateDashboard,
+  deleteDerivedMetric,
+  deleteFddTask,
   updateDerivedMetricMaterialization,
+  updateFddTaskParameters,
+  createFddTask,
   deleteDashboard,
   deleteProject,
+  deployFddAlgorithm,
+  deployFddTask,
+  testFddAlgorithm,
+  testFddTask,
+  type DashboardPointBinding,
   type DashboardRecord,
   type DerivedMetricAsset,
   type DashboardVisibility,
+  type CreateFddTaskPayload,
+  type FddAlgorithm,
+  type FddDeployabilityCheck,
+  type FddDeployabilityStatus,
+  type FddEquipmentAvailability,
+  type FddEquipmentType,
+  type FddLibraryResponse,
+  type FddMethod,
+  type FddParameterSource,
+  type FddParameterValue,
+  type FddSharingScope,
+  type ProjectFddTask,
   type ActiveChatStreamSnapshot,
   type ChatProviderDiagnostics,
   type ChatLifecycleEvent,
@@ -85,7 +107,7 @@ function consumeSkipProjectRestore(): boolean {
   return true;
 }
 
-type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "reports" | "kpis" | "registry" | "gateways" | "building";
+type WorkspaceTab = "chat" | "bms" | "kb" | "repo" | "dashboards" | "reports" | "kpis" | "fdd-library" | "fdd-tasks" | "registry" | "gateways" | "building";
 
 type IconName =
   | "activity"
@@ -128,6 +150,7 @@ type IconName =
   | "thermometer"
   | "thumbs-down"
   | "thumbs-up"
+  | "trash"
   | "upload"
   | "wrench"
   | "zap"
@@ -201,13 +224,16 @@ function visibleRepositoryArtifactCount(artifacts: RepositoryArtifact[]): number
   return artifacts.filter(isVisibleRepositoryArtifact).length;
 }
 
-function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?: string | null, metricInstanceId?: string | null): string {
+function workspacePathFromTab(projectId: string, tab: WorkspaceTab, dashboardId?: string | null, metricInstanceId?: string | null, fddTaskId?: string | null): string {
   const section = tab === "bms" ? "bms-data-config" : tab === "reports" ? "autoreport" : tab;
   if (tab === "dashboards" && dashboardId) {
     return `/projects/${encodeURIComponent(projectId)}/dashboards/${encodeURIComponent(dashboardId)}`;
   }
   if (tab === "kpis" && metricInstanceId) {
     return `/projects/${encodeURIComponent(projectId)}/kpis/${encodeURIComponent(metricInstanceId)}`;
+  }
+  if (tab === "fdd-tasks" && fddTaskId) {
+    return `/projects/${encodeURIComponent(projectId)}/fdd-tasks/${encodeURIComponent(fddTaskId)}`;
   }
   return `/projects/${encodeURIComponent(projectId)}/${section}`;
 }
@@ -220,7 +246,7 @@ function isSoloDashboardSearch(search: string): boolean {
   return new URLSearchParams(search).get("view") === "solo";
 }
 
-function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab; dashboardId?: string; metricInstanceId?: string } | null {
+function parseWorkspacePath(pathname: string): { projectId: string; tab: WorkspaceTab; dashboardId?: string; metricInstanceId?: string; fddTaskId?: string } | null {
   const dashboardMatch = pathname.match(/^\/projects\/([^/]+)\/dashboards\/([^/]+)$/);
   if (dashboardMatch) {
     const projectId = decodeURIComponent(dashboardMatch[1] ?? "");
@@ -235,13 +261,20 @@ function parseWorkspacePath(pathname: string): { projectId: string; tab: Workspa
     if (!projectId || !metricInstanceId) return null;
     return { projectId, tab: "kpis", metricInstanceId };
   }
+  const fddTaskMatch = pathname.match(/^\/projects\/([^/]+)\/fdd-tasks\/([^/]+)$/);
+  if (fddTaskMatch) {
+    const projectId = decodeURIComponent(fddTaskMatch[1] ?? "");
+    const fddTaskId = decodeURIComponent(fddTaskMatch[2] ?? "");
+    if (!projectId || !fddTaskId) return null;
+    return { projectId, tab: "fdd-tasks", fddTaskId };
+  }
   const match = pathname.match(/^\/projects\/([^/]+)\/([^/]+)$/);
   if (!match) return null;
   const projectId = decodeURIComponent(match[1] ?? "");
   const section = match[2];
   if (!projectId) return null;
   const tab = section === "bms-data-config" ? "bms" : section === "autoreport" ? "reports" : section;
-  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "reports" || tab === "kpis" || tab === "registry" || tab === "gateways" || tab === "building") {
+  if (tab === "chat" || tab === "bms" || tab === "kb" || tab === "repo" || tab === "dashboards" || tab === "reports" || tab === "kpis" || tab === "fdd-library" || tab === "fdd-tasks" || tab === "registry" || tab === "gateways" || tab === "building") {
     return { projectId, tab };
   }
   return null;
@@ -313,14 +346,12 @@ function extractDashboardReferences(content: string, dashboards: DashboardRecord
     ids.add(id);
   }
 
-  return [...ids].map((id) => {
+  return [...ids].flatMap((id) => {
     const dashboard = dashboardsById.get(id);
-    const title = dashboard?.title ?? titlesById.get(id) ?? id;
-    const visibilityLabel = dashboard?.visibility === "project" ? "Shared" : "Private";
-    const subtitle = dashboard
-      ? `${visibilityLabel} dashboard · ${dashboard.widgets.length} widget${dashboard.widgets.length === 1 ? "" : "s"}`
-      : "Dashboard artifact";
-    return { id, title, subtitle, ...(dashboard ? { dashboard } : {}) };
+    if (!dashboard) return [];
+    const visibilityLabel = dashboard.visibility === "project" ? "Shared" : "Private";
+    const subtitle = `${visibilityLabel} dashboard · ${dashboard.widgets.length} widget${dashboard.widgets.length === 1 ? "" : "s"}`;
+    return [{ id, title: dashboard.title, subtitle, dashboard }];
   });
 }
 
@@ -377,6 +408,7 @@ function Icon({ name, className = "", ...props }: { name: IconName; className?: 
     thermometer: <><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z" /></>,
     "thumbs-down": <><path d="M17 14V2" /><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.2-7A2 2 0 0 1 6.4 3H20v11h-4.3a2 2 0 0 0-1.7 1l-3 5a2 2 0 0 1-3.7-1.5z" /></>,
     "thumbs-up": <><path d="M7 10v12" /><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.2 7a2 2 0 0 1-1.9 1.4H4V10h4.3a2 2 0 0 0 1.7-1l3-5a2 2 0 0 1 3.7 1.5z" /></>,
+    trash: <><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></>,
     upload: <><path d="M16 16l-4-4-4 4" /><path d="M12 12v9" /><path d="M20.4 18.5A5 5 0 0 0 18 9h-1.3A8 8 0 1 0 4 16.3" /></>,
     wrench: <><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.6-2.6z" /></>,
     x: <><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>,
@@ -1179,19 +1211,80 @@ function dashboardPointNames(dashboard: DashboardRecord | null): string[] {
 type AppDashboardWidget = DashboardRecord["widgets"][number];
 type AppDashboardSection = NonNullable<DashboardRecord["sections"]>[number];
 const DASHBOARD_LAYOUT_VERSION = 2;
+const FDD_ANALYSIS_TITLE = "Fault Cause Analysis";
+const FDD_TRENDS_TITLE = "Chiller Trends";
 
 function dashboardWidgetSectionInfo(widget: AppDashboardWidget): Pick<AppDashboardSection, "id" | "title" | "kind"> {
   if (widget.kind === "timeseries_chart") return { id: "trends", title: "Trends", kind: "trends" };
+  if (widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison") return { id: "analysis", title: FDD_ANALYSIS_TITLE, kind: "analysis" };
   if (widget.kind === "bar_comparison") return { id: "comparison", title: "Comparison", kind: "comparison" };
   if (widget.kind === "note") return { id: "notes", title: "Notes", kind: "custom" };
   return { id: "overview", title: "Overview", kind: "overview" };
 }
 
+function dashboardSectionDisplayRank(section: AppDashboardSection): number {
+  const id = section.id.toLowerCase();
+  const title = section.title.toLowerCase();
+  if (section.kind === "overview" || id === "overview") return 0;
+  if (section.kind === "analysis" || id === "analysis" || id === "attribution") return 1;
+  if (section.kind === "comparison" || id === "comparison") return 2;
+  if (section.kind === "trends" || id === "trends") return 3;
+  if (id === "notes" || title === "notes") return 4;
+  return 5;
+}
+
+function sortDashboardSectionsForDisplay(sections: AppDashboardSection[]): AppDashboardSection[] {
+  return sections
+    .map((section, index) => ({ section, index }))
+    .sort((left, right) => {
+      const rankDelta = dashboardSectionDisplayRank(left.section) - dashboardSectionDisplayRank(right.section);
+      return rankDelta || left.index - right.index;
+    })
+    .map((entry) => entry.section);
+}
+
 function sectionsForDashboardSpec(dashboard: DashboardRecord): AppDashboardSection[] {
   const widgetIds = new Set(dashboard.widgets.map((widget) => widget.id));
+  const widgetById = new Map(dashboard.widgets.map((widget) => [widget.id, widget]));
   const usedWidgetIds = new Set<string>();
+  const hasFddAnalysis = dashboard.widgets.some((widget) => widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison");
   const explicitSections = (dashboard.sections ?? [])
     .map((section) => ({ ...section, widgetIds: section.widgetIds.filter((widgetId) => widgetIds.has(widgetId)) }))
+    .map((section) => {
+      const id = section.id.toLowerCase();
+      if (hasFddAnalysis && (section.kind === "analysis" || id === "analysis" || id === "attribution")) {
+        return {
+          ...section,
+          id: "analysis",
+          title: FDD_ANALYSIS_TITLE,
+          kind: "analysis" as const,
+          widgetIds: section.widgetIds.filter((widgetId) => {
+            const widget = widgetById.get(widgetId);
+            return widget ? widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison" : false;
+          })
+        };
+      }
+      if (hasFddAnalysis && (section.kind === "trends" || id === "trends")) {
+        return {
+          ...section,
+          title: FDD_TRENDS_TITLE,
+          collapsed: section.collapsed ?? true,
+          widgetIds: section.widgetIds.filter((widgetId) => {
+            const widget = widgetById.get(widgetId);
+            return widget ? widget.kind !== "fdd_attribution_analysis" && widget.kind !== "fdd_fault_rate_comparison" : false;
+          })
+        };
+      }
+      return hasFddAnalysis
+        ? {
+            ...section,
+            widgetIds: section.widgetIds.filter((widgetId) => {
+              const widget = widgetById.get(widgetId);
+              return widget ? widget.kind !== "fdd_attribution_analysis" && widget.kind !== "fdd_fault_rate_comparison" : false;
+            })
+          }
+        : section;
+    })
     .filter((section) => section.widgetIds.length > 0);
   for (const section of explicitSections) {
     for (const widgetId of section.widgetIds) usedWidgetIds.add(widgetId);
@@ -1200,14 +1293,18 @@ function sectionsForDashboardSpec(dashboard: DashboardRecord): AppDashboardSecti
   for (const widget of dashboard.widgets) {
     if (usedWidgetIds.has(widget.id)) continue;
     const info = dashboardWidgetSectionInfo(widget);
-    const section = fallbackById.get(info.id) ?? { ...info, widgetIds: [] };
+    const section = fallbackById.get(info.id) ?? {
+      ...info,
+      ...(hasFddAnalysis && info.id === "trends" ? { title: FDD_TRENDS_TITLE, collapsed: true } : {}),
+      widgetIds: []
+    };
     section.widgetIds.push(widget.id);
     fallbackById.set(info.id, section);
   }
-  return [
+  return sortDashboardSectionsForDisplay([
     ...explicitSections,
-    ...["overview", "comparison", "trends", "notes"].map((id) => fallbackById.get(id)).filter((section): section is AppDashboardSection => Boolean(section))
-  ];
+    ...["overview", "analysis", "comparison", "trends", "notes"].map((id) => fallbackById.get(id)).filter((section): section is AppDashboardSection => Boolean(section))
+  ]);
 }
 
 function widgetSlug(value: string): string {
@@ -1241,6 +1338,7 @@ function cloneWidgetIntoDashboard(widget: AppDashboardWidget, existingIds: Set<s
 
 function defaultLayoutForDashboardWidget(widget: AppDashboardWidget, y: number): DashboardRecord["layout"][number] {
   if (widget.kind === "timeseries_chart") return { widgetId: widget.id, x: 0, y, w: 6, h: 4 };
+  if (widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison") return { widgetId: widget.id, x: 0, y, w: 6, h: 3 };
   if (widget.kind === "bar_comparison") return { widgetId: widget.id, x: 0, y, w: 6, h: 3 };
   if (widget.kind === "live_value_grid") return { widgetId: widget.id, x: 0, y, w: 3, h: widget.pointBindings.length > 2 ? 3 : 2 };
   if (widget.kind === "note") return { widgetId: widget.id, x: 0, y, w: 3, h: 2 };
@@ -2595,6 +2693,599 @@ function metricBackgroundCalculationStatus(asset: DerivedMetricAsset): string {
   return asset.materialization.enabled ? "On" : "Off";
 }
 
+function fddEquipmentLabel(value: FddEquipmentType): string {
+  const labels: Record<FddEquipmentType, string> = {
+    ahu: "AHU",
+    chiller: "Chiller",
+    pump: "Pump",
+    cooling_tower: "Cooling Tower",
+    fcu: "FCU",
+    vav: "VAV",
+    sensor: "Sensor"
+  };
+  return labels[value];
+}
+
+function fddEquipmentAvailabilityLabel(availability: FddEquipmentAvailability | undefined): string {
+  if (availability?.status === "available") {
+    return `${availability.entityCount} ${availability.entityCount === 1 ? "asset" : "assets"} detected`;
+  }
+  if (availability?.status === "not_available") return "No equipment in this project";
+  return "Equipment availability unknown";
+}
+
+function fddEquipmentAvailabilityTone(availability: FddEquipmentAvailability | undefined): "neutral" | "success" | "warning" {
+  if (availability?.status === "available") return "success";
+  if (availability?.status === "not_available") return "neutral";
+  return "warning";
+}
+
+function fddMethodLabel(value: FddMethod): string {
+  const labels: Record<FddMethod, string> = {
+    rule_based: "Rule-based",
+    bayesian_network: "Bayesian network",
+    performance_indicator: "Performance indicator",
+    statistical: "Statistical"
+  };
+  return labels[value];
+}
+
+function fddDeployabilityLabel(status: FddDeployabilityStatus | undefined): string {
+  if (status === "can_deploy") return "Inputs matched";
+  if (status === "uncertain") return "Uncertain";
+  if (status === "cannot_deploy") return "Cannot deploy";
+  return "Not checked";
+}
+
+function fddRuntimeLabel(algorithm: FddAlgorithm): string {
+  return algorithm.deployableRuntime ? "Runtime ready" : "Spec only";
+}
+
+function fddDefinitionLabel(algorithm: FddAlgorithm): string {
+  if (algorithm.definitionStatus === "requires_review") return "Needs review";
+  if (algorithm.definitionStatus === "requires_configuration") return "Needs thresholds";
+  if (algorithm.definitionStatus === "implementation_ready") return "Ready to implement";
+  return algorithm.deployableRuntime ? "Implemented" : "Not classified";
+}
+
+function fddDefinitionTone(algorithm: FddAlgorithm): "neutral" | "success" | "warning" | "danger" {
+  if (algorithm.definitionStatus === "requires_review") return "danger";
+  if (algorithm.definitionStatus === "requires_configuration") return "warning";
+  if (algorithm.definitionStatus === "implementation_ready") return "success";
+  return "neutral";
+}
+
+function fddDeployabilityTone(status: FddDeployabilityStatus | undefined): "neutral" | "success" | "warning" | "danger" {
+  if (status === "can_deploy") return "success";
+  if (status === "uncertain") return "warning";
+  if (status === "cannot_deploy") return "danger";
+  return "neutral";
+}
+
+function fddCheckWorkflowLabel(check: FddDeployabilityCheck): string {
+  const workflow = check.agentWorkflow;
+  if (!workflow) return check.source;
+  const modeLabel = workflow.mode === "deterministic_core" ? "deterministic core" : "deep inference";
+  return `${check.source} · BuildingGPT Skill · ${modeLabel}`;
+}
+
+function fddTaskStatusTone(status: ProjectFddTask["status"]): "neutral" | "success" | "warning" | "danger" | "info" {
+  if (status === "running" || status === "ready") return "success";
+  if (status === "checking") return "info";
+  if (status === "cannot_deploy") return "danger";
+  if (status === "paused") return "warning";
+  return "neutral";
+}
+
+function fddTaskStatusLabel(status: ProjectFddTask["status"]): string {
+  return status.replace(/_/gu, " ");
+}
+
+function fddSharingLabel(value: FddSharingScope): string {
+  return value === "global_community" ? "Community" : "Project only";
+}
+
+function fddTaskSourceLabel(value: ProjectFddTask["source"]): string {
+  if (value === "global_library") return "Library";
+  if (value === "buildinggpt_generated") return "BuildingGPT";
+  return "Project upload";
+}
+
+function fddParameterSourceLabel(value: FddParameterSource): string {
+  if (value === "buildinggpt_recommended") return "AI recommended";
+  if (value === "user_override") return "Manual override";
+  return "Algorithm default";
+}
+
+function fddParameterSourceTone(value: FddParameterSource): "neutral" | "primary" | "success" {
+  if (value === "buildinggpt_recommended") return "primary";
+  if (value === "user_override") return "success";
+  return "neutral";
+}
+
+function metricMetadataString(asset: DerivedMetricAsset, key: string): string | undefined {
+  const value = asset.instance.metadata?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+const CHILLER_DOC_RULE_KEY_PATTERN = /^chiller_ch_(0[1-9]|[1-4]\d|5[01])_/u;
+const IMPORTED_EQUIPMENT_RULE_KEY_PATTERN = /^(?:ahu|fcu|pump|cooling_tower|vav)_fdd_(?:0[1-9]|[1-3]\d|4[0-4])$/u;
+
+function isCuratedFddAlgorithm(algorithm: FddAlgorithm): boolean {
+  return (algorithm.equipmentType === "chiller" && CHILLER_DOC_RULE_KEY_PATTERN.test(algorithm.algorithmKey))
+    || (algorithm.sourcePaperId?.startsWith("docx:") === true && IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(algorithm.algorithmKey));
+}
+
+function curatedFddRuleRank(algorithm: FddAlgorithm): number {
+  const equipmentRank: Record<FddEquipmentType, number> = {
+    chiller: 0,
+    ahu: 1,
+    vav: 2,
+    fcu: 3,
+    pump: 4,
+    cooling_tower: 5,
+    sensor: 6
+  };
+  const chillerMatch = algorithm.algorithmKey.match(/^chiller_ch_(\d{2})_/u);
+  const equipmentMatch = algorithm.algorithmKey.match(/_fdd_(\d{2})$/u);
+  const ruleNumber = Number(chillerMatch?.[1] ?? equipmentMatch?.[1] ?? 999);
+  return equipmentRank[algorithm.equipmentType] * 1000 + ruleNumber;
+}
+
+function isCuratedFddMetricAsset(asset: DerivedMetricAsset): boolean {
+  const metricKey = asset.instance.metricKey.toLowerCase();
+  const algorithmKey = metricMetadataString(asset, "fddAlgorithmKey")?.toLowerCase();
+  return CHILLER_DOC_RULE_KEY_PATTERN.test(metricKey)
+    || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(metricKey)
+    || (algorithmKey ? CHILLER_DOC_RULE_KEY_PATTERN.test(algorithmKey) || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(algorithmKey) : false);
+}
+
+function isVisibleDerivedMetricAsset(asset: DerivedMetricAsset): boolean {
+  return derivedAssetKindLabel(asset) !== "FDD" || isCuratedFddMetricAsset(asset);
+}
+
+function dashboardBindingReferencesFdd(binding: DashboardPointBinding, metricByInstanceId: Map<string, DerivedMetricAsset>, metricsByKey: Map<string, DerivedMetricAsset[]>): boolean {
+  if (binding.metricInstanceId) {
+    const metric = metricByInstanceId.get(binding.metricInstanceId);
+    if (metric) return derivedAssetKindLabel(metric) === "FDD";
+  }
+  if (binding.metricKey) {
+    const normalizedKey = binding.metricKey.toLowerCase();
+    if (CHILLER_DOC_RULE_KEY_PATTERN.test(normalizedKey) || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(normalizedKey)) return true;
+    if (/\b(fdd|fd|fault|detection|diagnostic)\b/u.test(normalizedKey)) return true;
+    return (metricsByKey.get(normalizedKey) ?? []).some((metric) => derivedAssetKindLabel(metric) === "FDD");
+  }
+  return false;
+}
+
+function dashboardBindingReferencesVisibleCuratedFdd(binding: DashboardPointBinding, metricByInstanceId: Map<string, DerivedMetricAsset>, metricsByKey: Map<string, DerivedMetricAsset[]>): boolean {
+  if (binding.metricInstanceId) {
+    const metric = metricByInstanceId.get(binding.metricInstanceId);
+    if (metric) return isCuratedFddMetricAsset(metric);
+  }
+  if (binding.metricKey) {
+    const normalizedKey = binding.metricKey.toLowerCase();
+    return CHILLER_DOC_RULE_KEY_PATTERN.test(normalizedKey)
+      || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(normalizedKey)
+      || (metricsByKey.get(normalizedKey) ?? []).some(isCuratedFddMetricAsset);
+  }
+  return false;
+}
+
+function isDashboardVisibleForCurrentFddScope(dashboard: DashboardRecord, metrics: DerivedMetricAsset[]): boolean {
+  const metricByInstanceId = new Map(metrics.map((metric) => [metric.instance.instanceId, metric]));
+  const metricsByKey = new Map<string, DerivedMetricAsset[]>();
+  for (const metric of metrics) {
+    const key = metric.instance.metricKey.toLowerCase();
+    metricsByKey.set(key, [...(metricsByKey.get(key) ?? []), metric]);
+  }
+
+  const searchableText = [
+    dashboard.title,
+    dashboard.description,
+    ...dashboard.widgets.map((widget) => widget.title)
+  ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
+  const dashboardTitleText = [
+    dashboard.title,
+    ...dashboard.widgets.map((widget) => widget.title)
+  ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
+  const dashboardLooksFdd = /\b(fdd|fault|detection|diagnostic)\b/u.test(searchableText);
+  const dashboardLooksLegacyChillerDiagnostic = /\b(chw|cop|delta[-\s]?t)\b/u.test(dashboardTitleText);
+  let hasVisibleChRuleFdd = false;
+  let hasHiddenFdd = false;
+  for (const widget of dashboard.widgets) {
+    const isFddWidget = widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison";
+    const bindingHasFdd = widget.pointBindings.some((binding) => dashboardBindingReferencesFdd(binding, metricByInstanceId, metricsByKey));
+    const bindingHasVisibleChRule = widget.pointBindings.some((binding) => dashboardBindingReferencesVisibleCuratedFdd(binding, metricByInstanceId, metricsByKey));
+    hasVisibleChRuleFdd = hasVisibleChRuleFdd || bindingHasVisibleChRule;
+
+    if ((isFddWidget || bindingHasFdd) && !bindingHasVisibleChRule) {
+      hasHiddenFdd = true;
+    }
+  }
+  return !hasHiddenFdd && (!(dashboardLooksFdd || dashboardLooksLegacyChillerDiagnostic) || hasVisibleChRuleFdd);
+}
+
+function fddMetricGroupForTask(task: ProjectFddTask | null, metrics: DerivedMetricAsset[]): KpiMetricGroup | null {
+  if (!task) return null;
+  const exactTaskMetrics = metrics.filter((metric) => metricMetadataString(metric, "fddTaskId") === task.id);
+  if (exactTaskMetrics.length > 0) {
+    return groupDerivedMetricAssets(exactTaskMetrics)[0] ?? null;
+  }
+  const algorithmIds = new Set([task.algorithmSnapshot.id, task.globalAlgorithmId].filter((value): value is string => Boolean(value)));
+  return groupDerivedMetricAssets(metrics).find((group) =>
+    group.metrics.some((metric) => {
+      const fddTaskId = metricMetadataString(metric, "fddTaskId");
+      const fddAlgorithmId = metricMetadataString(metric, "fddAlgorithmId");
+      return fddTaskId === task.id
+        || (fddAlgorithmId ? algorithmIds.has(fddAlgorithmId) : false)
+        || metric.instance.metricKey === task.algorithmSnapshot.algorithmKey;
+    })
+  ) ?? null;
+}
+
+type FddDeploymentPhase = "deploying" | "backfilling";
+
+interface FddDeploymentProgress {
+  phase: FddDeploymentPhase;
+  label: string;
+  algorithmId?: string | undefined;
+  taskId?: string | undefined;
+  task?: ProjectFddTask | undefined;
+  entityCount?: number | undefined;
+  requestId?: string | undefined;
+}
+
+function fddDeploymentPhaseLabel(phase: FddDeploymentPhase): string {
+  return phase === "deploying" ? "Deploying..." : "Backfilling 30 days...";
+}
+
+function fddBackfillCompleteForTask(task: ProjectFddTask, metrics: DerivedMetricAsset[]): boolean {
+  const group = fddMetricGroupForTask(task, metrics);
+  return Boolean(group?.metrics.length)
+    && group!.metrics.every((metric) =>
+      Boolean(metric.latest)
+      || Boolean(metric.materialization?.lastRunAt)
+      || Boolean(metric.materialization?.watermarkTs)
+    );
+}
+
+function fddBackfillErrorForTask(task: ProjectFddTask, metrics: DerivedMetricAsset[]): string | null {
+  const group = fddMetricGroupForTask(task, metrics);
+  const errored = group?.metrics.find((metric) => metric.materialization?.lastError);
+  return errored?.materialization?.lastError ?? null;
+}
+
+function latestFddCheckForAlgorithm(checks: FddDeployabilityCheck[], algorithm: FddAlgorithm): FddDeployabilityCheck | undefined {
+  return checks
+    .filter((check) => check.algorithmId === algorithm.id && check.algorithmVersion === algorithm.version)
+    .sort((left, right) => Date.parse(right.checkedAt) - Date.parse(left.checkedAt))[0];
+}
+
+const FDD_EQUIPMENT_FIRST_POLICY_VERSION = "v3-equipment-first";
+
+function fddTargetEquipmentType(
+  algorithm: Pick<FddAlgorithm, "equipmentType" | "requiredPoints">
+): FddEquipmentType | undefined {
+  if (algorithm.equipmentType !== "sensor") return algorithm.equipmentType;
+  const requiredPointText = algorithm.requiredPoints
+    .map((point) => `${point.slot} ${point.label} ${point.semantic}`)
+    .join(" ")
+    .toLowerCase();
+  if (/\b(chiller|chw|chilled water)\b/u.test(requiredPointText)) return "chiller";
+  if (/\bpump\b/u.test(requiredPointText)) return "pump";
+  return undefined;
+}
+
+function fddEquipmentAvailabilityMatches(
+  checkAvailability: FddEquipmentAvailability | undefined,
+  currentAvailability: FddEquipmentAvailability
+): boolean {
+  if (!checkAvailability
+    || checkAvailability.equipmentType !== currentAvailability.equipmentType
+    || checkAvailability.status !== "available"
+    || currentAvailability.status !== "available"
+    || checkAvailability.entityCount <= 0
+    || checkAvailability.entityCount !== currentAvailability.entityCount) {
+    return false;
+  }
+  const checkKeys = [...(checkAvailability.entityKeys ?? [])].sort();
+  const currentKeys = [...(currentAvailability.entityKeys ?? [])].sort();
+  return checkKeys.length === checkAvailability.entityCount
+    && currentKeys.length === currentAvailability.entityCount
+    && checkKeys.every((key, index) => key === currentKeys[index]);
+}
+
+export function isCurrentEquipmentFirstFddCheck(
+  check: FddDeployabilityCheck | undefined,
+  algorithm: Pick<FddAlgorithm, "id" | "version" | "equipmentType" | "requiredPoints">,
+  projectId: string | undefined,
+  equipmentInventorySignature: string | undefined,
+  targetAvailability: FddEquipmentAvailability | undefined,
+  nowMs = Date.now()
+): check is FddDeployabilityCheck {
+  const targetEquipmentType = fddTargetEquipmentType(algorithm);
+  if (!check
+    || !projectId
+    || !equipmentInventorySignature
+    || !targetEquipmentType
+    || targetAvailability?.equipmentType !== targetEquipmentType
+    || targetAvailability.status !== "available") {
+    return false;
+  }
+  const checkedAt = Date.parse(check.checkedAt);
+  const checkAgeMs = nowMs - checkedAt;
+  return Number.isFinite(checkedAt)
+    && checkAgeMs >= -5 * 60_000
+    && checkAgeMs <= 24 * 60 * 60_000
+    && check.algorithmId === algorithm.id
+    && check.algorithmVersion === algorithm.version
+    && check.projectId === projectId
+    && check.checkPolicyVersion === FDD_EQUIPMENT_FIRST_POLICY_VERSION
+    && check.applicability === "applicable"
+    && check.equipmentInventorySignature === equipmentInventorySignature
+    && fddEquipmentAvailabilityMatches(check.equipmentAvailability, targetAvailability);
+}
+
+function currentEquipmentFirstFddCheck(
+  checks: FddDeployabilityCheck[],
+  algorithm: FddAlgorithm,
+  projectId: string | undefined,
+  equipmentInventorySignature: string | undefined,
+  targetAvailability: FddEquipmentAvailability | undefined
+): FddDeployabilityCheck | undefined {
+  const latest = latestFddCheckForAlgorithm(checks, algorithm);
+  return isCurrentEquipmentFirstFddCheck(
+    latest,
+    algorithm,
+    projectId,
+    equipmentInventorySignature,
+    targetAvailability
+  ) ? latest : undefined;
+}
+
+function currentEquipmentFirstFddTaskCheck(
+  task: ProjectFddTask,
+  library: FddLibraryResponse | null
+): FddDeployabilityCheck | undefined {
+  if (!library || library.projectId !== task.projectId) return undefined;
+  const targetEquipmentType = fddTargetEquipmentType(task.algorithmSnapshot);
+  if (!targetEquipmentType) return undefined;
+  const targetAvailability = library.equipmentAvailability?.find(
+    (availability) => availability.equipmentType === targetEquipmentType
+  );
+  return isCurrentEquipmentFirstFddCheck(
+    task.deployabilityCheck,
+    task.algorithmSnapshot,
+    library.projectId,
+    library.equipmentInventorySignature,
+    targetAvailability
+  ) ? task.deployabilityCheck : undefined;
+}
+
+function fddDeployabilitySortRank(status: FddDeployabilityCheck["status"] | undefined): number {
+  if (status === "can_deploy") return 0;
+  if (status === "uncertain") return 1;
+  if (status === "cannot_deploy") return 2;
+  return 3;
+}
+
+function latexIdentifierName(value: string): string {
+  return value.replace(/_/gu, "\\_");
+}
+
+function fddRuleExpressionToLatex(rawFormula: string): string {
+  const expression = rawFormula
+    .trim()
+    .replace(/^`|`$/gu, "")
+    .replace(/\s+/gu, " ")
+    .replace(/>=/gu, " ≥ ")
+    .replace(/<=/gu, " ≤ ")
+    .replace(/!=/gu, " ≠ ")
+    .replace(/==/gu, " = ")
+    .replace(/&&/gu, " ∧ ")
+    .replace(/\|\|/gu, " ∨ ")
+    .replace(/!/gu, " ¬ ");
+  return expression
+    .replace(/[A-Za-z][A-Za-z0-9_]*/gu, (word, offset, source) => {
+      if (word.toLowerCase() === "for") return "\\quad \\text{for}\\;";
+      const tail = source.slice(Number(offset) + word.length);
+      const isFunction = /^\s*\(/u.test(tail);
+      const command = isFunction ? "operatorname" : "mathrm";
+      return `\\${command}{${latexIdentifierName(word)}}`;
+    })
+    .replace(/∧/gu, "\\land")
+    .replace(/∨/gu, "\\lor")
+    .replace(/¬/gu, "\\lnot")
+    .replace(/≤/gu, "\\le")
+    .replace(/≥/gu, "\\ge")
+    .replace(/≠/gu, "\\ne");
+}
+
+function fddRuleExpressionMarkdown(rawFormula: string): string {
+  return `$$\n${fddRuleExpressionToLatex(rawFormula)}\n$$`;
+}
+
+function fddFormulaMarkdown(formula: string): string {
+  const trimmed = formula.trim();
+  const withRuleBlocks = trimmed.replace(/`([^`]+)`/gu, (_match, expression: string) => fddRuleExpressionMarkdown(expression));
+  if (withRuleBlocks !== trimmed) return withRuleBlocks;
+  if (/\b(fault|alarm|flag)\s*=|&&|\|\||window_minutes|rolling_std/iu.test(trimmed)) {
+    return fddRuleExpressionMarkdown(trimmed);
+  }
+  return trimmed;
+}
+
+function fddFormulaEquationMarkdown(formula: string): string | null {
+  const equations = formula.match(/\$\$[\s\S]*?\$\$/gu);
+  return equations?.join("\n\n") ?? null;
+}
+
+function fddTechnicalRuleExpression(formula: string): string | null {
+  const codeMatch = formula.match(/`([^`]+)`/u);
+  if (codeMatch?.[1]) return codeMatch[1];
+  const withoutEquations = formula.replace(/\$\$[\s\S]*?\$\$/gu, "").trim();
+  return withoutEquations || null;
+}
+
+function fddHumanizeToken(token: string, algorithm: FddAlgorithm): string {
+  const normalized = token.trim().replace(/^!+/u, "").replace(/[()]/gu, "");
+  const normalizedLower = normalized.toLowerCase();
+  const parameter = algorithm.parameters.find((entry) => entry.key.toLowerCase() === normalizedLower);
+  if (parameter) return parameter.label;
+  const input = algorithm.requiredPoints.find((entry) =>
+    entry.slot.toLowerCase() === normalizedLower
+    || entry.label.toLowerCase().replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") === normalizedLower
+  );
+  if (input) return input.label;
+  const aliases: Record<string, string> = {
+    abs: "absolute difference",
+    chiller_on: "Chiller is running",
+    cop: "COP",
+    cop_threshold: "COP threshold",
+    delta_t_chw: "CHW Delta-T",
+    deltat_chw: "CHW Delta-T",
+    epsilon_flow: "Flow variation epsilon",
+    epsilon_temp: "Temperature variation epsilon",
+    flow_chw: "CHW flow",
+    flow_proven: "CHW flow is proven",
+    freeze_window: "Flatline window",
+    min_flow: "Minimum flow",
+    min_load: "Minimum load",
+    p_chiller: "Chiller power",
+    q_bms: "BMS cooling load",
+    q_calc: "Calculated cooling load",
+    q_cooling: "Cooling load",
+    rolling_std: "rolling standard deviation",
+    window_minutes: "Detection window"
+  };
+  if (aliases[normalizedLower]) return aliases[normalizedLower];
+  return humanizeMetricKey(normalized);
+}
+
+function fddReadableCondition(condition: string, algorithm: FddAlgorithm): string {
+  const trimmed = condition.trim().replace(/^\((.*)\)$/u, "$1").trim();
+  const comparison = trimmed.match(/^(.+?)\s*(>=|<=|!=|==|>|<)\s*(.+)$/u);
+  if (comparison) {
+    const left = fddHumanizeToken(comparison[1] ?? "", algorithm);
+    const right = fddHumanizeToken(comparison[3] ?? "", algorithm);
+    const operator = comparison[2] ?? "";
+    const labels: Record<string, string> = {
+      ">": "is above",
+      "<": "is below",
+      ">=": "is at least",
+      "<=": "is at most",
+      "!=": "does not match",
+      "==": "matches"
+    };
+    return `${left} ${labels[operator] ?? operator} ${right}`;
+  }
+  if (/^!/u.test(trimmed)) {
+    return `${fddHumanizeToken(trimmed, algorithm)} is false`;
+  }
+  const label = fddHumanizeToken(trimmed, algorithm);
+  return label === trimmed ? `${label} is true` : label;
+}
+
+function fddReadableRuleParts(formula: string, algorithm: FddAlgorithm): { conditions: string[]; duration?: string } {
+  const expression = fddTechnicalRuleExpression(formula);
+  if (!expression) return { conditions: [] };
+  const withoutFaultPrefix = expression.replace(/^\s*(fault|alarm|flag)\s*=\s*/iu, "");
+  const durationMatch = withoutFaultPrefix.match(/\s+for\s+([A-Za-z][A-Za-z0-9_]*)\s*$/iu);
+  const coreExpression = durationMatch ? withoutFaultPrefix.slice(0, durationMatch.index).trim() : withoutFaultPrefix.trim();
+  const conditions = coreExpression
+    .split(/\s*&&\s*/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => fddReadableCondition(entry, algorithm));
+  return {
+    conditions,
+    ...(durationMatch?.[1] ? { duration: fddHumanizeToken(durationMatch[1], algorithm) } : {})
+  };
+}
+
+function fddRuntimeLogicSummary(algorithm: FddAlgorithm): string {
+  return algorithm.logicSummary
+    .replace(/,\s*emit fault status,\s*severity,\s*confidence,\s*and recommended action\.?/iu, ", flag a fault status.")
+    .replace(/emit fault status,\s*severity,\s*confidence,\s*and recommended action\.?/iu, "flag a fault status.");
+}
+
+function FddDetectionLogicPanel({ algorithm }: { algorithm: FddAlgorithm }) {
+  const equationMarkdown = fddFormulaEquationMarkdown(algorithm.formula);
+  const readableRule = fddReadableRuleParts(algorithm.formula, algorithm);
+  return (
+    <div className="fdd-detection-logic">
+      {equationMarkdown ? (
+        <div className="fdd-detection-equation">
+          <span>Calculation</span>
+          <Markdown source={equationMarkdown} className="kpi-formula-markdown" />
+        </div>
+      ) : null}
+      {readableRule.conditions.length > 0 ? (
+        <div className="fdd-detection-rule">
+          <div className="fdd-detection-rule-header">
+            <span>Fault condition</span>
+            {readableRule.duration ? <small>Persists for {readableRule.duration}</small> : null}
+          </div>
+          <div className="fdd-detection-rule-chips">
+            {readableRule.conditions.map((condition) => <span key={condition}>{condition}</span>)}
+          </div>
+        </div>
+      ) : (
+        <Markdown source={fddFormulaMarkdown(algorithm.formula)} className="kpi-formula-markdown" />
+      )}
+    </div>
+  );
+}
+
+function upsertFddCheck(checks: FddDeployabilityCheck[], nextCheck: FddDeployabilityCheck): FddDeployabilityCheck[] {
+  const next = checks.filter((check) => {
+    if (nextCheck.algorithmId && check.algorithmId === nextCheck.algorithmId && check.algorithmVersion === nextCheck.algorithmVersion) {
+      return false;
+    }
+    if (nextCheck.projectTaskId && check.projectTaskId === nextCheck.projectTaskId) {
+      return false;
+    }
+    return true;
+  });
+  return [nextCheck, ...next];
+}
+
+function upsertProjectFddTask(tasks: ProjectFddTask[], nextTask: ProjectFddTask): ProjectFddTask[] {
+  const exists = tasks.some((task) => task.id === nextTask.id);
+  const next = exists ? tasks.map((task) => (task.id === nextTask.id ? nextTask : task)) : [nextTask, ...tasks];
+  return next.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+}
+
+function fddTaskMatchesAlgorithm(task: ProjectFddTask, algorithm: FddAlgorithm): boolean {
+  return task.globalAlgorithmId === algorithm.id
+    || task.algorithmSnapshot.id === algorithm.id
+    || task.algorithmSnapshot.algorithmKey === algorithm.algorithmKey;
+}
+
+function isCuratedFddTask(task: ProjectFddTask): boolean {
+  return isCuratedFddAlgorithm(task.algorithmSnapshot);
+}
+
+function deployedFddTaskForAlgorithm(tasks: ProjectFddTask[], algorithm: FddAlgorithm): ProjectFddTask | undefined {
+  return tasks
+    .filter((task) => task.status === "running" && fddTaskMatchesAlgorithm(task, algorithm))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+}
+
+function defaultFddRequiredPoints(equipmentType: FddEquipmentType): NonNullable<CreateFddTaskPayload["requiredPoints"]> {
+  if (equipmentType === "chiller") {
+    return [
+      { slot: "running_status", label: "Running status", semantic: "Equipment on/off or enable status", required: true, quantityKind: "status", unitRoleDescription: "Operating status gates the FDD formula.", keywords: ["status", "run", "enable"] },
+      { slot: "primary_measurement", label: "Primary measurement", semantic: "Main value used by the uploaded detection logic", required: true, quantityKind: "unknown", unitRoleDescription: "BuildingGPT infers the physical quantity from the uploaded FDD formula.", keywords: ["temperature", "flow", "power", "load"] }
+    ];
+  }
+  return [
+    { slot: "equipment_status", label: "Equipment status", semantic: "Equipment operating status", required: true, quantityKind: "status", unitRoleDescription: "Operating status gates the FDD formula.", keywords: ["status", "run", "enable"] },
+    { slot: "evidence_signal", label: "Evidence signal", semantic: "Measured signal required by the uploaded detection logic", required: true, quantityKind: "unknown", unitRoleDescription: "BuildingGPT infers the physical quantity from the uploaded FDD formula.", keywords: ["temperature", "pressure", "flow", "position"] }
+  ];
+}
+
 function dependencyDisplayName(dependency: DerivedMetricAsset["instance"]["dependencies"][number]): string {
   return dependency.label ?? dependency.pointName ?? dependency.objectRef ?? dependency.sourceId ?? dependency.role;
 }
@@ -2738,7 +3429,11 @@ function MetricToggle({
         type="checkbox"
         checked={checked}
         disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.checked)}
+        onChange={(event) => {
+          const nextChecked = event.currentTarget.checked;
+          event.currentTarget.blur();
+          onChange(nextChecked);
+        }}
       />
       <span aria-hidden="true" />
     </label>
@@ -2802,17 +3497,1214 @@ function WorkspaceMetricGroupList({
   );
 }
 
+function WorkspaceFddRuntimeList({
+  groups,
+  activeTaskId,
+  activeMetricId,
+  ariaLabel,
+  onOpenTask,
+  onOpenMetric,
+  onToggleMetricMaterialization
+}: {
+  groups: KpiMetricGroup[];
+  activeTaskId: string | null;
+  activeMetricId: string | null;
+  ariaLabel: string;
+  onOpenTask: (taskId: string) => void;
+  onOpenMetric: (instanceId: string) => void;
+  onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => void;
+}) {
+  return (
+    <ul className="workspace-right-metric-list" aria-label={ariaLabel}>
+      {groups.map((group) => {
+        const instanceIds = group.metrics.map((metric) => metric.instance.instanceId);
+        const taskId = group.metrics.map((metric) => metricMetadataString(metric, "fddTaskId")).find((value): value is string => Boolean(value));
+        const isActive = taskId ? activeTaskId === taskId : activeMetricId ? instanceIds.includes(activeMetricId) : false;
+        const groupBackgroundStatus = groupMaterializationStatus(group);
+        return (
+          <li key={group.groupKey} className={`workspace-right-metric-row${isActive ? " is-active" : ""}`}>
+            <button
+              type="button"
+              className="workspace-right-metric-item"
+              onClick={() => taskId ? onOpenTask(taskId) : onOpenMetric(group.representative.instance.instanceId)}
+            >
+              <span className="workspace-right-metric-copy">
+                <strong>{group.displayName}</strong>
+                <small>FDD · {group.metrics.length === 1 ? formatEntityLabel(group.representative) : `${group.metrics.length} entities`}</small>
+              </span>
+              <span className="workspace-right-metric-value">{formatKpiGroupValue(group)}</span>
+            </button>
+            <MetricToggle
+              checked={groupMaterializationEnabled(group)}
+              onChange={(enabled) => onToggleMetricMaterialization(instanceIds, enabled)}
+              title={`Background Calculation: ${groupBackgroundStatus}`}
+            />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function FddTaskParameterEditor({
+  task,
+  onUpdateTaskParameters
+}: {
+  task: ProjectFddTask;
+  onUpdateTaskParameters: (taskId: string, parameters: Array<{ key: string; value: FddParameterValue }>) => void;
+}) {
+  const valuesByKey = new Map((task.parameterValues ?? []).map((parameter) => [parameter.key, parameter]));
+  const editableParameters = task.algorithmSnapshot.parameters.filter((parameter) => valuesByKey.has(parameter.key));
+  if (editableParameters.length === 0) {
+    return <p className="kpi-muted">No editable hyperparameters are registered for this FDD task.</p>;
+  }
+  return (
+    <div className="fdd-task-parameter-grid" aria-label={`${task.algorithmSnapshot.name} hyperparameters`}>
+      {editableParameters.map((parameter) => {
+        const current = valuesByKey.get(parameter.key);
+        if (!current) return null;
+        const title = `${parameter.description} ${current.reason}`;
+        const sourceBadge = <Badge tone={fddParameterSourceTone(current.source)}>{fddParameterSourceLabel(current.source)}</Badge>;
+        if (parameter.type === "boolean") {
+          return (
+            <label key={`${parameter.key}-${current.updatedAt}`} className="fdd-task-parameter-card" title={title}>
+              <span className="fdd-task-parameter-label">
+                <strong>{parameter.label}</strong>
+                {sourceBadge}
+              </span>
+              <span className="fdd-task-parameter-control">
+                <input
+                  type="checkbox"
+                  defaultChecked={Boolean(current.value)}
+                  disabled={!parameter.editable}
+                  onChange={(event) => onUpdateTaskParameters(task.id, [{ key: parameter.key, value: event.currentTarget.checked }])}
+                />
+              </span>
+              <small>{parameter.description}</small>
+            </label>
+          );
+        }
+        if (parameter.type === "select") {
+          return (
+            <label key={`${parameter.key}-${current.updatedAt}`} className="fdd-task-parameter-card" title={title}>
+              <span className="fdd-task-parameter-label">
+                <strong>{parameter.label}</strong>
+                {sourceBadge}
+              </span>
+              <span className="fdd-task-parameter-control">
+                <select
+                  defaultValue={String(current.value)}
+                  disabled={!parameter.editable}
+                  onChange={(event) => onUpdateTaskParameters(task.id, [{ key: parameter.key, value: event.currentTarget.value }])}
+                >
+                  {(parameter.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </span>
+              <small>{parameter.description}</small>
+            </label>
+          );
+        }
+        return (
+          <label key={`${parameter.key}-${current.updatedAt}`} className="fdd-task-parameter-card" title={title}>
+            <span className="fdd-task-parameter-label">
+              <strong>{parameter.label}</strong>
+              {sourceBadge}
+            </span>
+            <span className="fdd-task-parameter-control">
+              <input
+                type="number"
+                defaultValue={String(current.value)}
+                min={parameter.min}
+                max={parameter.max}
+                step={parameter.step ?? "any"}
+                disabled={!parameter.editable}
+                onBlur={(event) => {
+                  const nextValue = Number(event.currentTarget.value);
+                  if (Number.isFinite(nextValue) && nextValue !== current.value) {
+                    onUpdateTaskParameters(task.id, [{ key: parameter.key, value: nextValue }]);
+                  }
+                }}
+              />
+              {parameter.unit ? <em>{parameter.unit}</em> : null}
+            </span>
+            <small>{parameter.description}</small>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function FddTaskDetailPanel({
+  task,
+  library,
+  activeTaskId,
+  metricGroup,
+  dashboards,
+  deploymentProgress,
+  onOpenDashboard,
+  onTestTask,
+  onDeployTask,
+  onUpdateTaskParameters,
+  onDeleteTask,
+  onToggleMetricMaterialization
+}: {
+  task: ProjectFddTask | null;
+  library: FddLibraryResponse | null;
+  activeTaskId: string | null;
+  metricGroup: KpiMetricGroup | null;
+  dashboards: DashboardRecord[];
+  deploymentProgress: FddDeploymentProgress | null;
+  onOpenDashboard: (dashboardId: string) => void;
+  onTestTask: (taskId: string) => void;
+  onDeployTask: (taskId: string) => void;
+  onUpdateTaskParameters: (taskId: string, parameters: Array<{ key: string; value: FddParameterValue }>) => void;
+  onDeleteTask: (taskId: string) => void;
+  onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => void;
+}) {
+  if (!activeTaskId) {
+    return (
+      <Surface className="kpi-detail-page fdd-task-detail-page">
+        <EmptyState title="Choose an FDD task">Open a task from the FDD Tasks panel to review its parameters, test scope, runtime asset, and covered entities.</EmptyState>
+      </Surface>
+    );
+  }
+  if (!task) {
+    return (
+      <Surface className="kpi-detail-page fdd-task-detail-page">
+        <EmptyState title="Loading FDD task">The FDD task detail will appear here as soon as it is available.</EmptyState>
+      </Surface>
+    );
+  }
+
+  const algorithm = task.algorithmSnapshot;
+  const check = task.deployabilityCheck;
+  const currentCheck = currentEquipmentFirstFddTaskCheck(task, library);
+  const requiredPointBySlot = new Map(algorithm.requiredPoints.map((point) => [point.slot, point]));
+  const requiredSlots = new Set(algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot));
+  const selectedMappings = (check?.selectedMappings ?? []).filter((mapping) => requiredSlots.has(mapping.slot));
+  const instanceIds = metricGroup?.metrics.map((metric) => metric.instance.instanceId) ?? [];
+  const enabledCount = metricGroup?.metrics.filter(materializationEnabled).length ?? 0;
+  const groupBackgroundStatus = metricGroup ? groupMaterializationStatus(metricGroup) : "Not deployed";
+  const linkedDashboardIds = metricGroup ? linkedDashboardIdsForGroup(metricGroup) : new Set<string>();
+  const linkedDashboards = dashboards.filter((dashboard) => linkedDashboardIds.has(dashboard.id));
+  const canDeploy = task.algorithmSnapshot.deployableRuntime && currentCheck?.status === "can_deploy";
+  const editedCount = (task.parameterValues ?? []).filter((parameter) => parameter.source === "user_override").length;
+  const isDeployed = Boolean(metricGroup?.metrics.length);
+  const taskDeploymentProgress = deploymentProgress?.taskId === task.id ? deploymentProgress : null;
+  const checkedEntities = check?.deployableEntities?.length
+    ? check.deployableEntities.map((entity) => ({
+        ...entity,
+        selectedMappings: entity.selectedMappings.filter((mapping) => requiredSlots.has(mapping.slot))
+      }))
+    : check?.exampleEntityKey
+      ? [{
+          entityKey: check.exampleEntityKey,
+          status: check.status,
+          selectedMappings,
+          ambiguousInputs: check.ambiguousInputs,
+          missingPoints: check.missingPoints,
+          historyIssues: check.historyIssues,
+          confidence: check.status === "can_deploy" ? 1 : 0.7
+        }]
+      : [];
+  const deployableEntityCount = checkedEntities.filter((entity) => entity.status !== "cannot_deploy" && entity.selectedMappings.length > 0).length;
+  const runtimeOutputs = (() => {
+    const faultOutputs = algorithm.outputs.filter((output) => output.key === "fault_status");
+    return faultOutputs.length > 0 ? faultOutputs : [{ key: "fault_status", label: "Fault status", type: "boolean" as const }];
+  })();
+  return (
+    <Surface className="kpi-detail-page fdd-task-detail-page">
+      <section className="kpi-detail-section kpi-asset-overview-card">
+        <div className="kpi-detail-header">
+          <div>
+            <h2>{algorithm.name}</h2>
+            <p>{fddEquipmentLabel(algorithm.equipmentType)} · {algorithm.categoryLabel} · {fddMethodLabel(algorithm.method)}</p>
+          </div>
+          <div className="fdd-task-header-badges">
+            <Badge tone={fddTaskStatusTone(task.status)}>{fddTaskStatusLabel(task.status)}</Badge>
+            <Badge tone={fddDeployabilityTone(check?.status)}>{fddDeployabilityLabel(check?.status)}</Badge>
+            <Badge tone={algorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(algorithm)}</Badge>
+            <Button type="button" size="sm" variant="secondary" className="asset-danger-button" onClick={() => onDeleteTask(task.id)}>
+              <Icon name="trash" />
+              Delete
+            </Button>
+          </div>
+        </div>
+        <p>{fddRuntimeLogicSummary(algorithm)}</p>
+        <div className="kpi-formula-panel">
+          <div className="kpi-formula-panel-label">Detection Logic</div>
+          <FddDetectionLogicPanel algorithm={algorithm} />
+          <span>{fddRuntimeLogicSummary(algorithm)}</span>
+        </div>
+      </section>
+
+      <div className={isDeployed ? "kpi-detail-two-column fdd-task-config-grid" : "kpi-detail-three-column"}>
+        <section className="kpi-detail-section">
+          <h3>Inputs / Outputs</h3>
+          <div className="kpi-io-contract">
+            <div className="kpi-io-group">
+              <div className="kpi-io-group-label">Runtime Output</div>
+              {runtimeOutputs.map((output) => (
+                <div key={output.key} className="kpi-io-card kpi-io-card-output">
+                  <span className="kpi-io-icon"><Icon name="file-search" /></span>
+                  <span className="kpi-io-card-copy">
+                    <strong>{output.label}</strong>
+                    <small>{output.type === "boolean" ? "boolean fault signal" : output.unit ?? output.type}</small>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="kpi-io-group">
+              <div className="kpi-io-group-label kpi-io-group-label-lined">Mapped Inputs</div>
+              <div className="kpi-io-input-list">
+                {selectedMappings.length > 0 ? selectedMappings.map((mapping) => {
+                  const point = requiredPointBySlot.get(mapping.slot);
+                  return (
+                    <div key={`${mapping.slot}-${mapping.pointName}`} className="kpi-io-card">
+                      <span className="kpi-io-icon"><Icon name="activity" /></span>
+                      <span className="kpi-io-card-copy">
+                        <strong>{point?.label ?? mapping.slot}</strong>
+                        <small>{mapping.pointName}{mapping.unit ? ` · ${mapping.unit}` : ""}</small>
+                      </span>
+                    </div>
+                  );
+                }) : algorithm.requiredPoints.filter((point) => point.required).map((point) => (
+                  <div key={point.slot} className="kpi-io-card">
+                    <span className="kpi-io-icon"><Icon name="activity" /></span>
+                    <span className="kpi-io-card-copy">
+                      <strong>{point.label}</strong>
+                      <small>{point.semantic}</small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {!isDeployed ? <section className="kpi-detail-section">
+          <h3>Test / Deploy</h3>
+          <p className="kpi-muted">Test with project data first, then deploy this class-level algorithm to every matching entity with complete same-entity input mapping.</p>
+          {taskDeploymentProgress ? (
+            <div className="fdd-deployment-progress-card" role="status" aria-live="polite">
+              <span className="spinner" aria-hidden="true" />
+              <span>
+                <strong>{fddDeploymentPhaseLabel(taskDeploymentProgress.phase)}</strong>
+                <small>{taskDeploymentProgress.phase === "backfilling" ? "Runtime assets and dashboard are created. Historical samples are still being calculated." : "BuildingGPT is creating the FDD task runtime."}</small>
+              </span>
+            </div>
+          ) : null}
+          <div className="fdd-task-action-panel">
+            <Button type="button" variant="secondary" onClick={() => onTestTask(task.id)}>
+              <Icon name="activity" />
+              Test with data
+            </Button>
+            <Button type="button" loading={Boolean(taskDeploymentProgress)} disabled={!canDeploy} title={task.algorithmSnapshot.deployableRuntime ? canDeploy ? "Deploy" : "Run a current equipment and data check before deployment" : "Spec only: executable evaluator not implemented"} onClick={() => onDeployTask(task.id)}>
+              {taskDeploymentProgress ? <span className="spinner" aria-hidden="true" /> : <Icon name="zap" />}
+              {taskDeploymentProgress ? fddDeploymentPhaseLabel(taskDeploymentProgress.phase) : task.algorithmSnapshot.deployableRuntime ? "Deploy all" : "Evaluator required"}
+            </Button>
+          </div>
+          <div className="fdd-task-check-card">
+            <strong>{fddDeployabilityLabel(check?.status)}</strong>
+            <span>{check ? `${deployableEntityCount} deployable entities${check.exampleEntityKey ? ` · example ${check.exampleEntityKey}` : ""}` : "No deployability check result yet."}</span>
+            {check?.missingPoints.length ? <span>Missing: {check.missingPoints.join(", ")}</span> : null}
+            {check?.historyIssues.length ? <span>History: {check.historyIssues.join(", ")}</span> : null}
+          </div>
+        </section> : null}
+
+        {isDeployed && taskDeploymentProgress ? (
+          <section className="kpi-detail-section fdd-deployment-runtime-progress">
+            <div className="fdd-deployment-progress-card" role="status" aria-live="polite">
+              <span className="spinner" aria-hidden="true" />
+              <span>
+                <strong>{fddDeploymentPhaseLabel(taskDeploymentProgress.phase)}</strong>
+                <small>{taskDeploymentProgress.entityCount ? `${taskDeploymentProgress.entityCount} entities are being calculated from the last 30 days of history.` : "Historical FDD samples are being calculated from the last 30 days of history."}</small>
+              </span>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="kpi-detail-section">
+          <div className="kpi-section-heading-row">
+            <h3>Detection Settings</h3>
+            <span className="kpi-count-pill">{editedCount > 0 ? `${editedCount} manual override` : "AI recommended"}</span>
+          </div>
+          <p className="kpi-muted">AI recommended settings are used by default. Operator edits are saved as manual overrides for this project task.</p>
+          <FddTaskParameterEditor task={task} onUpdateTaskParameters={onUpdateTaskParameters} />
+        </section>
+      </div>
+
+      <div className="kpi-detail-three-column fdd-task-runtime-grid">
+        <section className="kpi-detail-section">
+          <h3>Background Calculation</h3>
+          <p className="kpi-muted">Use the group switch for all deployed entities, or the entity cards below for individual equipment.</p>
+          <div className="kpi-background-status-card">
+            <div>
+              <strong><span aria-hidden="true" />{groupBackgroundStatus}</strong>
+              <span>{metricGroup ? `${enabledCount}/${metricGroup.metrics.length} entities enabled` : "Deploy this task to create a runtime asset."}</span>
+            </div>
+            {metricGroup ? (
+              <MetricToggle
+                checked={groupMaterializationEnabled(metricGroup)}
+                onChange={(enabled) => onToggleMetricMaterialization(instanceIds, enabled)}
+                title={`Background Calculation: ${groupBackgroundStatus}`}
+              />
+            ) : null}
+          </div>
+          {metricGroup ? (
+            <div className="kpi-schedule-card">
+              <span className="kpi-schedule-icon"><Icon name="clock" /></span>
+              <div className="kpi-schedule-lines">
+                <span>{groupIntervalLabel(metricGroup)}</span>
+                <span>Last: {groupScheduleValue(metricGroup, "lastRunAt")}</span>
+                <span>Next: {groupScheduleValue(metricGroup, "nextRunAt")}</span>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="kpi-detail-section">
+          <h3>Covered / Test Entities</h3>
+          {metricGroup ? (
+            <div className="kpi-entity-card-grid fdd-task-entity-grid">
+              {metricGroup.metrics.map((metric) => (
+                <article key={metric.instance.instanceId} className="kpi-entity-card">
+                  <strong>{formatEntityLabel(metric)}</strong>
+                  <span className={metric.latest?.valueNum === undefined ? "is-muted" : ""}>{formatDerivedMetricValue(metric)}</span>
+                  <div className="kpi-entity-background">
+                    <small><span aria-hidden="true" />{metricBackgroundCalculationStatus(metric)}</small>
+                    <MetricToggle
+                      checked={materializationEnabled(metric)}
+                      onChange={(enabled) => onToggleMetricMaterialization([metric.instance.instanceId], enabled)}
+                      title={`Background Calculation: ${metricBackgroundCalculationStatus(metric)}`}
+                    />
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : checkedEntities.length > 0 ? (
+            <div className="kpi-entity-card-grid fdd-task-entity-grid">
+              {checkedEntities.map((entity) => (
+                <article key={entity.entityKey} className="kpi-entity-card">
+                  <strong>{formatEntityId(entity.entityKey)}</strong>
+                  <span>{fddDeployabilityLabel(entity.status)}</span>
+                  <div className="kpi-entity-background">
+                    <small><span aria-hidden="true" />{entity.selectedMappings.length} inputs · {Math.round(entity.confidence * 100)}%</small>
+                    <Button type="button" size="sm" variant="secondary" onClick={() => onTestTask(task.id)}>Retest</Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="kpi-muted">Run Test with data to find all entities that can host this class-level algorithm.</p>
+          )}
+        </section>
+
+        <section className="kpi-detail-section kpi-linked-dashboard-section">
+          <div className="kpi-section-heading-row">
+            <h3>Linked Dashboards</h3>
+            <span className="kpi-count-pill">{linkedDashboards.length}</span>
+          </div>
+          {linkedDashboards.length === 0 ? (
+            <p className="kpi-muted">No dashboard currently binds this FDD output.</p>
+          ) : (
+            <div className="kpi-dashboard-links kpi-dashboard-links-compact">
+              {linkedDashboards.map((dashboard) => (
+                <button key={dashboard.id} type="button" onClick={() => onOpenDashboard(dashboard.id)}>
+                  <span className="kpi-dashboard-link-icon"><Icon name="grid" /></span>
+                  <span className="kpi-dashboard-link-copy">
+                    <strong>{dashboard.title}</strong>
+                    <span>{dashboard.widgets.length} widgets using this FDD output</span>
+                  </span>
+                  <span className="kpi-dashboard-link-arrow" aria-hidden="true">→</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </Surface>
+  );
+}
+
+function WorkspaceFddTaskList({
+  tasks,
+  library,
+  activeTaskId,
+  onOpenTask,
+  onTestTask,
+  onDeployTask,
+}: {
+  tasks: ProjectFddTask[];
+  library: FddLibraryResponse | null;
+  activeTaskId: string | null;
+  onOpenTask: (taskId: string) => void;
+  onTestTask: (taskId: string) => void;
+  onDeployTask: (taskId: string) => void;
+}) {
+  return (
+    <ul className="workspace-right-fdd-task-list" aria-label="Project FDD tasks">
+      {tasks.map((task) => {
+        const check = task.deployabilityCheck;
+        const currentCheck = currentEquipmentFirstFddTaskCheck(task, library);
+        const canDeploy = task.algorithmSnapshot.deployableRuntime && currentCheck?.status === "can_deploy";
+        const isActive = activeTaskId === task.id;
+        return (
+          <li key={task.id} className={`workspace-right-fdd-task-row${isActive ? " is-active" : ""}`}>
+            <button type="button" className="workspace-right-fdd-task-item" onClick={() => onOpenTask(task.id)}>
+              <span className="workspace-right-fdd-task-icon" aria-hidden="true">
+                <Icon name="file-search" />
+              </span>
+              <span className="workspace-right-fdd-task-copy">
+                <strong title={task.algorithmSnapshot.name}>{task.algorithmSnapshot.name}</strong>
+                <small>{fddEquipmentLabel(task.algorithmSnapshot.equipmentType)} · {check?.exampleEntityKey ?? task.algorithmSnapshot.categoryLabel}</small>
+              </span>
+              <Badge tone={fddTaskStatusTone(task.status)}>{fddTaskStatusLabel(task.status)}</Badge>
+            </button>
+            <div className="workspace-right-fdd-task-footer">
+              <span>{fddDeployabilityLabel(check?.status)}</span>
+              <span>{fddTaskSourceLabel(task.source)}</span>
+            </div>
+            <div className="workspace-right-fdd-task-actions" aria-label={`${task.algorithmSnapshot.name} actions`}>
+              <button type="button" className="is-secondary" title="Test with data" aria-label={`Test ${task.algorithmSnapshot.name} with data`} onClick={(event) => { event.stopPropagation(); onTestTask(task.id); }}>
+                <Icon name="activity" />
+                <span>Test</span>
+              </button>
+              <button type="button" className="is-primary" title={task.algorithmSnapshot.deployableRuntime ? canDeploy ? "Deploy" : "Run a current equipment and data check before deployment" : "Spec only: executable evaluator not implemented"} aria-label={`Deploy ${task.algorithmSnapshot.name}`} disabled={!canDeploy} onClick={(event) => { event.stopPropagation(); onDeployTask(task.id); }}>
+                <Icon name="zap" />
+                <span>Deploy</span>
+              </button>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function FddLibraryPanel({
+  library,
+  loading,
+  deploymentProgress,
+  onCreateProjectFdd,
+  onTestAlgorithm,
+  onDeployAlgorithm,
+  onOpenTask
+}: {
+  library: FddLibraryResponse | null;
+  loading: boolean;
+  deploymentProgress: FddDeploymentProgress | null;
+  onCreateProjectFdd: () => void;
+  onTestAlgorithm: (algorithmId: string) => void;
+  onDeployAlgorithm: (algorithmId: string) => void;
+  onOpenTask: (taskId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [selectedAlgorithmId, setSelectedAlgorithmId] = useState<string | null>(null);
+  const [activeEquipmentType, setActiveEquipmentType] = useState<FddEquipmentType>("chiller");
+  const [activeCategoryKey, setActiveCategoryKey] = useState<string | null>(null);
+  const panelProjectRef = useRef<string | null>(null);
+  const equipmentTabRefs = useRef<Partial<Record<FddEquipmentType, HTMLButtonElement | null>>>({});
+  const categoryTabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const algorithms = library?.algorithms ?? [];
+  const checks = library?.checks ?? [];
+  const tasks = library?.tasks ?? [];
+  const curatedAlgorithms = algorithms.filter(isCuratedFddAlgorithm);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredAlgorithms = curatedAlgorithms.filter((algorithm) => {
+    if (!normalizedQuery) return true;
+    return [
+      algorithm.name,
+      algorithm.faultType,
+      algorithm.categoryLabel,
+      fddEquipmentLabel(algorithm.equipmentType),
+      fddMethodLabel(algorithm.method),
+      fddRuntimeLabel(algorithm),
+      fddDefinitionLabel(algorithm),
+      algorithm.formula,
+      algorithm.logicSummary
+    ].join(" ").toLowerCase().includes(normalizedQuery);
+  });
+  const sortedAlgorithms = [...filteredAlgorithms].sort((left, right) => {
+    const ruleRank = curatedFddRuleRank(left) - curatedFddRuleRank(right);
+    return ruleRank || left.name.localeCompare(right.name);
+  });
+  const categorySectionsFor = (sectionAlgorithms: FddAlgorithm[]) => {
+    const byCategory = new Map<string, { key: string; label: string; algorithms: FddAlgorithm[] }>();
+    for (const algorithm of sectionAlgorithms) {
+      const existing = byCategory.get(algorithm.categoryKey) ?? { key: algorithm.categoryKey, label: algorithm.categoryLabel, algorithms: [] };
+      existing.algorithms.push(algorithm);
+      byCategory.set(algorithm.categoryKey, existing);
+    }
+    return [...byCategory.values()]
+      .map((category) => ({
+        ...category,
+        algorithms: category.algorithms.sort((left, right) => {
+          const ruleRank = curatedFddRuleRank(left) - curatedFddRuleRank(right);
+          return ruleRank || left.name.localeCompare(right.name);
+        })
+      }))
+      .sort((left, right) => {
+        const leftRank = Math.min(...left.algorithms.map(curatedFddRuleRank));
+        const rightRank = Math.min(...right.algorithms.map(curatedFddRuleRank));
+        if (leftRank !== rightRank) return leftRank - rightRank;
+        return left.label.localeCompare(right.label);
+      });
+  };
+  const equipmentOrder: FddEquipmentType[] = ["chiller", "ahu", "vav", "fcu", "pump", "cooling_tower"];
+  const equipmentAvailability = new Map(
+    (library?.equipmentAvailability ?? []).map((entry) => [entry.equipmentType, entry] as const)
+  );
+  const equipmentSections = equipmentOrder.map((equipmentType) => {
+    const equipmentAlgorithms = sortedAlgorithms.filter((algorithm) => algorithm.equipmentType === equipmentType);
+    const allEquipmentAlgorithms = curatedAlgorithms.filter((algorithm) => algorithm.equipmentType === equipmentType);
+    return {
+      id: equipmentType,
+      label: fddEquipmentLabel(equipmentType),
+      algorithms: equipmentAlgorithms,
+      allAlgorithms: allEquipmentAlgorithms,
+      categories: categorySectionsFor(equipmentAlgorithms),
+      availability: equipmentAvailability.get(equipmentType)
+    };
+  });
+  const activeEquipmentSection = equipmentSections.find((section) => section.id === activeEquipmentType) ?? equipmentSections[0]!;
+  const activeCategory = activeEquipmentSection.categories.find((category) => category.key === activeCategoryKey)
+    ?? activeEquipmentSection.categories[0];
+  const activeCategorySignature = activeEquipmentSection.categories.map((category) => category.key).join("|");
+  const activeEquipmentAvailable = activeEquipmentSection?.availability?.status === "available";
+  const activeEquipmentUnavailable = activeEquipmentSection?.availability?.status === "not_available";
+  const activeEquipmentUnknown = !activeEquipmentAvailable && !activeEquipmentUnavailable;
+  const categoryCount = new Set(curatedAlgorithms.map((algorithm) => algorithm.categoryKey)).size;
+  const runtimeReadyCount = curatedAlgorithms.filter((algorithm) => algorithm.deployableRuntime).length;
+  const specificationOnlyCount = curatedAlgorithms.length - runtimeReadyCount;
+  const availableEquipmentCount = equipmentSections.filter((section) => section.availability?.status === "available").length;
+  const deployableNowCount = curatedAlgorithms.filter((algorithm) => {
+    if (!algorithm.deployableRuntime) return false;
+    const targetAvailability = equipmentAvailability.get(algorithm.equipmentType);
+    return currentEquipmentFirstFddCheck(
+      checks,
+      algorithm,
+      library?.projectId,
+      library?.equipmentInventorySignature,
+      targetAvailability
+    )?.status === "can_deploy";
+  }).length;
+  const selectedAlgorithm = curatedAlgorithms.find((algorithm) => algorithm.id === selectedAlgorithmId) ?? null;
+  const selectedEquipmentAvailability = selectedAlgorithm ? equipmentAvailability.get(selectedAlgorithm.equipmentType) : undefined;
+  const selectedEquipmentAvailable = selectedEquipmentAvailability?.status === "available";
+  const selectedEquipmentUnavailable = selectedEquipmentAvailability?.status === "not_available";
+  const selectedEquipmentUnknown = Boolean(selectedAlgorithm) && !selectedEquipmentAvailable && !selectedEquipmentUnavailable;
+  const selectedCheck = selectedAlgorithm
+    ? currentEquipmentFirstFddCheck(
+        checks,
+        selectedAlgorithm,
+        library?.projectId,
+        library?.equipmentInventorySignature,
+        selectedEquipmentAvailability
+      )
+    : undefined;
+  const selectedRequiredSlots = new Set(selectedAlgorithm?.requiredPoints.filter((point) => point.required).map((point) => point.slot) ?? []);
+  const selectedRequiredMappings = (selectedCheck?.selectedMappings ?? []).filter((mapping) => selectedRequiredSlots.has(mapping.slot));
+  const selectedAmbiguousSlots = selectedCheck?.ambiguousInputs ?? [];
+  const selectedDeploymentProgress = selectedAlgorithm && deploymentProgress?.algorithmId === selectedAlgorithm.id ? deploymentProgress : null;
+  const selectedDeployedTask = selectedAlgorithm ? deployedFddTaskForAlgorithm(tasks, selectedAlgorithm) : undefined;
+
+  useEffect(() => {
+    if (!library?.projectId || panelProjectRef.current === library.projectId) return;
+    panelProjectRef.current = library.projectId;
+    setQuery("");
+    setSelectedAlgorithmId(null);
+    setActiveCategoryKey(null);
+    const firstAvailable = equipmentOrder.find((equipmentType) => equipmentAvailability.get(equipmentType)?.status === "available");
+    setActiveEquipmentType(firstAvailable ?? "chiller");
+  }, [library?.projectId, library?.equipmentAvailability]);
+
+  useEffect(() => {
+    if (activeCategory && activeCategory.key === activeCategoryKey) return;
+    setActiveCategoryKey(activeCategory?.key ?? null);
+  }, [activeCategoryKey, activeCategorySignature, activeEquipmentType]);
+
+  const activateEquipmentTab = (equipmentType: FddEquipmentType, moveFocus = false) => {
+    setActiveEquipmentType(equipmentType);
+    setActiveCategoryKey(null);
+    setSelectedAlgorithmId(null);
+    if (moveFocus) equipmentTabRefs.current[equipmentType]?.focus();
+  };
+
+  const activateCategoryTab = (categoryKey: string, moveFocus = false) => {
+    setActiveCategoryKey(categoryKey);
+    setSelectedAlgorithmId(null);
+    if (moveFocus) categoryTabRefs.current[categoryKey]?.focus();
+  };
+
+  const handleEquipmentTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, equipmentType: FddEquipmentType) => {
+    const currentIndex = equipmentOrder.indexOf(equipmentType);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % equipmentOrder.length;
+    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + equipmentOrder.length) % equipmentOrder.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = equipmentOrder.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    activateEquipmentTab(equipmentOrder[nextIndex]!, true);
+  };
+
+  const handleCategoryTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, categoryKey: string) => {
+    const categoryKeys = activeEquipmentSection.categories.map((category) => category.key);
+    const currentIndex = categoryKeys.indexOf(categoryKey);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % categoryKeys.length;
+    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + categoryKeys.length) % categoryKeys.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = categoryKeys.length - 1;
+    if (nextIndex === null || !categoryKeys[nextIndex]) return;
+    event.preventDefault();
+    activateCategoryTab(categoryKeys[nextIndex]!, true);
+  };
+
+  useEffect(() => {
+    if (!selectedAlgorithmId) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedAlgorithmId(null);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selectedAlgorithmId]);
+
+  if (loading && !library) {
+    return (
+      <Surface className="fdd-library-page">
+        <EmptyState title="Loading FDD Library">Checking project data against global algorithms.</EmptyState>
+      </Surface>
+    );
+  }
+
+  return (
+    <Surface className="fdd-library-page">
+      <header className="fdd-library-header">
+        <div>
+          <h2>FDD Algorithm Library</h2>
+          <p>Curated Chiller, AHU, VAV, FCU, Pump, and Cooling Tower rules, grouped by equipment and source fault category.</p>
+        </div>
+        <div className="fdd-library-header-actions">
+          <label className="fdd-search">
+            <Icon name="search" />
+            <Input value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Search rule, equipment, or category" aria-label="Search FDD algorithms" />
+          </label>
+        </div>
+      </header>
+
+      <section className="fdd-chiller-overview" aria-label="FDD library summary">
+        <div>
+          <span>Curated rules</span>
+          <strong>{curatedAlgorithms.length}</strong>
+          <small>{categoryCount} fault categories</small>
+        </div>
+        <div>
+          <span>Equipment available</span>
+          <strong>{availableEquipmentCount} / {equipmentOrder.length}</strong>
+          <small>confirmed in this project</small>
+        </div>
+        <div>
+          <span>Evaluators implemented</span>
+          <strong>{runtimeReadyCount}</strong>
+          <small>executable rules in this curated view</small>
+        </div>
+        <div>
+          <span>Deployable now</span>
+          <strong>{deployableNowCount}</strong>
+          <small>{library?.checksPending ? "project matching in progress" : "equipment and data checks passed"}</small>
+        </div>
+        <div>
+          <span>Spec only</span>
+          <strong>{specificationOnlyCount}</strong>
+          <small>catalogued, not executable</small>
+        </div>
+      </section>
+
+      <div className="fdd-equipment-nav fdd-equipment-tabs" role="tablist" aria-label="FDD equipment">
+        {equipmentSections.map((section) => {
+          const availability = section.availability;
+          const presenceLabel = availability?.status === "available"
+            ? `${availability.entityCount} ${availability.entityCount === 1 ? "asset" : "assets"}`
+            : availability?.status === "not_available"
+              ? "N/A"
+              : "Unknown";
+          return (
+            <button
+              id={`fdd-equipment-tab-${section.id}`}
+              className={activeEquipmentType === section.id ? "is-active" : undefined}
+              key={section.id}
+              type="button"
+              role="tab"
+              aria-selected={activeEquipmentType === section.id}
+              aria-controls={`fdd-equipment-panel-${section.id}`}
+              tabIndex={activeEquipmentType === section.id ? 0 : -1}
+              ref={(element) => {
+                equipmentTabRefs.current[section.id] = element;
+              }}
+              onKeyDown={(event) => handleEquipmentTabKeyDown(event, section.id)}
+              onClick={() => activateEquipmentTab(section.id)}
+            >
+              <strong>{section.label}</strong>
+              <span className="fdd-equipment-tab-count">{section.allAlgorithms.length}</span>
+              <span className={`fdd-equipment-tab-presence is-${availability?.status ?? "unknown"}`}>{presenceLabel}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="fdd-library-sections">
+        {equipmentSections
+          .filter((section) => section.id !== activeEquipmentSection.id)
+          .map((section) => (
+            <section
+              key={section.id}
+              id={`fdd-equipment-panel-${section.id}`}
+              role="tabpanel"
+              aria-labelledby={`fdd-equipment-tab-${section.id}`}
+              hidden
+            />
+          ))}
+        <section
+          key={activeEquipmentSection.id}
+          className="fdd-equipment-section"
+          id={`fdd-equipment-panel-${activeEquipmentSection.id}`}
+          role="tabpanel"
+          aria-labelledby={`fdd-equipment-tab-${activeEquipmentSection.id}`}
+        >
+          <header className="fdd-equipment-section-header">
+            <div>
+              <h3>{activeEquipmentSection.label}</h3>
+              <p>{activeEquipmentSection.categories.length} categories · {activeEquipmentSection.algorithms.length} visible rules</p>
+            </div>
+            <Badge tone={fddEquipmentAvailabilityTone(activeEquipmentSection.availability)}>
+              {fddEquipmentAvailabilityLabel(activeEquipmentSection.availability)}
+            </Badge>
+          </header>
+
+          {activeEquipmentUnavailable ? (
+            <div className="fdd-equipment-availability is-not-available" role="status">
+              <span className="fdd-equipment-availability-icon" aria-hidden="true"><Icon name="info" /></span>
+              <div>
+                <strong>No equipment in this project</strong>
+                <p>{activeEquipmentSection.label} algorithms remain visible for reference, but they are Not applicable to this project's data and cannot be tested or deployed.</p>
+                {activeEquipmentSection.availability?.reason ? <small>{activeEquipmentSection.availability.reason}</small> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {activeEquipmentUnknown ? (
+            <div className="fdd-equipment-availability is-unknown" role="status">
+              <span className="fdd-equipment-availability-icon" aria-hidden="true"><Icon name="info" /></span>
+              <div>
+                <strong>Equipment availability unknown</strong>
+                <p>{activeEquipmentSection.label} algorithms remain visible, but testing and deployment are disabled until the project equipment inventory is confirmed.</p>
+                {activeEquipmentSection.availability?.reason ? <small>{activeEquipmentSection.availability.reason}</small> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {activeEquipmentSection.categories.length === 0 ? (
+            <EmptyState title={loading ? "Loading FDD rules" : "No matching FDD rules"}>
+              {loading ? "Curated FDD rules will appear here as soon as they load." : "Change the search query or choose another equipment tab."}
+            </EmptyState>
+          ) : (
+            <div className="fdd-category-browser">
+              <div className="fdd-fault-category-nav" role="tablist" aria-label={`${activeEquipmentSection.label} fault categories`}>
+                {activeEquipmentSection.categories.map((category) => (
+                  <button
+                    id={`fdd-category-tab-${activeEquipmentSection.id}-${category.key}`}
+                    className={activeCategory?.key === category.key ? "is-active" : undefined}
+                    key={category.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeCategory?.key === category.key}
+                    aria-controls={`fdd-category-panel-${activeEquipmentSection.id}-${category.key}`}
+                    tabIndex={activeCategory?.key === category.key ? 0 : -1}
+                    ref={(element) => {
+                      categoryTabRefs.current[category.key] = element;
+                    }}
+                    onKeyDown={(event) => handleCategoryTabKeyDown(event, category.key)}
+                    onClick={() => activateCategoryTab(category.key)}
+                  >
+                    <span>{category.label}</span>
+                    <small>{category.algorithms.length}</small>
+                  </button>
+                ))}
+              </div>
+              {activeEquipmentSection.categories
+                .filter((category) => category.key !== activeCategory?.key)
+                .map((category) => (
+                  <section
+                    key={category.key}
+                    id={`fdd-category-panel-${activeEquipmentSection.id}-${category.key}`}
+                    role="tabpanel"
+                    aria-labelledby={`fdd-category-tab-${activeEquipmentSection.id}-${category.key}`}
+                    hidden
+                  />
+                ))}
+              {activeCategory ? (
+                <section
+                  className="fdd-category-section"
+                  id={`fdd-category-panel-${activeEquipmentSection.id}-${activeCategory.key}`}
+                  role="tabpanel"
+                  aria-labelledby={`fdd-category-tab-${activeEquipmentSection.id}-${activeCategory.key}`}
+                >
+                  <header className="fdd-category-header">
+                    <div>
+                      <h4>{activeCategory.label}</h4>
+                      <p>{activeCategory.algorithms.length} algorithms</p>
+                    </div>
+                  </header>
+                  <div className="fdd-library-main">
+                    <table className="fdd-library-table">
+                      <thead>
+                        <tr>
+                          <th>Algorithm</th>
+                          <th>Fault type</th>
+                          <th>Method</th>
+                          <th>Inputs</th>
+                          <th>Definition</th>
+                          <th>Data check</th>
+                          <th>Runtime</th>
+                          <th>Project</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activeCategory.algorithms.map((algorithm) => {
+                          const check = currentEquipmentFirstFddCheck(
+                            checks,
+                            algorithm,
+                            library?.projectId,
+                            library?.equipmentInventorySignature,
+                            activeEquipmentSection.availability
+                          );
+                          const deployedTask = deployedFddTaskForAlgorithm(tasks, algorithm);
+                          const algorithmProgress = deploymentProgress?.algorithmId === algorithm.id ? deploymentProgress : null;
+                          const rowClassName = activeEquipmentUnavailable || activeEquipmentUnknown
+                            ? "is-not-applicable"
+                            : deployedTask || algorithmProgress
+                              ? "is-deployed"
+                              : undefined;
+                          const unavailableTitle = `Not applicable: no ${activeEquipmentSection.label} equipment in this project`;
+                          const equipmentActionTitle = activeEquipmentUnavailable
+                            ? unavailableTitle
+                            : activeEquipmentUnknown
+                              ? `Equipment availability unknown for ${activeEquipmentSection.label}`
+                              : undefined;
+                          return (
+                            <tr key={algorithm.id} className={rowClassName}>
+                              <td>
+                                <button type="button" className="fdd-library-algorithm-link" onClick={() => setSelectedAlgorithmId(algorithm.id)}>
+                                  <strong>{algorithm.name}</strong>
+                                  <span>{algorithm.scope === "global_community" ? "Community" : "Built-in"}</span>
+                                </button>
+                              </td>
+                              <td>{algorithm.faultType}</td>
+                              <td>{fddMethodLabel(algorithm.method)}</td>
+                              <td>{algorithm.requiredPoints.filter((point) => point.required).length}</td>
+                              <td><Badge tone={fddDefinitionTone(algorithm)}>{fddDefinitionLabel(algorithm)}</Badge></td>
+                              <td>
+                                <Badge tone={activeEquipmentUnavailable ? "neutral" : activeEquipmentUnknown ? "warning" : fddDeployabilityTone(check?.status)}>
+                                  {activeEquipmentUnavailable ? "Not applicable" : activeEquipmentUnknown ? "Equipment availability unknown" : fddDeployabilityLabel(check?.status)}
+                                </Badge>
+                              </td>
+                              <td><Badge tone={algorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(algorithm)}</Badge></td>
+                              <td>
+                                {activeEquipmentUnavailable ? (
+                                  <Badge tone="neutral">Not applicable</Badge>
+                                ) : activeEquipmentUnknown ? (
+                                  <Badge tone="warning">Availability unknown</Badge>
+                                ) : algorithmProgress ? (
+                                  <Badge tone="info">{fddDeploymentPhaseLabel(algorithmProgress.phase)}</Badge>
+                                ) : deployedTask ? (
+                                  <Badge tone="success">Deployed</Badge>
+                                ) : (
+                                  <Badge tone="neutral">Not deployed</Badge>
+                                )}
+                              </td>
+                              <td>
+                                <div className="fdd-table-actions">
+                                  <button type="button" title="Details" aria-label={`Open ${algorithm.name} details`} onClick={() => setSelectedAlgorithmId(algorithm.id)}>
+                                    <Icon name="book-open" />
+                                    <span>Details</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title={equipmentActionTitle ?? "Test with project data"}
+                                    aria-label={`Test ${algorithm.name} with project data`}
+                                    disabled={!activeEquipmentAvailable}
+                                    onClick={() => onTestAlgorithm(algorithm.id)}
+                                  >
+                                    <Icon name="activity" />
+                                    <span>Check</span>
+                                  </button>
+                                  {deployedTask ? (
+                                    <button type="button" title="Open deployed task" aria-label={`Open deployed ${algorithm.name} task`} onClick={() => onOpenTask(deployedTask.id)}>
+                                      <Icon name="file-search" />
+                                      <span>Task</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      title={equipmentActionTitle ?? (algorithm.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented")}
+                                      aria-label={`Deploy ${algorithm.name}`}
+                                      disabled={!activeEquipmentAvailable || !algorithm.deployableRuntime || Boolean(deploymentProgress && !algorithmProgress) || check?.status !== "can_deploy"}
+                                      onClick={() => onDeployAlgorithm(algorithm.id)}
+                                    >
+                                      <Icon name="zap" />
+                                      <span>Deploy</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ) : null}
+            </div>
+          )}
+        </section>
+      </div>
+
+      {selectedAlgorithm ? (
+        <div className="fdd-detail-overlay" role="presentation" onClick={() => setSelectedAlgorithmId(null)}>
+          <article className="fdd-detail-modal" role="dialog" aria-modal="true" aria-label={`${selectedAlgorithm.name} details`} onClick={(event) => event.stopPropagation()}>
+            <div className="fdd-detail-title-row">
+              <div>
+                <span className="fdd-detail-eyebrow">{fddEquipmentLabel(selectedAlgorithm.equipmentType)} · {selectedAlgorithm.categoryLabel}</span>
+                <h3>{selectedAlgorithm.name}</h3>
+              </div>
+              <div className="fdd-detail-status-badges">
+                {selectedEquipmentUnavailable ? (
+                  <Badge tone="neutral">Not applicable</Badge>
+                ) : selectedEquipmentUnknown ? (
+                  <Badge tone="warning">Equipment availability unknown</Badge>
+                ) : (
+                  <Badge tone={fddDeployabilityTone(selectedCheck?.status)}>{fddDeployabilityLabel(selectedCheck?.status)}</Badge>
+                )}
+                <Badge tone={selectedAlgorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(selectedAlgorithm)}</Badge>
+                <Badge tone={fddDefinitionTone(selectedAlgorithm)}>{fddDefinitionLabel(selectedAlgorithm)}</Badge>
+                {selectedEquipmentAvailable && selectedDeploymentProgress ? (
+                  <Badge tone="info">{fddDeploymentPhaseLabel(selectedDeploymentProgress.phase)}</Badge>
+                ) : selectedEquipmentAvailable && selectedDeployedTask ? (
+                  <Badge tone="success">Deployed</Badge>
+                ) : null}
+              </div>
+            </div>
+            <dl className="fdd-detail-facts">
+              <div><dt>Category</dt><dd>{selectedAlgorithm.categoryLabel}</dd></div>
+              <div><dt>Fault</dt><dd>{selectedAlgorithm.faultType}</dd></div>
+              <div><dt>Method</dt><dd>{fddMethodLabel(selectedAlgorithm.method)}</dd></div>
+              <div><dt>Inputs</dt><dd>{selectedAlgorithm.requiredPoints.filter((point) => point.required).length}</dd></div>
+              <div><dt>Version</dt><dd>{selectedAlgorithm.version}</dd></div>
+              <div><dt>Runtime</dt><dd>{fddRuntimeLabel(selectedAlgorithm)}</dd></div>
+              <div><dt>Definition</dt><dd>{fddDefinitionLabel(selectedAlgorithm)}</dd></div>
+              <div><dt>Project</dt><dd>{selectedEquipmentUnavailable ? "Not applicable" : selectedEquipmentUnknown ? "Equipment availability unknown" : selectedDeployedTask ? "Deployed" : selectedDeploymentProgress ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase) : "Not deployed"}</dd></div>
+            </dl>
+            {selectedEquipmentUnavailable ? (
+              <section className="fdd-detail-section fdd-detail-not-applicable" role="status">
+                <h4>No equipment in this project</h4>
+                <p>This algorithm remains available in the library, but it is Not applicable to the current project's data. Project data testing and deployment are disabled.</p>
+                {selectedEquipmentAvailability?.reason ? <p>{selectedEquipmentAvailability.reason}</p> : null}
+              </section>
+            ) : null}
+            {selectedEquipmentUnknown ? (
+              <section className="fdd-detail-section fdd-detail-not-applicable" role="status">
+                <h4>Equipment availability unknown</h4>
+                <p>Project data testing and deployment are disabled until the equipment inventory is confirmed.</p>
+                {selectedEquipmentAvailability?.reason ? <p>{selectedEquipmentAvailability.reason}</p> : null}
+              </section>
+            ) : null}
+            {selectedAlgorithm.definitionIssues?.length ? (
+              <section className="fdd-detail-section">
+                <h4>Definition Validation</h4>
+                <div className="fdd-issue-chip-list">
+                  {selectedAlgorithm.definitionIssues.map((issue) => <span className="fdd-issue-chip" key={issue}>{issue}</span>)}
+                </div>
+              </section>
+            ) : null}
+            <section className="fdd-detail-section">
+              <h4>Required Inputs</h4>
+              <div className="fdd-input-chip-grid">
+                {selectedAlgorithm.requiredPoints.filter((point) => point.required).map((point) => (
+                  <div className="fdd-input-chip" key={point.slot}>
+                    <strong>{point.label}</strong>
+                    <span>{point.quantityKind.replace(/_/gu, " ")}{point.acceptableUnits?.length ? ` · ${point.acceptableUnits.join(", ")}` : ""}</span>
+                    <small>{point.unitRoleDescription}</small>
+                    {point.sourceBrickClasses?.length ? <small>Brick: {point.sourceBrickClasses.join(" / ")}</small> : null}
+                  </div>
+                ))}
+              </div>
+            </section>
+            {selectedAlgorithm.definitionParameters?.length ? (
+              <section className="fdd-detail-section">
+                <h4>Source Thresholds</h4>
+                <div className="fdd-input-chip-grid">
+                  {selectedAlgorithm.definitionParameters.map((parameter) => (
+                    <div className={`fdd-input-chip ${parameter.resolution === "site_required" ? "is-optional" : ""}`} key={`${parameter.symbol}:${parameter.resolution}`}>
+                      <strong>{parameter.symbol}</strong>
+                      <span>{parameter.rawDefault ?? "Site value required"}</span>
+                      <small>{parameter.resolution.replace(/_/gu, " ")}</small>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+            {selectedAlgorithm.requiredPoints.some((point) => !point.required) ? (
+              <section className="fdd-detail-section">
+                <h4>Optional Inputs</h4>
+                <div className="fdd-input-chip-grid">
+                  {selectedAlgorithm.requiredPoints.filter((point) => !point.required).map((point) => (
+                    <div className="fdd-input-chip is-optional" key={point.slot}>
+                      <strong>{point.label}</strong>
+                      <span>{point.quantityKind.replace(/_/gu, " ")}{point.acceptableUnits?.length ? ` · ${point.acceptableUnits.join(", ")}` : ""}</span>
+                      <small>{point.unitRoleDescription}</small>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+            <section className="fdd-detail-section">
+              <h4>Formula</h4>
+              <Markdown source={fddFormulaMarkdown(selectedAlgorithm.formula)} className="fdd-formula-markdown" />
+            </section>
+            <section className="fdd-detail-section">
+              <h4>Logic Summary</h4>
+              <p>{selectedAlgorithm.logicSummary}</p>
+            </section>
+            {selectedAlgorithm.sourceDefinition ? (
+              <section className="fdd-detail-section">
+                <h4>Source Provenance</h4>
+                <p>{selectedAlgorithm.sourceDefinition.sourceFile} · {selectedAlgorithm.sourceDefinition.ruleId} · SHA-256 {selectedAlgorithm.sourceDefinition.sha256.slice(0, 12)}…</p>
+                <p><strong>Required points:</strong> {selectedAlgorithm.sourceDefinition.requiredPointsRaw}</p>
+                <p><strong>Tunable parameters:</strong> {selectedAlgorithm.sourceDefinition.tunableParametersRaw}</p>
+              </section>
+            ) : null}
+            {selectedCheck ? (
+              <section className="fdd-detail-section">
+                <div className="fdd-project-check-head">
+                  <h4>Project Point Check</h4>
+                  <span>{formatFriendlyDateTime(selectedCheck.checkedAt)} · {fddCheckWorkflowLabel(selectedCheck)}{selectedCheck.exampleEntityKey ? ` · Entity ${selectedCheck.exampleEntityKey}` : ""}</span>
+                </div>
+                <p className="kpi-muted">Point matching includes an observed first-to-latest history-span check. It does not prove sample continuity, engineering-unit conversion, or evaluator execution.</p>
+                {selectedCheck.missingPoints.length > 0 || selectedCheck.historyIssues.length > 0 ? (
+                  <div className="fdd-issue-chip-list">
+                    {[...selectedCheck.missingPoints, ...selectedCheck.historyIssues].map((issue) => (
+                      <span className="fdd-issue-chip" key={issue}>{issue}</span>
+                    ))}
+                  </div>
+                ) : null}
+                {selectedRequiredMappings.length ? (
+                  <div className="fdd-mapping-grid">
+                    {selectedRequiredMappings.map((mapping) => {
+                      const input = selectedAlgorithm.requiredPoints.find((point) => point.slot === mapping.slot);
+                      return (
+                        <div className="fdd-mapping-chip" key={`${mapping.slot}:${mapping.pointName}`}>
+                          <strong>{input?.label ?? mapping.slot}</strong>
+                          <span><em>Point</em>{mapping.pointName}</span>
+                          {mapping.unit ? <small><em>Unit</em>{mapping.unit}</small> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : selectedCheck.pointCandidates.length > 0 ? (
+                  <div className="fdd-mapping-grid">
+                    {selectedCheck.pointCandidates.slice(0, 6).map((candidate) => (
+                      <div className="fdd-mapping-chip" key={`${candidate.slot}:${candidate.pointName}`}>
+                        <strong>{candidate.slot}</strong>
+                        <span>{candidate.pointName}</span>
+                        <small>{[candidate.entityKey, `${Math.round(candidate.confidence * 100)}%`, candidate.unit].filter(Boolean).join(" · ")}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>No point candidates saved.</p>
+                )}
+                {selectedAmbiguousSlots.length > 0 ? (
+                  <div className="fdd-ambiguous-grid">
+                    {selectedAmbiguousSlots.map((entry) => (
+                      <div className="fdd-ambiguous-card" key={entry.slot}>
+                        <strong>{entry.label}</strong>
+                        <span>{entry.candidates.map((candidate) => `${candidate.pointName}${candidate.unit ? ` (${candidate.unit})` : ""} · ${Math.round(candidate.confidence * 100)}%`).join("; ")}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {selectedCheck.rejectedCandidates.length > 0 ? (
+                  <div className="fdd-rejected-list">
+                    <strong>Dimension rejections</strong>
+                    <span>{selectedCheck.rejectedCandidates.slice(0, 4).map((candidate) => `${candidate.slot}: ${candidate.pointName}${candidate.unit ? ` (${candidate.unit})` : ""}`).join("; ")}</span>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+            <div className="fdd-detail-actions">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!selectedEquipmentAvailable}
+                title={selectedEquipmentUnavailable ? `Not applicable: no ${fddEquipmentLabel(selectedAlgorithm.equipmentType)} equipment in this project` : selectedEquipmentUnknown ? "Equipment availability unknown" : "Test with project data"}
+                onClick={() => onTestAlgorithm(selectedAlgorithm.id)}
+              >
+                <Icon name="activity" />
+                {selectedEquipmentUnavailable ? "Not applicable" : selectedEquipmentUnknown ? "Availability unknown" : "Test with project data"}
+              </Button>
+              <Button
+                type="button"
+                loading={Boolean(selectedDeploymentProgress)}
+                disabled={!selectedDeployedTask && (!selectedEquipmentAvailable || !selectedAlgorithm.deployableRuntime || Boolean(deploymentProgress && !selectedDeploymentProgress) || selectedCheck?.status !== "can_deploy")}
+                onClick={() => {
+                  if (selectedDeployedTask) {
+                    onOpenTask(selectedDeployedTask.id);
+                    return;
+                  }
+                  onDeployAlgorithm(selectedAlgorithm.id);
+                }}
+              >
+                {selectedDeploymentProgress ? <span className="spinner" aria-hidden="true" /> : <Icon name={selectedDeployedTask ? "file-search" : "zap"} />}
+                {selectedDeploymentProgress
+                  ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase)
+                  : selectedDeployedTask
+                    ? "Open task"
+                    : selectedEquipmentUnavailable
+                      ? "Not applicable"
+                    : selectedEquipmentUnknown
+                      ? "Availability unknown"
+                    : selectedAlgorithm.deployableRuntime
+                      ? "Deploy"
+                      : "Evaluator required"}
+              </Button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+    </Surface>
+  );
+}
+
 function KpiDetailPanel({
   metricGroup,
   activeMetricId,
   dashboards,
   onOpenDashboard,
+  onDeleteMetricGroup,
   onToggleMetricMaterialization
 }: {
   metricGroup: KpiMetricGroup | null;
   activeMetricId: string | null;
   dashboards: DashboardRecord[];
   onOpenDashboard: (dashboardId: string) => void;
+  onDeleteMetricGroup: (instanceIds: string[]) => void;
   onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => void;
 }) {
   if (!activeMetricId) {
@@ -2844,6 +4736,10 @@ function KpiDetailPanel({
             <h2>{metricGroup.displayName}</h2>
             <p>{metricGroup.metrics.length} entities · {instance.metricKey}</p>
           </div>
+          <Button type="button" size="sm" variant="secondary" className="asset-danger-button" onClick={() => onDeleteMetricGroup(instanceIds)}>
+            <Icon name="trash" />
+            Delete
+          </Button>
         </div>
         <p>{professionalExplanationForMetric(representative)}</p>
         <div className="kpi-formula-panel">
@@ -2961,14 +4857,19 @@ function WorkspaceRightPanel({
   derivedMetrics,
   activeDashboardId,
   activeMetricId,
+  activeFddTaskId,
   disabled,
   onOpenDashboard,
   onOpenMetric,
+  onOpenFddTask,
+  onOpenFddLibrary,
+  onCreateProjectFdd,
   onToggleMetricMaterialization,
   onRenameDashboard,
   onDuplicateDashboard,
   onDeleteDashboard,
-  onMergeDashboard
+  onMergeDashboard,
+  onInteract
 }: {
   registry: RegistryResponse | null;
   management: ProjectManagementResponse | null;
@@ -2976,40 +4877,85 @@ function WorkspaceRightPanel({
   derivedMetrics: DerivedMetricAsset[];
   activeDashboardId: string | null;
   activeMetricId: string | null;
+  activeFddTaskId: string | null;
   disabled?: boolean;
   onOpenDashboard: (dashboardId: string) => void;
   onOpenMetric: (instanceId: string) => void;
+  onOpenFddTask: (taskId: string) => void;
+  onOpenFddLibrary: () => void;
+  onCreateProjectFdd: () => void;
   onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => void;
   onRenameDashboard: (dashboardId: string) => void;
   onDuplicateDashboard: (dashboardId: string) => void;
   onDeleteDashboard: (dashboardId: string) => void;
   onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => void;
+  onInteract?: () => void;
 }) {
-  const assetGroups = disabled ? [] : groupDerivedMetricAssets(derivedMetrics);
-  const fddGroups = assetGroups.filter((group) => derivedAssetKindLabel(group.representative) === "FDD");
+  const taskLinkedFddKeys = new Set(
+    derivedMetrics
+      .filter((metric) => metricMetadataString(metric, "fddTaskId"))
+      .map((metric) => `${metric.instance.metricKey}:${metric.instance.formulaVersion}`)
+  );
+  const visibleDerivedMetrics = disabled ? [] : derivedMetrics.filter((metric) => {
+    const groupKey = `${metric.instance.metricKey}:${metric.instance.formulaVersion}`;
+    const isLegacyFddPlaceholder = derivedAssetKindLabel(metric) === "FDD"
+      && metric.instance.entityId.endsWith("_fdd")
+      && !metricMetadataString(metric, "fddTaskId")
+      && taskLinkedFddKeys.has(groupKey);
+    return !isLegacyFddPlaceholder;
+  });
+  const assetGroups = groupDerivedMetricAssets(visibleDerivedMetrics);
+  const fddGroups = assetGroups.filter((group) =>
+    derivedAssetKindLabel(group.representative) === "FDD"
+    && group.metrics.some(isCuratedFddMetricAsset)
+  );
   const kpiGroups = assetGroups.filter((group) => derivedAssetKindLabel(group.representative) === "KPI");
   const taskCount = fddGroups.length;
   const metricCount = kpiGroups.length;
   const dashboardCount = disabled ? 0 : dashboards.length;
   const [dashboardsSectionOpen, setDashboardsSectionOpen] = useState(true);
   return (
-    <div className={`workspace-right-block${disabled ? " is-disabled" : ""}`}>
+    <div className={`workspace-right-block${disabled ? " is-disabled" : ""}`} onClickCapture={() => {
+      if (!disabled) onInteract?.();
+    }}>
       <details className="workspace-right-section">
         <summary>
           <span><Icon name="file-search" />FDD Tasks</span>
-          <span className="right-section-meta">{taskCount}</span>
+          <span className="workspace-right-section-actions">
+            <button
+              type="button"
+              className="is-library"
+              title="Open FDD Library"
+              aria-label="Open FDD Library"
+              disabled={disabled}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (disabled) return;
+                onOpenFddLibrary();
+              }}
+            >
+              <Icon name="book-open" />
+              <span>Library</span>
+            </button>
+            <span className="right-section-meta">{taskCount}</span>
+          </span>
         </summary>
         {disabled ? (
           <RightPanelEmptyCard label="FDD tasks" title="Select a project">
-            Choose a project to view FDD tasks.
+            Choose a project to open the FDD Library.
           </RightPanelEmptyCard>
         ) : fddGroups.length === 0 ? (
-          <ScheduledTasks />
+          <RightPanelEmptyCard label="FDD tasks" title="No deployed FDD yet.">
+            Open the Library to test and deploy a class-level FDD algorithm.
+          </RightPanelEmptyCard>
         ) : (
-          <WorkspaceMetricGroupList
+          <WorkspaceFddRuntimeList
             groups={fddGroups}
+            activeTaskId={activeFddTaskId}
             activeMetricId={activeMetricId}
-            ariaLabel="Project FDD tasks"
+            ariaLabel="Project FDD runtime assets"
+            onOpenTask={onOpenFddTask}
             onOpenMetric={onOpenMetric}
             onToggleMetricMaterialization={onToggleMetricMaterialization}
           />
@@ -3103,8 +5049,13 @@ function Workspace({
   dashboards,
   activeDashboard,
   derivedMetrics,
+  fddLibrary,
+  fddTasks,
+  fddLibraryLoading,
+  fddDeploymentProgress,
   activeMetricGroup,
   activeMetricId,
+  activeFddTaskId,
   dashboardLiveValues,
   dashboardRealtimeStale,
   kbTotalCount,
@@ -3123,6 +5074,15 @@ function Workspace({
   onSelectConversation,
   onOpenDashboard,
   onOpenMetric,
+  onOpenFddTask,
+  onOpenFddLibrary,
+  onCreateProjectFdd,
+  onTestFddAlgorithm,
+  onDeployFddAlgorithm,
+  onTestFddTask,
+  onDeployFddTask,
+  onUpdateFddTaskParameters,
+  onDeleteFddTask,
   onCreateProject,
   onSignOut,
   projectConversationCounts,
@@ -3137,6 +5097,7 @@ function Workspace({
   onRenameDashboard,
   onDuplicateDashboard,
   onDeleteDashboard,
+  onDeleteMetricGroup,
   onMergeDashboard,
   onCopyWidgetToDashboard,
   onToggleMetricMaterialization,
@@ -3163,8 +5124,13 @@ function Workspace({
   dashboards: DashboardRecord[];
   activeDashboard: DashboardRecord | null;
   derivedMetrics: DerivedMetricAsset[];
+  fddLibrary: FddLibraryResponse | null;
+  fddTasks: ProjectFddTask[];
+  fddLibraryLoading: boolean;
+  fddDeploymentProgress: FddDeploymentProgress | null;
   activeMetricGroup: KpiMetricGroup | null;
   activeMetricId: string | null;
+  activeFddTaskId: string | null;
   dashboardLiveValues: Record<string, BmsCollectorPoint>;
   dashboardRealtimeStale: boolean;
   kbTotalCount: number;
@@ -3184,6 +5150,15 @@ function Workspace({
   onSelectConversation: (convId: string) => void;
   onOpenDashboard: (dashboardId: string) => void;
   onOpenMetric: (instanceId: string) => void;
+  onOpenFddTask: (taskId: string) => void;
+  onOpenFddLibrary: () => void;
+  onCreateProjectFdd: () => void;
+  onTestFddAlgorithm: (algorithmId: string) => void;
+  onDeployFddAlgorithm: (algorithmId: string) => void;
+  onTestFddTask: (taskId: string) => void;
+  onDeployFddTask: (taskId: string) => void;
+  onUpdateFddTaskParameters: (taskId: string, parameters: Array<{ key: string; value: FddParameterValue }>) => void;
+  onDeleteFddTask: (taskId: string) => void;
   onCreateProject: (name: string) => void;
   onSignOut: () => void;
   projectConversationCounts: Record<string, number>;
@@ -3198,6 +5173,7 @@ function Workspace({
   onRenameDashboard: (dashboardId: string) => Promise<void>;
   onDuplicateDashboard: (dashboardId: string) => Promise<void>;
   onDeleteDashboard: (dashboardId: string) => Promise<void>;
+  onDeleteMetricGroup: (instanceIds: string[]) => Promise<void>;
   onMergeDashboard: (sourceDashboardId: string, targetDashboardId?: string) => Promise<void>;
   onCopyWidgetToDashboard: (widgetId: string, targetDashboardId: string) => Promise<void>;
   onToggleMetricMaterialization: (instanceIds: string[], enabled: boolean) => Promise<void>;
@@ -3219,6 +5195,7 @@ function Workspace({
     { id: "dashboards", label: "Dashboards" },
     { id: "reports", label: "Auto Report" },
     { id: "kpis", label: "KPI" },
+    { id: "fdd-library", label: "FDD Library" },
     { id: "registry", label: "Platform Registry" },
     { id: "gateways", label: "Gateways" },
     { id: "building", label: "Building Domain" }
@@ -3226,6 +5203,27 @@ function Workspace({
 
   const [leftOpen, setLeftOpen] = useState(project !== null);
   const [rightOpen, setRightOpen] = useState(false);
+  const activeFddTask = useMemo(() => fddTasks.find((task) => task.id === activeFddTaskId && isCuratedFddTask(task)) ?? null, [fddTasks, activeFddTaskId]);
+  const visibleActiveFddTaskId = activeFddTask ? activeFddTaskId : null;
+  const activeFddTaskMetricGroup = useMemo(() => fddMetricGroupForTask(activeFddTask, derivedMetrics), [activeFddTask, derivedMetrics]);
+  const centerContentRef = useRef<HTMLDivElement | null>(null);
+  const activeCenterViewKey = [
+    activeTab,
+    activeDashboard?.id ?? "",
+    activeMetricId ?? "",
+    activeFddTaskId ?? ""
+  ].join(":");
+
+  const resetCenterScroll = (behavior: ScrollBehavior = "auto") => {
+    const node = centerContentRef.current;
+    if (!node) return;
+    if (typeof node.scrollTo === "function") {
+      node.scrollTo({ top: 0, left: 0, behavior });
+    } else {
+      node.scrollTop = 0;
+      node.scrollLeft = 0;
+    }
+  };
 
   useEffect(() => {
     if (project) {
@@ -3236,6 +5234,10 @@ function Workspace({
       setRightOpen(false);
     }
   }, [project?.id ?? null]);
+
+  useEffect(() => {
+    resetCenterScroll("auto");
+  }, [activeCenterViewKey]);
 
   useEffect(() => {
     if (!project) return;
@@ -3251,6 +5253,33 @@ function Workspace({
     !project ? (leftOpen ? "is-left-expanded" : "") : (leftOpen ? "" : "is-left-collapsed"),
     !project ? (rightOpen ? "is-right-expanded" : "") : (rightOpen ? "" : "is-right-collapsed")
   ].filter(Boolean).join(" ");
+  const revealLeftSidebar = () => {
+    if (!project) return;
+    setLeftOpen(true);
+    setRightOpen(false);
+  };
+  const revealRightSidebar = () => {
+    if (!project) return;
+    setRightOpen(true);
+    setLeftOpen(false);
+  };
+  const handleCenterMaterializationToggle = (instanceIds: string[], enabled: boolean) => {
+    const node = centerContentRef.current;
+    const scrollTop = node?.scrollTop ?? 0;
+    const scrollLeft = node?.scrollLeft ?? 0;
+    const restoreScroll = () => {
+      const currentNode = centerContentRef.current;
+      if (!currentNode) return;
+      currentNode.scrollTop = scrollTop;
+      currentNode.scrollLeft = scrollLeft;
+    };
+    void onToggleMetricMaterialization(instanceIds, enabled).finally(() => {
+      requestAnimationFrame(() => {
+        restoreScroll();
+        requestAnimationFrame(restoreScroll);
+      });
+    });
+  };
 
   const center = project ? (
     <div className="workspace-center-block" aria-labelledby="workspace-title">
@@ -3263,48 +5292,78 @@ function Workspace({
         </button>
       </div>
       <h1 id="workspace-title" className="visually-hidden">{project.name} workspace</h1>
-      {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} dashboards={dashboards} activeConversationId={activeConversationId} onSend={onSend} onOpenDashboard={onOpenDashboard} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamOutputStarted={streamOutputStarted} {...(streamAnswerPhase !== undefined ? { streamAnswerPhase } : {})} {...(streamInterimNarration !== undefined ? { streamInterimNarration } : {})} {...(streamWorkElapsedMs !== undefined ? { streamWorkElapsedMs } : {})} {...(streamWorkSegmentStartedAt !== undefined ? { streamWorkSegmentStartedAt } : {})} {...(streamTick !== undefined ? { streamTick } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
-      {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
-      {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
-      {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
-      {activeTab === "reports" ? <AutoReport token={token} projectId={project.id} projectName={project.name} dashboards={dashboards} onOpenDashboard={onOpenDashboard} /> : null}
-      {activeTab === "dashboards" ? (
-        activeDashboard ? (
-          <DashboardView
-            key={activeDashboard.id}
-            token={token}
-            dashboard={activeDashboard}
+      <div className="workspace-center-content" ref={centerContentRef}>
+        {activeTab === "chat" ? <ChatWorkspace project={project} user={user} token={token} messages={messages} dashboards={dashboards} activeConversationId={activeConversationId} onSend={onSend} onOpenDashboard={onOpenDashboard} onStop={onStop} busy={busy} provider={providerDiagnostics} requestId={providerRequestId} streamOutputStarted={streamOutputStarted} {...(streamAnswerPhase !== undefined ? { streamAnswerPhase } : {})} {...(streamInterimNarration !== undefined ? { streamInterimNarration } : {})} {...(streamWorkElapsedMs !== undefined ? { streamWorkElapsedMs } : {})} {...(streamWorkSegmentStartedAt !== undefined ? { streamWorkSegmentStartedAt } : {})} {...(streamTick !== undefined ? { streamTick } : {})} {...(streamingActivity ? { streamingActivity } : {})} /> : null}
+        {activeTab === "bms" ? <BmsDataConfigPage projectId={project.id} projectName={project.name} token={token} /> : null}
+        {activeTab === "kb" ? <KnowledgeBase projectId={project.id} projectName={project.name} documents={kbDocuments} /> : null}
+        {activeTab === "repo" ? <Repository projectId={project.id} projectName={project.name} items={repoItems} /> : null}
+        {activeTab === "reports" ? <AutoReport token={token} projectId={project.id} projectName={project.name} dashboards={dashboards} onOpenDashboard={onOpenDashboard} /> : null}
+        {activeTab === "dashboards" ? (
+          activeDashboard ? (
+            <DashboardView
+              key={activeDashboard.id}
+              token={token}
+              dashboard={activeDashboard}
+              dashboards={dashboards}
+              liveValues={dashboardLiveValues}
+              stale={dashboardRealtimeStale}
+              forceCompactLayout={leftOpen || rightOpen}
+              onDashboardChange={onDashboardSpecChange}
+              onDashboardRename={() => { void onRenameDashboard(activeDashboard.id); }}
+              onDashboardDuplicate={() => { void onDuplicateDashboard(activeDashboard.id); }}
+              onDashboardDelete={() => { void onDeleteDashboard(activeDashboard.id); }}
+              onDashboardMerge={() => { void onMergeDashboard(activeDashboard.id); }}
+              onCopyWidgetToDashboard={onCopyWidgetToDashboard}
+              onLayoutChange={onDashboardLayoutChange}
+              onVisibilityChange={onDashboardVisibilityChange}
+            />
+          ) : (
+            <Surface className="dashboard-empty-surface">
+              <EmptyState title="Choose a dashboard">Pick a dashboard from the right sidebar to open it here.</EmptyState>
+            </Surface>
+          )
+        ) : null}
+        {activeTab === "kpis" ? (
+          <KpiDetailPanel
+            metricGroup={activeMetricGroup}
+            activeMetricId={activeMetricId}
             dashboards={dashboards}
-            liveValues={dashboardLiveValues}
-            stale={dashboardRealtimeStale}
-            forceCompactLayout={leftOpen || rightOpen}
-            onDashboardChange={onDashboardSpecChange}
-            onDashboardRename={() => { void onRenameDashboard(activeDashboard.id); }}
-            onDashboardDuplicate={() => { void onDuplicateDashboard(activeDashboard.id); }}
-            onDashboardDelete={() => { void onDeleteDashboard(activeDashboard.id); }}
-            onDashboardMerge={() => { void onMergeDashboard(activeDashboard.id); }}
-            onCopyWidgetToDashboard={onCopyWidgetToDashboard}
-            onLayoutChange={onDashboardLayoutChange}
-            onVisibilityChange={onDashboardVisibilityChange}
+            onOpenDashboard={onOpenDashboard}
+            onDeleteMetricGroup={(instanceIds) => { void onDeleteMetricGroup(instanceIds); }}
+            onToggleMetricMaterialization={handleCenterMaterializationToggle}
           />
-        ) : (
-          <Surface className="dashboard-empty-surface">
-            <EmptyState title="Choose a dashboard">Pick a dashboard from the right sidebar to open it here.</EmptyState>
-          </Surface>
-        )
-      ) : null}
-      {activeTab === "kpis" ? (
-        <KpiDetailPanel
-          metricGroup={activeMetricGroup}
-          activeMetricId={activeMetricId}
-          dashboards={dashboards}
-          onOpenDashboard={onOpenDashboard}
-          onToggleMetricMaterialization={(instanceIds, enabled) => { void onToggleMetricMaterialization(instanceIds, enabled); }}
-        />
-      ) : null}
-      {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
-      {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
-      {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
+        ) : null}
+        {activeTab === "fdd-tasks" ? (
+          <FddTaskDetailPanel
+            task={activeFddTask}
+            library={fddLibrary}
+            activeTaskId={visibleActiveFddTaskId}
+            metricGroup={activeFddTaskMetricGroup}
+            dashboards={dashboards}
+            deploymentProgress={fddDeploymentProgress}
+            onOpenDashboard={onOpenDashboard}
+            onTestTask={onTestFddTask}
+            onDeployTask={onDeployFddTask}
+            onUpdateTaskParameters={onUpdateFddTaskParameters}
+            onDeleteTask={onDeleteFddTask}
+            onToggleMetricMaterialization={handleCenterMaterializationToggle}
+          />
+        ) : null}
+        {activeTab === "fdd-library" ? (
+          <FddLibraryPanel
+            library={fddLibrary}
+            loading={fddLibraryLoading}
+            deploymentProgress={fddDeploymentProgress}
+            onCreateProjectFdd={onCreateProjectFdd}
+            onTestAlgorithm={onTestFddAlgorithm}
+            onDeployAlgorithm={onDeployFddAlgorithm}
+            onOpenTask={onOpenFddTask}
+          />
+        ) : null}
+        {activeTab === "registry" ? <RegistryPanel registry={registry} /> : null}
+        {activeTab === "gateways" ? <GatewayPanel registry={registry} management={management} /> : null}
+        {activeTab === "building" ? <BuildingDomainPanel registry={registry} management={management} /> : null}
+      </div>
     </div>
   ) : restoringSession ? (
     <div className="workspace-center-block workspace-center-empty workspace-center-restoring" aria-labelledby="workspace-title" aria-busy="true">
@@ -3372,28 +5431,30 @@ function Workspace({
         centerLabel="Workspace content"
         rightLabel="Workspace details"
         left={(
-          <WorkspaceSidebarBlock
-            project={project}
-            projects={projects}
-            user={user}
-            kbCount={project ? kbTotalCount : 0}
-            repoCount={project ? repoTotalCount : 0}
-            conversations={project ? conversations : []}
-            activeConversationId={project && activeTab === "chat" ? activeConversationId : null}
-            busy={busy}
-            onSwitchProject={onSwitchProject}
-            onSelectProject={onSelectProject}
-            onSelectConversation={onSelectConversation}
-            onSignOut={onSignOut}
-            onNewChat={() => { void onNewChat(); }}
-            onOpenKnowledgeBase={() => onTabChange("kb")}
-            onOpenBmsDataConfig={() => onTabChange("bms")}
-            onOpenRepository={() => onTabChange("repo")}
-            onOpenAutoReport={() => onTabChange("reports")}
-            onDeleteConversation={onDeleteConversation}
-            onRenameConversation={(convId, title) => { void onRenameConversation(convId, title); }}
-            onDeleteProject={onDeleteProject}
-          />
+          <div className="workspace-sidebar-interaction-scope" onClickCapture={revealLeftSidebar}>
+            <WorkspaceSidebarBlock
+              project={project}
+              projects={projects}
+              user={user}
+              kbCount={project ? kbTotalCount : 0}
+              repoCount={project ? repoTotalCount : 0}
+              conversations={project ? conversations : []}
+              activeConversationId={project && activeTab === "chat" ? activeConversationId : null}
+              busy={busy}
+              onSwitchProject={onSwitchProject}
+              onSelectProject={onSelectProject}
+              onSelectConversation={onSelectConversation}
+              onSignOut={onSignOut}
+              onNewChat={() => { void onNewChat(); }}
+              onOpenKnowledgeBase={() => onTabChange("kb")}
+              onOpenBmsDataConfig={() => onTabChange("bms")}
+              onOpenRepository={() => onTabChange("repo")}
+              onOpenAutoReport={() => onTabChange("reports")}
+              onDeleteConversation={onDeleteConversation}
+              onRenameConversation={(convId, title) => { void onRenameConversation(convId, title); }}
+              onDeleteProject={onDeleteProject}
+            />
+          </div>
         )}
         center={center}
         right={(
@@ -3404,14 +5465,19 @@ function Workspace({
             derivedMetrics={project ? derivedMetrics : []}
             activeDashboardId={activeDashboard?.id ?? null}
             activeMetricId={activeMetricId}
+            activeFddTaskId={visibleActiveFddTaskId}
             disabled={!project}
             onOpenDashboard={onOpenDashboard}
             onOpenMetric={onOpenMetric}
+            onOpenFddTask={onOpenFddTask}
+            onOpenFddLibrary={onOpenFddLibrary}
+            onCreateProjectFdd={onCreateProjectFdd}
             onToggleMetricMaterialization={(instanceIds, enabled) => { void onToggleMetricMaterialization(instanceIds, enabled); }}
             onRenameDashboard={(dashboardId) => { void onRenameDashboard(dashboardId); }}
             onDuplicateDashboard={(dashboardId) => { void onDuplicateDashboard(dashboardId); }}
             onDeleteDashboard={(dashboardId) => { void onDeleteDashboard(dashboardId); }}
             onMergeDashboard={(sourceDashboardId, targetDashboardId) => { void onMergeDashboard(sourceDashboardId, targetDashboardId); }}
+            onInteract={revealRightSidebar}
           />
         )}
         className={shellClass}
@@ -3437,7 +5503,11 @@ export default function App() {
   const [dashboards, setDashboards] = useState<DashboardRecord[]>([]);
   const [activeDashboardId, setActiveDashboardId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.dashboardId ?? null);
   const [derivedMetrics, setDerivedMetrics] = useState<DerivedMetricAsset[]>([]);
+  const [fddLibrary, setFddLibrary] = useState<FddLibraryResponse | null>(null);
+  const [fddTasks, setFddTasks] = useState<ProjectFddTask[]>([]);
+  const [fddLibraryLoading, setFddLibraryLoading] = useState(false);
   const [activeMetricId, setActiveMetricId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.metricInstanceId ?? null);
+  const [activeFddTaskId, setActiveFddTaskId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.fddTaskId ?? null);
   const [dashboardLiveValues, setDashboardLiveValues] = useState<Record<string, BmsCollectorPoint>>({});
   const [dashboardRealtimeAt, setDashboardRealtimeAt] = useState<number | null>(null);
   const [kbTotalCount, setKbTotalCount] = useState(0);
@@ -3451,8 +5521,18 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
   const [pathnameProjectId, setPathnameProjectId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.projectId ?? null);
   const [locationSearch, setLocationSearch] = useState(() => window.location.search);
+  const fddLibraryHasFullCuratedImport = [
+    "chiller_ch_51_heat_balance_sensor_consistency",
+    "ahu_fdd_44",
+    "vav_fdd_17",
+    "fcu_fdd_20",
+    "pump_fdd_18",
+    "cooling_tower_fdd_12"
+  ].every((algorithmKey) => fddLibrary?.algorithms.some((algorithm) => algorithm.algorithmKey === algorithmKey)) ?? false;
+  const visibleFddTasks = useMemo(() => fddTasks.filter(isCuratedFddTask), [fddTasks]);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [fddDeploymentProgress, setFddDeploymentProgress] = useState<FddDeploymentProgress | null>(null);
   const [conversationStreams, setConversationStreams] = useState<Record<string, ConversationStreamState>>({});
   const [streamElapsedTick, setStreamElapsedTick] = useState(0);
   const [bootstrapping, setBootstrapping] = useState(Boolean(initial.token));
@@ -3462,6 +5542,7 @@ export default function App() {
   const sendInFlightRef = useRef(false);
   const streamingTurnRef = useRef<StreamingTurnState | null>(null);
   const projectSocketRef = useRef<ReturnType<typeof createProjectSocket> | null>(null);
+  const fddDeploymentProgressRef = useRef<FddDeploymentProgress | null>(null);
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
   const conversationStreamsRef = useRef<Record<string, ConversationStreamState>>({});
   const deletedConversationIdsRef = useRef<Set<string>>(new Set());
@@ -3471,6 +5552,73 @@ export default function App() {
   useEffect(() => {
     conversationStreamsRef.current = conversationStreams;
   }, [conversationStreams]);
+
+  useEffect(() => {
+    fddDeploymentProgressRef.current = null;
+    setFddDeploymentProgress(null);
+  }, [selectedProject?.id ?? null]);
+
+  const updateFddDeploymentProgress = (next: FddDeploymentProgress | null) => {
+    fddDeploymentProgressRef.current = next;
+    setFddDeploymentProgress(next);
+  };
+
+  const completeFddDeploymentIfReady = (metrics: DerivedMetricAsset[]): boolean => {
+    const progress = fddDeploymentProgressRef.current;
+    if (!progress?.task) return false;
+    const group = fddMetricGroupForTask(progress.task, metrics);
+    const backfillError = fddBackfillErrorForTask(progress.task, metrics);
+    if (backfillError) {
+      updateFddDeploymentProgress(null);
+      setBanner({
+        tone: "error",
+        title: "FDD backfill failed",
+        message: `${progress.label}: ${backfillError}`,
+        requestId: progress.requestId
+      });
+      return true;
+    }
+    if (!fddBackfillCompleteForTask(progress.task, metrics)) {
+      if (group?.metrics.length && progress.entityCount !== group.metrics.length) {
+        updateFddDeploymentProgress({ ...progress, entityCount: group.metrics.length });
+      }
+      return false;
+    }
+    updateFddDeploymentProgress(null);
+    setBanner({
+      tone: "success",
+      title: "FDD backfill complete",
+      message: `${progress.label}: ${group?.metrics.length ?? progress.entityCount ?? "All"} entities now have historical FDD samples.`,
+      requestId: progress.requestId
+    });
+    return true;
+  };
+
+  const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+  async function pollFddBackfill(projectId: string, task: ProjectFddTask, requestId?: string): Promise<void> {
+    if (!token) return;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(attempt < 4 ? 1200 : 2500);
+      if (fddDeploymentProgressRef.current?.taskId !== task.id) return;
+      try {
+        const response = await getDerivedMetrics(token, projectId);
+        setDerivedMetrics(response.metrics);
+        if (completeFddDeploymentIfReady(response.metrics)) return;
+      } catch {
+        // The websocket/sidebar refresh path may still deliver the update.
+      }
+    }
+    const progress = fddDeploymentProgressRef.current;
+    if (progress?.taskId !== task.id) return;
+    updateFddDeploymentProgress(null);
+    setBanner({
+      tone: "info",
+      title: "FDD backfill still running",
+      message: `${task.algorithmSnapshot.name} is deployed. Historical samples are still being calculated in the background.`,
+      requestId
+    });
+  }
 
   function isLocallyStreamingConversation(conversationId: string): boolean {
     const turn = streamingTurnRef.current;
@@ -3485,7 +5633,8 @@ export default function App() {
       selectedProject.id,
       activeTab,
       activeTab === "dashboards" ? activeDashboardId : null,
-      activeTab === "kpis" ? activeMetricId : null
+      activeTab === "kpis" ? activeMetricId : null,
+      activeTab === "fdd-tasks" ? activeFddTaskId : null
     );
     const targetUrl = soloDashboardView && activeTab === "dashboards" && activeDashboardId
       ? dashboardSoloPath(selectedProject.id, activeDashboardId)
@@ -3494,7 +5643,7 @@ export default function App() {
       window.history.pushState({}, "", targetUrl);
       setLocationSearch(soloDashboardView && activeTab === "dashboards" && activeDashboardId ? "?view=solo" : "");
     }
-  }, [activeDashboardId, activeMetricId, activeTab, selectedProject?.id ?? null, soloDashboardView]);
+  }, [activeDashboardId, activeFddTaskId, activeMetricId, activeTab, selectedProject?.id ?? null, soloDashboardView]);
 
   useEffect(() => {
     const parsed = parseWorkspacePath(window.location.pathname);
@@ -3503,6 +5652,7 @@ export default function App() {
       setActiveTab(parsed.tab);
       setActiveDashboardId(parsed.dashboardId ?? null);
       setActiveMetricId(parsed.metricInstanceId ?? null);
+      setActiveFddTaskId(parsed.fddTaskId ?? null);
     }
     setLocationSearch(window.location.search);
     const handlePopState = () => {
@@ -3513,9 +5663,11 @@ export default function App() {
         setActiveTab(next.tab);
         setActiveDashboardId(next.dashboardId ?? null);
         setActiveMetricId(next.metricInstanceId ?? null);
+        setActiveFddTaskId(next.fddTaskId ?? null);
       } else {
         setActiveDashboardId(null);
         setActiveMetricId(null);
+        setActiveFddTaskId(null);
       }
     };
     window.addEventListener("popstate", handlePopState);
@@ -3523,16 +5675,29 @@ export default function App() {
   }, []);
 
   const visibleStreamState = activeConversationId ? conversationStreams[activeConversationId] : undefined;
-  const activeDashboard = useMemo(
-    () => dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
-    [dashboards, activeDashboardId]
+  const visibleDerivedMetricsForWorkspace = useMemo(
+    () => derivedMetrics.filter(isVisibleDerivedMetricAsset),
+    [derivedMetrics]
   );
+  const visibleDashboards = useMemo(
+    () => dashboards.filter((dashboard) => isDashboardVisibleForCurrentFddScope(dashboard, derivedMetrics)),
+    [dashboards, derivedMetrics]
+  );
+  const activeDashboard = useMemo(
+    () => visibleDashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
+    [visibleDashboards, activeDashboardId]
+  );
+  const activeMetricAsset = useMemo(
+    () => activeMetricId ? derivedMetrics.find((metric) => metric.instance.instanceId === activeMetricId) ?? null : null,
+    [derivedMetrics, activeMetricId]
+  );
+  const activeMetricIdVisible = activeMetricAsset ? isVisibleDerivedMetricAsset(activeMetricAsset) : true;
   const activeMetricGroup = useMemo(() => {
-    if (!activeMetricId) return null;
-    return groupDerivedMetricAssets(derivedMetrics).find((group) =>
+    if (!activeMetricId || !activeMetricIdVisible) return null;
+    return groupDerivedMetricAssets(visibleDerivedMetricsForWorkspace).find((group) =>
       group.metrics.some((metric) => metric.instance.instanceId === activeMetricId)
     ) ?? null;
-  }, [derivedMetrics, activeMetricId]);
+  }, [activeMetricId, activeMetricIdVisible, visibleDerivedMetricsForWorkspace]);
   const activeDashboardPointNames = useMemo(
     () => dashboardPointNames(activeDashboard),
     [activeDashboard]
@@ -3544,6 +5709,38 @@ export default function App() {
     () => mergeMessagesWithStreamingState(messages, visibleStreamState),
     [messages, visibleStreamState]
   );
+
+  useEffect(() => {
+    if (!selectedProject) return;
+    if (activeTab === "dashboards" && activeDashboardId) {
+      const dashboardKnown = dashboards.some((dashboard) => dashboard.id === activeDashboardId);
+      const dashboardVisible = visibleDashboards.some((dashboard) => dashboard.id === activeDashboardId);
+      if (dashboardKnown && !dashboardVisible) {
+        applyWorkspacePath(selectedProject.id, "dashboards");
+      }
+    }
+    if (activeTab === "kpis" && activeMetricId && activeMetricAsset && !isVisibleDerivedMetricAsset(activeMetricAsset)) {
+      applyWorkspacePath(selectedProject.id, "kpis");
+    }
+    if (activeTab === "fdd-tasks" && activeFddTaskId) {
+      const taskKnown = fddTasks.some((task) => task.id === activeFddTaskId);
+      const taskVisible = visibleFddTasks.some((task) => task.id === activeFddTaskId);
+      if (taskKnown && !taskVisible) {
+        applyWorkspacePath(selectedProject.id, "fdd-library");
+      }
+    }
+  }, [
+    activeDashboardId,
+    activeFddTaskId,
+    activeMetricAsset,
+    activeMetricId,
+    activeTab,
+    dashboards,
+    fddTasks,
+    selectedProject?.id ?? null,
+    visibleDashboards,
+    visibleFddTasks
+  ]);
   const visibleStreamingActivity = visibleStreamState?.activities ?? [];
 
   function clearAuth(nextBanner?: BannerState) {
@@ -3561,7 +5758,11 @@ export default function App() {
     setDashboards([]);
     setActiveDashboardId(null);
     setDerivedMetrics([]);
+    setFddLibrary(null);
+    setFddTasks([]);
+    setFddLibraryLoading(false);
     setActiveMetricId(null);
+    setActiveFddTaskId(null);
     setDashboardLiveValues({});
     setDashboardRealtimeAt(null);
     setKbTotalCount(0);
@@ -3591,11 +5792,12 @@ export default function App() {
       getRegistry(currentToken),
       getProjectManagement(currentToken, projectId)
     ]);
-    const [kbResponse, repoResponse, dashboardResponse, derivedMetricResponse] = await Promise.all([
+    const [kbResponse, repoResponse, dashboardResponse, derivedMetricResponse, fddTaskResponse] = await Promise.all([
       getKnowledgeBase(currentToken, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
       getRepository(currentToken, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
       getDashboards(currentToken, projectId).catch(() => null),
-      getDerivedMetrics(currentToken, projectId).catch(() => ({ metrics: [], totalCount: 0, requestId: "" }))
+      getDerivedMetrics(currentToken, projectId).catch(() => ({ metrics: [], totalCount: 0, requestId: "" })),
+      getFddTasks(currentToken, projectId).catch(() => ({ tasks: [], totalCount: 0, requestId: "" }))
     ]);
     setRegistry(registryResponse);
     setManagement(managementResponse);
@@ -3604,17 +5806,18 @@ export default function App() {
       setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
     }
     setDerivedMetrics(derivedMetricResponse.metrics);
+    setFddTasks(fddTaskResponse.tasks);
     const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
     const visibleRepoCount = visibleRepositoryArtifactCount(repoResponse.artifacts);
     setRepositoryItems(visibleRepoItems);
     setKbTotalCount(kbResponse.totalCount);
     setRepoTotalCount(visibleRepoCount);
     setProjectAssetCounts((current) => ({ ...current, [projectId]: kbResponse.totalCount + visibleRepoCount }));
-    return { registryResponse, managementResponse, kbResponse, repoResponse, dashboardResponse, derivedMetricResponse };
+    return { registryResponse, managementResponse, kbResponse, repoResponse, dashboardResponse, derivedMetricResponse, fddTaskResponse };
   }
 
-  function applyWorkspacePath(projectId: string, tab: WorkspaceTab, dashboardId?: string | null, metricInstanceId?: string | null): void {
-    const nextPath = workspacePathFromTab(projectId, tab, dashboardId, metricInstanceId);
+  function applyWorkspacePath(projectId: string, tab: WorkspaceTab, dashboardId?: string | null, metricInstanceId?: string | null, fddTaskId?: string | null): void {
+    const nextPath = workspacePathFromTab(projectId, tab, dashboardId, metricInstanceId, fddTaskId);
     if (window.location.pathname !== nextPath || window.location.search) {
       window.history.pushState({}, "", nextPath);
     }
@@ -3622,6 +5825,7 @@ export default function App() {
     setActiveTab(tab);
     setActiveDashboardId(tab === "dashboards" ? (dashboardId ?? null) : null);
     setActiveMetricId(tab === "kpis" ? (metricInstanceId ?? null) : null);
+    setActiveFddTaskId(tab === "fdd-tasks" ? (fddTaskId ?? null) : null);
     setLocationSearch("");
   }
 
@@ -3656,6 +5860,7 @@ export default function App() {
           setActiveTab(pathState?.tab ?? "chat");
           setActiveDashboardId(pathState?.dashboardId ?? null);
           setActiveMetricId(pathState?.metricInstanceId ?? null);
+          setActiveFddTaskId(pathState?.fddTaskId ?? null);
           setPathnameProjectId(nextProject.id);
           if (sessionResponse.session.projectId !== nextProject.id) {
             const selected = await selectProject(token, nextProject.id);
@@ -3671,11 +5876,12 @@ export default function App() {
             getConversations(token, nextProject.id).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
             getActiveChatStreams(token, nextProject.id).catch(() => ({ projectId: nextProject.id, streams: [], requestId: "" }))
           ]);
-          const [kbResponse, repoResponse, dashboardResponse, derivedMetricResponse] = await Promise.all([
+          const [kbResponse, repoResponse, dashboardResponse, derivedMetricResponse, fddTaskResponse] = await Promise.all([
             getKnowledgeBase(token, nextProject.id).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
             getRepository(token, nextProject.id).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
             getDashboards(token, nextProject.id).catch(() => null),
-            getDerivedMetrics(token, nextProject.id).catch(() => ({ metrics: [], totalCount: 0, requestId: "" }))
+            getDerivedMetrics(token, nextProject.id).catch(() => ({ metrics: [], totalCount: 0, requestId: "" })),
+            getFddTasks(token, nextProject.id).catch(() => ({ tasks: [], totalCount: 0, requestId: "" }))
           ]);
           if (!cancelled) {
             const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
@@ -3697,6 +5903,8 @@ export default function App() {
               setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
             }
             setDerivedMetrics(derivedMetricResponse.metrics);
+            setFddTasks(fddTaskResponse.tasks);
+            setFddLibrary(null);
             setRepositoryItems(visibleRepoItems);
             setKbTotalCount(kbResponse.totalCount);
             setRepoTotalCount(visibleRepoCount);
@@ -3856,12 +6064,13 @@ export default function App() {
       if (inFlight || busy) return;
       inFlight = true;
       try {
-        const [convResponse, kbResponse, repoResponse, dashboardResponse, derivedMetricResponse] = await Promise.all([
+        const [convResponse, kbResponse, repoResponse, dashboardResponse, derivedMetricResponse, fddTaskResponse] = await Promise.all([
           getConversations(token, projectId).catch(() => ({ conversations: [], limit: 50, requestId: "" })),
           getKnowledgeBase(token, projectId).catch(() => ({ documents: [], totalCount: 0, requestId: "" })),
           getRepository(token, projectId).catch(() => ({ artifacts: [], totalCount: 0, requestId: "" })),
           getDashboards(token, projectId).catch(() => null),
-          getDerivedMetrics(token, projectId).catch(() => ({ metrics: [], totalCount: 0, requestId: "" }))
+          getDerivedMetrics(token, projectId).catch(() => ({ metrics: [], totalCount: 0, requestId: "" })),
+          getFddTasks(token, projectId).catch(() => ({ tasks: [], totalCount: 0, requestId: "" }))
         ]);
         if (!active) return;
         const visibleRepoItems = visibleRepositoryItemsFromArtifacts(repoResponse.artifacts);
@@ -3873,6 +6082,7 @@ export default function App() {
           setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
         }
         setDerivedMetrics(derivedMetricResponse.metrics);
+        setFddTasks(fddTaskResponse.tasks);
         setRepositoryItems((current) => {
           const incomingIds = new Set(visibleRepoItems.map((item) => item.id));
           return [...visibleRepoItems, ...current.filter((item) => !incomingIds.has(item.id))];
@@ -4057,6 +6267,16 @@ export default function App() {
           .then((response) => {
             if (!active) return;
             setDerivedMetrics(response.metrics);
+            completeFddDeploymentIfReady(response.metrics);
+          })
+          .catch(() => undefined);
+      }
+      if (data.type === "fdd_tasks_updated") {
+        void getFddTasks(token, selectedProject.id)
+          .then((response) => {
+            if (!active) return;
+            setFddTasks(response.tasks);
+            setFddLibrary((current) => current ? { ...current, tasks: response.tasks } : current);
           })
           .catch(() => undefined);
       }
@@ -4076,6 +6296,65 @@ export default function App() {
     setDashboardRealtimeAt(null);
   }, [activeDashboardPointNamesSignature]);
 
+  useEffect(() => {
+    if (!token || !selectedProject || (activeTab !== "fdd-library" && activeTab !== "fdd-tasks")) return;
+    if (fddLibrary?.projectId === selectedProject.id && fddLibraryHasFullCuratedImport) return;
+    let cancelled = false;
+    const projectId = selectedProject.id;
+    async function hydrateFddLibrary() {
+      setFddLibraryLoading(true);
+      try {
+        const response = await getFddLibrary(token!, projectId);
+        if (cancelled) return;
+        setFddLibrary(response);
+        setFddTasks(response.tasks);
+      } catch (error) {
+        if (cancelled) return;
+        if (isAuthFailure(error)) {
+          clearAuth(errorBanner(error, "Session expired"));
+        } else {
+          setBanner(errorBanner(error, "Could not load FDD Library"));
+        }
+      } finally {
+        if (!cancelled) {
+          setFddLibraryLoading(false);
+        }
+      }
+    }
+    void hydrateFddLibrary();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, fddLibrary?.projectId, fddLibraryHasFullCuratedImport, selectedProject?.id ?? null, token]);
+
+  useEffect(() => {
+    if (!token || !selectedProject || (activeTab !== "fdd-library" && activeTab !== "fdd-tasks") || !fddLibrary?.checksPending) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    const projectId = selectedProject.id;
+    async function pollAutomaticFddChecks() {
+      try {
+        const response = await getFddLibrary(token!, projectId);
+        if (cancelled) return;
+        setFddLibrary(response);
+        setFddTasks(response.tasks);
+        if (response.checksPending) {
+          timer = window.setTimeout(() => void pollAutomaticFddChecks(), 2_000);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        if (isAuthFailure(error)) {
+          clearAuth(errorBanner(error, "Session expired"));
+        }
+      }
+    }
+    timer = window.setTimeout(() => void pollAutomaticFddChecks(), 1_500);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [activeTab, fddLibrary?.checksPending, selectedProject?.id ?? null, token]);
+
   async function handleLogin(email: string, password: string) {
     setBusy(true);
     try {
@@ -4088,6 +6367,9 @@ export default function App() {
       setConversations([]);
       setActiveConversationId(null);
       setDerivedMetrics([]);
+      setFddLibrary(null);
+      setFddTasks([]);
+      setFddLibraryLoading(false);
       setActiveMetricId(null);
       setRegistry(null);
       setManagement(null);
@@ -4132,6 +6414,9 @@ export default function App() {
       setPendingNewChat(false);
       setKnowledgeBaseDocuments(surfaces.kbResponse.documents.map(apiDocumentToUi));
       setRepositoryItems(visibleRepositoryItemsFromArtifacts(surfaces.repoResponse.artifacts));
+      setFddTasks(surfaces.fddTaskResponse.tasks);
+      setFddLibrary(null);
+      setFddLibraryLoading(false);
       setChatProviderDiagnostics(null);
       setChatProviderRequestId(undefined);
       applyWorkspacePath(project.id, "chat");
@@ -4175,6 +6460,9 @@ export default function App() {
       setDashboards([]);
       setActiveDashboardId(null);
       setDerivedMetrics([]);
+      setFddLibrary(null);
+      setFddTasks([]);
+      setFddLibraryLoading(false);
       setActiveMetricId(null);
       setDashboardLiveValues({});
       setDashboardRealtimeAt(null);
@@ -4212,6 +6500,7 @@ export default function App() {
   async function handleOpenDashboard(dashboardId: string) {
     if (!token || !selectedProject) return;
     const cachedDashboard = dashboards.find((dashboard) => dashboard.id === dashboardId);
+    if (cachedDashboard && !isDashboardVisibleForCurrentFddScope(cachedDashboard, derivedMetrics)) return;
     setDashboardLiveValues({});
     setDashboardRealtimeAt(null);
     applyWorkspacePath(selectedProject.id, "dashboards", dashboardId);
@@ -5010,6 +7299,9 @@ export default function App() {
         setDashboards([]);
         setActiveDashboardId(null);
         setDerivedMetrics([]);
+        setFddLibrary(null);
+        setFddTasks([]);
+        setFddLibraryLoading(false);
         setActiveMetricId(null);
         setDashboardLiveValues({});
         setDashboardRealtimeAt(null);
@@ -5084,6 +7376,8 @@ export default function App() {
 
   async function handleOpenMetric(instanceId: string) {
     if (!token || !selectedProject) return;
+    const cachedMetric = derivedMetrics.find((metric) => metric.instance.instanceId === instanceId);
+    if (cachedMetric && !isVisibleDerivedMetricAsset(cachedMetric)) return;
     applyWorkspacePath(selectedProject.id, "kpis", null, instanceId);
     setBanner(null);
     if (derivedMetrics.some((metric) => metric.instance.instanceId === instanceId)) {
@@ -5101,8 +7395,389 @@ export default function App() {
     }
   }
 
+  function handleOpenFddTask(taskId: string) {
+    if (!selectedProject) return;
+    const task = fddTasks.find((entry) => entry.id === taskId);
+    if (task && !isCuratedFddTask(task)) return;
+    applyWorkspacePath(selectedProject.id, "fdd-tasks", null, null, taskId);
+    setBanner(null);
+  }
+
+  async function loadFddLibraryForProject(projectId: string) {
+    if (!token) return;
+    setFddLibraryLoading(true);
+    try {
+      const response = await getFddLibrary(token, projectId);
+      setFddLibrary(response);
+      setFddTasks(response.tasks);
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not load FDD Library"));
+      }
+    } finally {
+      setFddLibraryLoading(false);
+    }
+  }
+
+  function handleOpenFddLibrary() {
+    if (!selectedProject) return;
+    applyWorkspacePath(selectedProject.id, "fdd-library");
+    setBanner(null);
+    if (fddLibrary?.projectId !== selectedProject.id) {
+      void loadFddLibraryForProject(selectedProject.id);
+    }
+  }
+
+  async function handleTestFddAlgorithm(algorithmId: string) {
+    if (!token || !selectedProject) return;
+    setBusy(true);
+    try {
+      const response = await testFddAlgorithm(token, selectedProject.id, algorithmId);
+      setFddLibrary((current) => current ? {
+        ...current,
+        algorithms: current.algorithms.map((algorithm) => algorithm.id === response.algorithm.id ? response.algorithm : algorithm),
+        checks: upsertFddCheck(current.checks, response.check)
+      } : current);
+      setBanner({
+        tone: response.check.status === "cannot_deploy" ? "warning" : "success",
+        title: "FDD check complete",
+        message: `${response.algorithm.name}: ${fddDeployabilityLabel(response.check.status)}.`,
+        requestId: response.requestId
+      });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "FDD check failed"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeployFddAlgorithm(algorithmId: string) {
+    if (!token || !selectedProject) return;
+    const algorithm = fddLibrary?.algorithms.find((entry) => entry.id === algorithmId);
+    updateFddDeploymentProgress({
+      phase: "deploying",
+      algorithmId,
+      label: algorithm?.name ?? "FDD algorithm"
+    });
+    setBanner({
+      tone: "info",
+      title: "Deploying FDD",
+      message: "Creating runtime task, dashboard, and background calculation."
+    });
+    setBusy(true);
+    try {
+      const response = await deployFddAlgorithm(token, selectedProject.id, algorithmId);
+      const entityCount = response.task.deployabilityCheck?.deployableEntities?.filter((entity) => entity.status !== "cannot_deploy").length;
+      updateFddDeploymentProgress({
+        phase: "backfilling",
+        algorithmId,
+        taskId: response.task.id,
+        task: response.task,
+        label: response.task.algorithmSnapshot.name,
+        entityCount,
+        requestId: response.requestId
+      });
+      setFddTasks((current) => upsertProjectFddTask(current, response.task));
+      setFddLibrary((current) => current ? {
+        ...current,
+        tasks: upsertProjectFddTask(current.tasks, response.task)
+      } : current);
+      setBanner({
+        tone: "info",
+        title: "Backfilling FDD history",
+        message: `${response.task.algorithmSnapshot.name}: runtime is deployed. Calculating the last 30 days before results appear.`,
+        requestId: response.requestId
+      });
+      const [metrics, dashboardResponse] = await Promise.all([
+        getDerivedMetrics(token, selectedProject.id).catch(() => null),
+        getDashboards(token, selectedProject.id).catch(() => null)
+      ]);
+      if (metrics) {
+        setDerivedMetrics(metrics.metrics);
+        if (!completeFddDeploymentIfReady(metrics.metrics)) {
+          void pollFddBackfill(selectedProject.id, response.task, response.requestId);
+        }
+      } else {
+        void pollFddBackfill(selectedProject.id, response.task, response.requestId);
+      }
+      if (dashboardResponse) {
+        setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
+      }
+      applyWorkspacePath(selectedProject.id, "fdd-tasks", null, null, response.task.id);
+    } catch (error) {
+      updateFddDeploymentProgress(null);
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "FDD deployment failed"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCreateProjectFdd() {
+    if (!token || !selectedProject) return;
+    const equipmentType: FddEquipmentType = "chiller";
+    const name = window.prompt("FDD algorithm name", "Custom FDD detection")?.trim();
+    if (!name) return;
+    const faultType = window.prompt("Chiller fault type", "Custom chiller fault")?.trim() || "Custom chiller fault";
+    const formula = window.prompt("Formula", "fault = evaluate(required_points, thresholds, window)")?.trim() || "fault = evaluate(required_points, thresholds, window)";
+    const logicSummary = window.prompt("Logic summary", "BuildingGPT-generated FDD logic pending review.")?.trim() || "BuildingGPT-generated FDD logic pending review.";
+    const shareGlobally = window.confirm("Share this FDD spec to the global community library?");
+    const sharingScope: FddSharingScope = shareGlobally ? "global_community" : "project_only";
+    const payload: CreateFddTaskPayload = {
+      name,
+      equipmentType,
+      faultType,
+      method: "rule_based",
+      formula,
+      logicSummary,
+      sharingScope,
+      requiredPoints: defaultFddRequiredPoints(equipmentType)
+    };
+    setBusy(true);
+    try {
+      const response = await createFddTask(token, selectedProject.id, payload);
+      setFddTasks((current) => upsertProjectFddTask(current, response.task));
+      setFddLibrary((current) => {
+        if (!current) return current;
+        const algorithms = response.algorithm
+          ? [response.algorithm, ...current.algorithms.filter((algorithm) => algorithm.id !== response.algorithm!.id)]
+          : current.algorithms;
+        return {
+          ...current,
+          algorithms,
+          tasks: upsertProjectFddTask(current.tasks, response.task),
+          checks: response.task.deployabilityCheck ? upsertFddCheck(current.checks, response.task.deployabilityCheck) : current.checks
+        };
+      });
+      applyWorkspacePath(selectedProject.id, "fdd-tasks", null, null, response.task.id);
+      setBanner({ tone: "success", title: "FDD created", message: response.task.algorithmSnapshot.name, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not create FDD"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTestFddTask(taskId: string) {
+    if (!token || !selectedProject) return;
+    setBusy(true);
+    try {
+      const response = await testFddTask(token, selectedProject.id, taskId);
+      setFddTasks((current) => upsertProjectFddTask(current, response.task));
+      setFddLibrary((current) => current ? {
+        ...current,
+        tasks: upsertProjectFddTask(current.tasks, response.task),
+        checks: response.task.deployabilityCheck ? upsertFddCheck(current.checks, response.task.deployabilityCheck) : current.checks
+      } : current);
+      setBanner({ tone: "success", title: "FDD task checked", message: response.task.algorithmSnapshot.name, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "FDD task check failed"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeployFddTask(taskId: string) {
+    if (!token || !selectedProject) return;
+    const task = fddTasks.find((entry) => entry.id === taskId);
+    updateFddDeploymentProgress({
+      phase: "deploying",
+      algorithmId: task?.globalAlgorithmId,
+      taskId,
+      task,
+      label: task?.algorithmSnapshot.name ?? "FDD task"
+    });
+    setBanner({
+      tone: "info",
+      title: "Deploying FDD",
+      message: "Creating runtime task, dashboard, and background calculation."
+    });
+    setBusy(true);
+    try {
+      const response = await deployFddTask(token, selectedProject.id, taskId);
+      const entityCount = response.task.deployabilityCheck?.deployableEntities?.filter((entity) => entity.status !== "cannot_deploy").length;
+      updateFddDeploymentProgress({
+        phase: "backfilling",
+        algorithmId: response.task.globalAlgorithmId,
+        taskId: response.task.id,
+        task: response.task,
+        label: response.task.algorithmSnapshot.name,
+        entityCount,
+        requestId: response.requestId
+      });
+      setFddTasks((current) => upsertProjectFddTask(current, response.task));
+      setFddLibrary((current) => current ? { ...current, tasks: upsertProjectFddTask(current.tasks, response.task) } : current);
+      setBanner({
+        tone: "info",
+        title: "Backfilling FDD history",
+        message: `${response.task.algorithmSnapshot.name}: runtime is deployed. Calculating the last 30 days before results appear.`,
+        requestId: response.requestId
+      });
+      const [metrics, dashboardResponse] = await Promise.all([
+        getDerivedMetrics(token, selectedProject.id).catch(() => null),
+        getDashboards(token, selectedProject.id).catch(() => null)
+      ]);
+      if (metrics) {
+        setDerivedMetrics(metrics.metrics);
+        if (!completeFddDeploymentIfReady(metrics.metrics)) {
+          void pollFddBackfill(selectedProject.id, response.task, response.requestId);
+        }
+      } else {
+        void pollFddBackfill(selectedProject.id, response.task, response.requestId);
+      }
+      if (dashboardResponse) {
+        setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
+      }
+      applyWorkspacePath(selectedProject.id, "fdd-tasks", null, null, response.task.id);
+    } catch (error) {
+      updateFddDeploymentProgress(null);
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "FDD task deployment failed"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteFddTask(taskId: string) {
+    if (!token || !selectedProject) return;
+    const task = fddTasks.find((entry) => entry.id === taskId);
+    if (!task) return;
+    if (!window.confirm(`Delete "${task.algorithmSnapshot.name}" and its deployed FDD runtime assets?`)) return;
+    setBusy(true);
+    try {
+      const response = await deleteFddTask(token, selectedProject.id, taskId);
+      setFddTasks((current) => current.filter((entry) => entry.id !== response.taskId));
+      setFddLibrary((current) => current ? {
+        ...current,
+        tasks: current.tasks.filter((entry) => entry.id !== response.taskId)
+      } : current);
+      const [metrics, dashboardResponse, taskResponse] = await Promise.all([
+        getDerivedMetrics(token, selectedProject.id).catch(() => null),
+        getDashboards(token, selectedProject.id).catch(() => null),
+        getFddTasks(token, selectedProject.id).catch(() => null)
+      ]);
+      if (metrics) {
+        setDerivedMetrics(metrics.metrics);
+      } else if (response.deletedMetricIds.length > 0) {
+        const deletedMetricIds = new Set(response.deletedMetricIds);
+        setDerivedMetrics((current) => current.filter((metric) => !deletedMetricIds.has(metric.instance.instanceId)));
+      }
+      if (dashboardResponse) {
+        setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
+      } else if (response.deletedDashboardIds.length > 0) {
+        const deletedDashboardIds = new Set(response.deletedDashboardIds);
+        setDashboards((current) => current.filter((dashboard) => !deletedDashboardIds.has(dashboard.id)));
+      }
+      if (taskResponse) {
+        setFddTasks(taskResponse.tasks);
+        setFddLibrary((current) => current ? { ...current, tasks: taskResponse.tasks } : current);
+      }
+      if (activeFddTaskId === taskId) {
+        applyWorkspacePath(selectedProject.id, "fdd-tasks");
+      }
+      if (activeDashboardId && response.deletedDashboardIds.includes(activeDashboardId)) {
+        setActiveDashboardId(null);
+      }
+      setBanner({ tone: "success", title: "FDD deployment deleted", message: task.algorithmSnapshot.name, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not delete FDD deployment"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateFddTaskParameters(taskId: string, parameters: Array<{ key: string; value: FddParameterValue }>) {
+    if (!token || !selectedProject || parameters.length === 0) return;
+    try {
+      const response = await updateFddTaskParameters(token, selectedProject.id, taskId, parameters);
+      setFddTasks((current) => upsertProjectFddTask(current, response.task));
+      setFddLibrary((current) => current ? { ...current, tasks: upsertProjectFddTask(current.tasks, response.task) } : current);
+      setBanner({ tone: "success", title: "FDD parameters saved", message: response.task.algorithmSnapshot.name, requestId: response.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "FDD parameter update failed"));
+      }
+    }
+  }
+
+  async function handleDeleteMetricGroup(instanceIds: string[]) {
+    if (!token || !selectedProject || instanceIds.length === 0) return;
+    const uniqueInstanceIds = Array.from(new Set(instanceIds));
+    const group = activeMetricGroup && activeMetricGroup.metrics.some((metric) => uniqueInstanceIds.includes(metric.instance.instanceId))
+      ? activeMetricGroup
+      : groupDerivedMetricAssets(derivedMetrics).find((candidate) =>
+          candidate.metrics.some((metric) => uniqueInstanceIds.includes(metric.instance.instanceId))
+        ) ?? null;
+    const label = group?.displayName ?? "this KPI";
+    if (!window.confirm(`Delete "${label}" for ${uniqueInstanceIds.length} entities?`)) return;
+    setBusy(true);
+    try {
+      const responses = await Promise.all(uniqueInstanceIds.map((instanceId) =>
+        deleteDerivedMetric(token, selectedProject.id, instanceId)
+      ));
+      const deletedInstanceIds = new Set(responses.map((response) => response.instanceId));
+      const deletedDashboardIds = new Set(responses.flatMap((response) => response.deletedDashboardIds));
+      const [metrics, dashboardResponse] = await Promise.all([
+        getDerivedMetrics(token, selectedProject.id).catch(() => null),
+        getDashboards(token, selectedProject.id).catch(() => null)
+      ]);
+      if (metrics) {
+        setDerivedMetrics(metrics.metrics);
+      } else {
+        setDerivedMetrics((current) => current.filter((metric) => !deletedInstanceIds.has(metric.instance.instanceId)));
+      }
+      if (dashboardResponse) {
+        setDashboards((current) => mergeDashboardList(current, dashboardResponse.dashboards));
+      } else if (deletedDashboardIds.size > 0) {
+        setDashboards((current) => current.filter((dashboard) => !deletedDashboardIds.has(dashboard.id)));
+      }
+      if (activeMetricId && deletedInstanceIds.has(activeMetricId)) {
+        applyWorkspacePath(selectedProject.id, "kpis");
+      }
+      if (activeDashboardId && deletedDashboardIds.has(activeDashboardId)) {
+        setActiveDashboardId(null);
+      }
+      setBanner({ tone: "success", title: "KPI deleted", message: label, requestId: responses[0]?.requestId });
+    } catch (error) {
+      if (isAuthFailure(error)) {
+        clearAuth(errorBanner(error, "Session expired"));
+      } else {
+        setBanner(errorBanner(error, "Could not delete KPI"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleToggleMetricMaterialization(instanceIds: string[], enabled: boolean) {
     if (!token || !selectedProject || instanceIds.length === 0) return;
+    setBanner(null);
     try {
       const responses = await Promise.all(instanceIds.map((instanceId) =>
         updateDerivedMetricMaterialization(token, selectedProject.id, instanceId, { enabled })
@@ -5111,14 +7786,7 @@ export default function App() {
         (next, response) => upsertDerivedMetricAsset(next, response.metric),
         current
       ));
-      setBanner({
-        tone: "success",
-        title: enabled ? "Background Calculation enabled" : "Background Calculation disabled",
-        message: responses.length === 1
-          ? responses[0]!.metric.instance.displayName
-          : `${responses.length} Background Calculation entries updated`,
-        requestId: responses.at(-1)?.requestId
-      });
+      setBanner(null);
     } catch (error) {
       if (isAuthFailure(error)) {
         clearAuth(errorBanner(error, "Session expired"));
@@ -5160,11 +7828,16 @@ export default function App() {
           activeConversationId={activeConversationId}
           kbDocuments={knowledgeBaseDocuments}
           repoItems={repositoryItems}
-          dashboards={dashboards}
+          dashboards={visibleDashboards}
           activeDashboard={activeDashboard}
-          derivedMetrics={derivedMetrics}
+          derivedMetrics={visibleDerivedMetricsForWorkspace}
+          fddLibrary={fddLibrary}
+          fddTasks={visibleFddTasks}
+          fddLibraryLoading={fddLibraryLoading}
+          fddDeploymentProgress={fddDeploymentProgress}
           activeMetricGroup={activeMetricGroup}
-          activeMetricId={activeMetricId}
+          activeMetricId={activeMetricIdVisible ? activeMetricId : null}
+          activeFddTaskId={activeFddTaskId}
           dashboardLiveValues={dashboardLiveValues}
           dashboardRealtimeStale={dashboardRealtimeStale}
           kbTotalCount={kbTotalCount}
@@ -5186,7 +7859,11 @@ export default function App() {
             setDashboards([]);
             setActiveDashboardId(null);
             setDerivedMetrics([]);
+            setFddLibrary(null);
+            setFddTasks([]);
+            setFddLibraryLoading(false);
             setActiveMetricId(null);
+            setActiveFddTaskId(null);
             setDashboardLiveValues({});
             setDashboardRealtimeAt(null);
             storeSession({ token, user, projectId: null });
@@ -5196,6 +7873,15 @@ export default function App() {
           onSelectConversation={(convId) => { void handleSelectConversation(convId); }}
           onOpenDashboard={(dashboardId) => { void handleOpenDashboard(dashboardId); }}
           onOpenMetric={(instanceId) => { void handleOpenMetric(instanceId); }}
+          onOpenFddTask={(taskId) => { handleOpenFddTask(taskId); }}
+          onOpenFddLibrary={handleOpenFddLibrary}
+          onCreateProjectFdd={() => { void handleCreateProjectFdd(); }}
+          onTestFddAlgorithm={(algorithmId) => { void handleTestFddAlgorithm(algorithmId); }}
+          onDeployFddAlgorithm={(algorithmId) => { void handleDeployFddAlgorithm(algorithmId); }}
+          onTestFddTask={(taskId) => { void handleTestFddTask(taskId); }}
+          onDeployFddTask={(taskId) => { void handleDeployFddTask(taskId); }}
+          onUpdateFddTaskParameters={(taskId, parameters) => { void handleUpdateFddTaskParameters(taskId, parameters); }}
+          onDeleteFddTask={(taskId) => { void handleDeleteFddTask(taskId); }}
           onCreateProject={(name) => { void handleCreateProject(name); }}
           onSignOut={() => clearAuth()}
           projectConversationCounts={projectConversationCounts}
@@ -5210,6 +7896,7 @@ export default function App() {
           onRenameDashboard={handleRenameDashboard}
           onDuplicateDashboard={handleDuplicateDashboard}
           onDeleteDashboard={handleDeleteDashboard}
+          onDeleteMetricGroup={handleDeleteMetricGroup}
           onMergeDashboard={handleMergeDashboard}
           onCopyWidgetToDashboard={handleCopyWidgetToDashboard}
           onToggleMetricMaterialization={handleToggleMetricMaterialization}

@@ -7,7 +7,9 @@ export const RUNTIME_SKILL_IDS = [
   "skill_tool_data_bridge",
   "skill_chart_quality",
   "skill_derived_metrics",
-  "skill_dashboard_generation"
+  "skill_fdd_fault_attribution",
+  "skill_dashboard_generation",
+  "skill_fdd_deployability_check"
 ] as const;
 
 export const BUILTIN_SKILL_IDS = [

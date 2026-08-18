@@ -191,7 +191,7 @@ function metadataOverlapCount(
 function buildRetrievalQuery(userMessage: string): string {
   const context = extractQueryContext(userMessage);
   const intentHints: Record<string, string> = {
-    running_status: "chiller running operating status run_status TLKW plant situation",
+    running_status: "chiller running operating status motor power energy evidence cross check plant situation",
     point_query: "point sensor reading value",
     trend: "trend history time range",
     fault: "fault alarm abnormal",
@@ -209,15 +209,19 @@ function buildRetrievalQuery(userMessage: string): string {
 export function extractExactIdentifiers(userMessage: string, entities: string[]): Set<string> {
   const identifiers = new Set<string>();
   const patterns = [
-    /\bWCC[_-]?\{?\d+[_-]?\d*\}?[_-]?TLKW\b/gi,
-    /\bWCC[_-]?\{?\d+[_-]?\d*\}?\b/gi,
-    /\bTLKW\b/gi,
-    /\bRun[_-]?Status\b/gi,
+    /`([^`]{2,100})`/g,
+    /\b[A-Z0-9][A-Z0-9_/-]{2,}\b/gi,
     /\bground_\d+\b/gi
   ];
   for (const pattern of patterns) {
     for (const match of userMessage.matchAll(pattern)) {
-      identifiers.add(match[0]!.toLowerCase());
+      const raw = match[1] ?? match[0];
+      const value = raw.trim();
+      if (!value) continue;
+      const normalized = value.toLowerCase();
+      if (/[0-9_/-]/u.test(value) || /kw|kwh|status|power|energy|flow|temp|cop/iu.test(value) || /^ground_\d+$/iu.test(value)) {
+        identifiers.add(normalized);
+      }
     }
   }
   for (const entity of entities) {

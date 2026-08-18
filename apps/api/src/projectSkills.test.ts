@@ -21,9 +21,14 @@ describe("projectSkills", () => {
     expect(elementHints).toContain("same semantic boundary");
     expect(elementHints).toContain("Derived analytics UI");
     expect(elementHints).toContain("defaultVisible:false");
+    expect(elementHints).toContain("FDD FAULT ATTRIBUTION");
+    expect(elementHints).toContain("fault timestamps");
+    expect(elementHints).toContain("actual input samples");
+    expect(elementHints).toContain("exact point names");
     expect(mortarHints).not.toContain("BMS DATA ROUTING");
     expect(mortarHints).toContain("DERIVED METRICS");
     expect(mortarHints).toContain("DASHBOARD GENERATION");
+    expect(mortarHints).toContain("FDD FAULT ATTRIBUTION");
     expect(mortarHints).toContain("assumptions");
   });
 
@@ -38,6 +43,7 @@ describe("projectSkills", () => {
         "skill_tool_data_bridge",
         "skill_chart_quality",
         "skill_derived_metrics",
+        "skill_fdd_fault_attribution",
         "skill_dashboard_generation"
       ])
     );

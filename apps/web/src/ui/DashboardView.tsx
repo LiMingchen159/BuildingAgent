@@ -1,14 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type RefObject } from "react";
 import { GridLayout, useContainerWidth, type Layout, type LayoutItem } from "react-grid-layout";
 import type UPlot from "uplot";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import "uplot/dist/uPlot.min.css";
 import type { DashboardLayoutItem, DashboardNoteTone, DashboardPointBinding, DashboardRecord, DashboardSection, DashboardVisibility } from "../api";
-import { queryBmsDashboardHistoryBatch, queryBmsDashboardLatestBatch, type BmsCollectorPoint, type BmsCollectorTimeseriesRow, type BmsDashboardHistoryBatchQuery, type BmsDashboardLatestBatchQuery } from "../bmsCollectorClient";
+import { generateFddAttributionAnalysis, queryBmsDashboardHistoryBatch, queryBmsDashboardLatestBatch, type BmsCollectorPoint, type BmsCollectorTimeseriesRow, type BmsDashboardHistoryBatchQuery, type BmsDashboardLatestBatchQuery } from "../bmsCollectorClient";
+import { Markdown } from "./Markdown";
 import { Badge, EmptyState, Surface } from "./primitives";
 
 type DashboardWidget = DashboardRecord["widgets"][number];
+
+const FDD_ANALYSIS_TITLE = "Fault Cause Analysis";
+const FDD_ANALYSIS_RANGE_LABEL = "Last 7 days";
+const FDD_TRENDS_TITLE = "Chiller Trends";
+const FDD_ATTRIBUTION_ANALYSIS_CACHE_PREFIX = "building-agent.fdd-attribution-analysis.v3";
 
 interface DashboardSpecMutation {
   title: string;
@@ -40,18 +46,22 @@ interface DashboardViewProps {
 
 interface ChartSeries {
   label: string;
+  groupLabel?: string;
   pointName: string;
   unit: string;
   color: string;
   role?: string;
   dependencyRole?: string;
   defaultVisible?: boolean;
+  description?: string;
+  fddParameters?: Array<Record<string, unknown>>;
   points: Array<{ ts: string; value: number | null }>;
 }
 
 interface WidgetValue {
   key: string;
   label: string;
+  groupLabel: string;
   unit: string;
   point: BmsCollectorPoint | undefined;
   numeric: number | null;
@@ -95,7 +105,7 @@ interface WidgetRenameEditorState {
   title: string;
 }
 
-type RangeKey = "1h" | "6h" | "24h" | "7d";
+type RangeKey = "1h" | "6h" | "24h" | "7d" | "30d";
 
 const CHART_COLORS = ["#0f766e", "#b45309", "#1d4ed8", "#b91c1c", "#4d7c0f", "#7c3aed"];
 const NOTE_TONE_OPTIONS: Array<{ tone: DashboardNoteTone; label: string }> = [
@@ -122,13 +132,15 @@ const DASHBOARD_HISTORY_CACHE_TTL_MS = 5 * 60_000;
 const DASHBOARD_HISTORY_CACHE_MAX_ENTRIES = 96;
 const DASHBOARD_HISTORY_START_DELAY_MS = 180;
 const DASHBOARD_FALLBACK_VALUES_START_DELAY_MS = 260;
+const FDD_ATTRIBUTION_ALIGNMENT_MINUTES = 30;
 const CHART_BRIDGE_GAP_MAX_NULL_SAMPLES = 4;
 const CHART_BRIDGE_GAP_MAX_SECONDS = 90 * 60;
 const RANGE_OPTIONS: Array<{ key: RangeKey; label: string; hours: number }> = [
   { key: "1h", label: "1h", hours: 1 },
   { key: "6h", label: "6h", hours: 6 },
   { key: "24h", label: "24h", hours: 24 },
-  { key: "7d", label: "7d", hours: 24 * 7 }
+  { key: "7d", label: "7d", hours: 24 * 7 },
+  { key: "30d", label: "30d", hours: 24 * 30 }
 ];
 
 const chartHistoryCache = new Map<string, { savedAt: number; series: ChartSeries[] }>();
@@ -188,7 +200,7 @@ function hktDateParts(value: number): Record<string, string> {
 function formatHktAxisTick(value: number, range: RangeKey): string {
   const parts = hktDateParts(value);
   const time = `${parts.hour ?? "--"}:${parts.minute ?? "--"}`;
-  if (range === "7d") return `${parts.day ?? "--"}/${parts.month ?? "--"}`;
+  if (range === "7d" || range === "30d") return `${parts.day ?? "--"}/${parts.month ?? "--"}`;
   if (range === "24h" && parts.hour === "00" && parts.minute === "00") {
     return `${parts.day ?? "--"}/${parts.month ?? "--"} ${time}`;
   }
@@ -211,16 +223,27 @@ function pointKey(binding: DashboardPointBinding): string {
   return binding.pointName || binding.objectRef || "";
 }
 
+function isFddAttributionWidget(widget: Pick<DashboardWidget, "kind">): boolean {
+  return widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison";
+}
+
 function emptySeriesForBinding(widget: DashboardWidget, binding: DashboardPointBinding, index: number): ChartSeries {
   const pointName = pointKey(binding);
+  const groupLabel = binding.groupId || binding.entityId || undefined;
+  const label = isFddAttributionWidget(widget)
+    ? pointDisplayName(binding)
+    : pointDisplayName(binding);
   return {
-    label: pointDisplayName(binding),
+    label,
+    ...(groupLabel ? { groupLabel } : {}),
     pointName: pointName || `missing-${widget.id}-${index}`,
     unit: binding.unit ?? "",
     color: CHART_COLORS[index % CHART_COLORS.length]!,
     ...(binding.role ? { role: binding.role } : {}),
     ...(binding.dependencyRole ? { dependencyRole: binding.dependencyRole } : {}),
     ...(binding.defaultVisible !== undefined ? { defaultVisible: binding.defaultVisible } : {}),
+    ...(binding.description ? { description: binding.description } : {}),
+    ...(binding.fddParameters ? { fddParameters: binding.fddParameters.map((parameter) => ({ ...parameter })) } : {}),
     points: []
   };
 }
@@ -268,18 +291,63 @@ function pointNumericValue(point: BmsCollectorPoint | undefined): string {
   return raw || "--";
 }
 
-function pointNumericRaw(point: BmsCollectorPoint | undefined): number | null {
-  const numeric = Number(point?.last_value ?? "");
+function statusTextNumericValue(value: unknown): number | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const normalized = raw.toLowerCase().replace(/[_-]+/gu, " ").trim();
+  const statusValueByText: Record<string, number> = {
+    active: 1,
+    enabled: 1,
+    enable: 1,
+    on: 1,
+    open: 1,
+    proven: 1,
+    proof: 1,
+    run: 1,
+    running: 1,
+    true: 1,
+    yes: 1,
+    inactive: 0,
+    disabled: 0,
+    disable: 0,
+    off: 0,
+    closed: 0,
+    false: 0,
+    no: 0,
+    stop: 0,
+    stopped: 0
+  };
+  return statusValueByText[normalized] ?? null;
+}
+
+function numericValueFromUnknown(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const statusValue = statusTextNumericValue(value);
+  if (statusValue !== null) return statusValue;
+  const numeric = Number(value ?? "");
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function pointNumericRaw(point: BmsCollectorPoint | undefined): number | null {
+  return numericValueFromUnknown(point?.last_value);
+}
+
 function normalizeRange(value: string | undefined): RangeKey {
-  if (value === "1h" || value === "6h" || value === "24h" || value === "7d") return value;
+  if (value === "1h" || value === "6h" || value === "24h" || value === "7d" || value === "30d") return value;
   if (value === "12h") return "24h";
   return "24h";
 }
 
+function historyLimitForRange(range: RangeKey): string {
+  if (range === "30d") return "10000";
+  if (range === "7d") return "1200";
+  return "720";
+}
+
 function historyRangeForWidget(widget: DashboardWidget, selectedRange?: RangeKey): RangeKey {
+  if (isFddAttributionWidget(widget)) {
+    return selectedRange ?? "7d";
+  }
   if (widget.kind === "timeseries_chart") {
     return selectedRange ?? normalizeRange(widget.defaultTimeRange);
   }
@@ -292,7 +360,7 @@ function hoursForRange(range: RangeKey): number {
 
 function chartTickIntervalSeconds(range: RangeKey, plotWidth: number): number {
   const spanSeconds = hoursForRange(range) * 60 * 60;
-  const targetTickCount = Math.max(3, Math.min(range === "7d" ? 7 : 6, Math.floor(plotWidth / 135)));
+  const targetTickCount = Math.max(3, Math.min(range === "7d" || range === "30d" ? 7 : 6, Math.floor(plotWidth / 135)));
   const targetInterval = spanSeconds / Math.max(1, targetTickCount - 1);
   const intervals = [
     5 * 60,
@@ -306,7 +374,8 @@ function chartTickIntervalSeconds(range: RangeKey, plotWidth: number): number {
     6 * 60 * 60,
     12 * 60 * 60,
     24 * 60 * 60,
-    2 * 24 * 60 * 60
+    2 * 24 * 60 * 60,
+    7 * 24 * 60 * 60
   ];
   return intervals.find((interval) => interval >= targetInterval) ?? intervals.at(-1)!;
 }
@@ -331,6 +400,8 @@ function chartTimeSplits(range: RangeKey, plotWidth: number): UPlot.Axis.Splits 
 function widgetSubtitle(widget: DashboardWidget, range?: RangeKey): string {
   if (widget.kind === "timeseries_chart") return `${range ?? normalizeRange(widget.defaultTimeRange)} history / HKT`;
   if (widget.kind === "stat_value") return "Latest value / 24h stats";
+  if (widget.kind === "status_grid") return "Entity status overview";
+  if (isFddAttributionWidget(widget)) return `${FDD_ANALYSIS_RANGE_LABEL} / HKT`;
   if (widget.kind === "bar_comparison") return "Latest comparison";
   if (widget.kind === "note") return "Board note";
   return "Live values";
@@ -343,6 +414,8 @@ function sortLayout(layout: DashboardLayoutItem[]): DashboardLayoutItem[] {
 function minSizeForWidget(widget: DashboardWidget): Pick<LayoutItem, "minW" | "minH"> {
   if (widget.kind === "timeseries_chart") return { minW: 4, minH: 4 };
   if (widget.kind === "bar_comparison") return { minW: 4, minH: 3 };
+  if (isFddAttributionWidget(widget)) return { minW: 4, minH: 3 };
+  if (widget.kind === "status_grid") return widget.pointBindings.length <= 1 ? { minW: 1, minH: 1 } : { minW: 4, minH: 2 };
   return { minW: 2, minH: 2 };
 }
 
@@ -353,6 +426,8 @@ function barComparisonHeight(widget: DashboardWidget): number {
 function defaultSizeForWidget(widget: DashboardWidget): Pick<LayoutItem, "w" | "h"> {
   if (widget.kind === "timeseries_chart") return { w: 6, h: 4 };
   if (widget.kind === "bar_comparison") return { w: 6, h: barComparisonHeight(widget) };
+  if (isFddAttributionWidget(widget)) return { w: 6, h: 3 };
+  if (widget.kind === "status_grid") return widget.pointBindings.length <= 1 ? { w: 1, h: 1 } : { w: 6, h: widget.pointBindings.length > 12 ? 3 : 2 };
   if (widget.kind === "live_value_grid") return { w: 3, h: widget.pointBindings.length > 2 ? 3 : 2 };
   if (widget.kind === "note") return { w: 3, h: 2 };
   return { w: 3, h: 2 };
@@ -372,6 +447,18 @@ function fitSizeForWidget(widget: DashboardWidget, current?: LayoutItem): Pick<L
       h: defaults.h
     };
   }
+  if (isFddAttributionWidget(widget)) {
+    return {
+      w: Math.max(defaults.w, current?.w ?? defaults.w),
+      h: defaults.h
+    };
+  }
+  if (widget.kind === "status_grid") {
+    return {
+      w: widget.pointBindings.length <= 1 ? defaults.w : Math.max(defaults.w, current?.w ?? defaults.w),
+      h: defaults.h
+    };
+  }
   if (widget.kind === "live_value_grid") {
     return {
       w: Math.min(6, Math.max(defaults.w, current?.w ?? defaults.w)),
@@ -388,6 +475,20 @@ function dashboardGridColumnsForWidth(width: number, forceCompactLayout: boolean
   if (forceCompactLayout || width < DASHBOARD_MOBILE_WIDTH) return DASHBOARD_MOBILE_GRID_COLUMNS;
   if (width < DASHBOARD_TABLET_WIDTH) return DASHBOARD_TABLET_GRID_COLUMNS;
   return DASHBOARD_GRID_COLUMNS;
+}
+
+function dashboardGridSpanWidth(width: number, columns: number, span: number): number {
+  const safeColumns = Math.max(1, columns);
+  const safeSpan = Math.min(safeColumns, Math.max(1, span));
+  const gap = DASHBOARD_GRID_GAP[0];
+  const columnWidth = (Math.max(0, width) - gap * (safeColumns - 1)) / safeColumns;
+  return Math.max(0, Math.round(columnWidth * safeSpan + gap * (safeSpan - 1)));
+}
+
+function fddAnalysisColumnSpanForWidth(width: number, forceCompactLayout: boolean): number {
+  if (width < DASHBOARD_MOBILE_WIDTH) return DASHBOARD_MOBILE_GRID_COLUMNS;
+  if (forceCompactLayout && width < DASHBOARD_TABLET_WIDTH) return DASHBOARD_MOBILE_GRID_COLUMNS;
+  return DASHBOARD_TABLET_GRID_COLUMNS;
 }
 
 function dashboardLayoutIsCanonical(dashboard: DashboardRecord): boolean {
@@ -421,18 +522,19 @@ function layoutForDashboard(dashboard: DashboardRecord): Layout {
     const source = layoutById.get(widget.id);
     const minSize = minSizeForWidget(widget);
     const defaults = defaultSizeForWidget(widget);
+    const maxW = widget.kind === "status_grid" && widget.pointBindings.length <= 1 ? 1 : DASHBOARD_GRID_COLUMNS;
     const w = Math.min(
-      DASHBOARD_GRID_COLUMNS,
-      Math.max(minSize.minW ?? 1, source?.w ?? defaults.w)
+      maxW,
+      Math.max(minSize.minW ?? 1, widget.kind === "status_grid" && widget.pointBindings.length <= 1 ? defaults.w : source?.w ?? defaults.w)
     );
     const item: LayoutItem = {
       i: widget.id,
-      x: Math.min(Math.max(0, source?.x ?? 0), DASHBOARD_GRID_COLUMNS - w),
+      x: Math.min(Math.max(0, source?.x ?? 0), maxW === 1 ? DASHBOARD_GRID_COLUMNS - w : DASHBOARD_GRID_COLUMNS - w),
       y: source?.y ?? fallbackY++,
       w,
       h: defaults.h,
       ...minSize,
-      maxW: DASHBOARD_GRID_COLUMNS,
+      maxW,
       maxH: defaults.h,
       isBounded: true,
       resizeHandles: ["e"]
@@ -547,19 +649,73 @@ function cloneDashboardWidget(widget: DashboardWidget, existingIds: Set<string>,
 
 function sectionForWidgetKind(widget: DashboardWidget): Pick<DashboardSection, "id" | "title" | "kind"> {
   if (widget.kind === "timeseries_chart") return { id: "trends", title: "Trends", kind: "trends" };
+  if (isFddAttributionWidget(widget)) return { id: "analysis", title: FDD_ANALYSIS_TITLE, kind: "analysis" };
   if (widget.kind === "bar_comparison") return { id: "comparison", title: "Comparison", kind: "comparison" };
   if (widget.kind === "note") return { id: "notes", title: "Notes", kind: "custom" };
   return { id: "overview", title: "Overview", kind: "overview" };
 }
 
+function dashboardSectionDisplayRank(section: DashboardSection): number {
+  const id = section.id.toLowerCase();
+  if (section.kind === "overview" || id === "overview") return 0;
+  if (section.kind === "analysis" || id === "analysis" || id === "attribution") return 1;
+  if (section.kind === "comparison" || id === "comparison") return 2;
+  if (section.kind === "trends" || id === "trends") return 3;
+  if (id === "notes") return 4;
+  return 5;
+}
+
+function sortDashboardSectionsForDisplay(sections: DashboardSection[]): DashboardSection[] {
+  return sections
+    .map((section, index) => ({ section, index }))
+    .sort((left, right) => dashboardSectionDisplayRank(left.section) - dashboardSectionDisplayRank(right.section) || left.index - right.index)
+    .map((entry) => entry.section);
+}
+
 function sectionsForDashboard(dashboard: DashboardRecord): DashboardSection[] {
   const widgetIds = new Set(dashboard.widgets.map((widget) => widget.id));
+  const widgetById = new Map(dashboard.widgets.map((widget) => [widget.id, widget]));
   const usedWidgetIds = new Set<string>();
+  const hasFddAnalysis = dashboard.widgets.some((widget) => isFddAttributionWidget(widget));
   const sourceSections = dashboard.sections?.length
     ? dashboard.sections.map((section) => ({
       ...section,
       widgetIds: section.widgetIds.filter((widgetId) => widgetIds.has(widgetId))
-    })).filter((section) => section.widgetIds.length > 0)
+    })).map((section) => {
+      const id = section.id.toLowerCase();
+      if (hasFddAnalysis && (section.kind === "analysis" || id === "analysis" || id === "attribution")) {
+        return {
+          ...section,
+          id: "analysis",
+          title: FDD_ANALYSIS_TITLE,
+          kind: "analysis" as const,
+          widgetIds: section.widgetIds.filter((widgetId) => {
+            const widget = widgetById.get(widgetId);
+            return widget ? isFddAttributionWidget(widget) : false;
+          })
+        };
+      }
+      if (hasFddAnalysis && (section.kind === "trends" || id === "trends")) {
+        return {
+          ...section,
+          title: FDD_TRENDS_TITLE,
+          collapsed: section.collapsed ?? true,
+          widgetIds: section.widgetIds.filter((widgetId) => {
+            const widget = widgetById.get(widgetId);
+            return widget ? !isFddAttributionWidget(widget) : false;
+          })
+        };
+      }
+      return hasFddAnalysis
+        ? {
+            ...section,
+            widgetIds: section.widgetIds.filter((widgetId) => {
+              const widget = widgetById.get(widgetId);
+              return widget ? !isFddAttributionWidget(widget) : false;
+            })
+          }
+        : section;
+    }).filter((section) => section.widgetIds.length > 0)
     : [];
   const sections = sourceSections.map((section) => {
     for (const widgetId of section.widgetIds) usedWidgetIds.add(widgetId);
@@ -569,14 +725,19 @@ function sectionsForDashboard(dashboard: DashboardRecord): DashboardSection[] {
   for (const widget of dashboard.widgets) {
     if (usedWidgetIds.has(widget.id)) continue;
     const sectionInfo = sectionForWidgetKind(widget);
-    const section = fallback.get(sectionInfo.id) ?? { ...sectionInfo, widgetIds: [] };
+    const section = fallback.get(sectionInfo.id) ?? {
+      ...sectionInfo,
+      ...(hasFddAnalysis && sectionInfo.id === "trends" ? { title: FDD_TRENDS_TITLE, collapsed: true } : {}),
+      widgetIds: []
+    };
     section.widgetIds.push(widget.id);
     fallback.set(sectionInfo.id, section);
   }
-  const orderedFallback = ["overview", "comparison", "trends", "notes"]
+  const orderedFallback = ["overview", "analysis", "comparison", "trends", "notes"]
     .map((id) => fallback.get(id))
     .filter((section): section is DashboardSection => Boolean(section));
-  return [...sections, ...orderedFallback];
+  const combined = [...sections, ...orderedFallback];
+  return hasFddAnalysis ? sortDashboardSectionsForDisplay(combined) : combined;
 }
 
 function sectionSignature(sections: DashboardSection[]): string {
@@ -617,10 +778,17 @@ function nonEmptySections(sections: DashboardSection[], widgets: DashboardWidget
     .filter((section) => section.widgetIds.length > 0);
 }
 
+function directFddAnalysisWidget(section: DashboardSection, widgets: DashboardWidget[]): DashboardWidget | null {
+  const widget = widgets.length === 1 ? widgets[0] : undefined;
+  if (!widget || !isFddAttributionWidget(widget)) return null;
+  return section.kind === "analysis" || section.id.toLowerCase() === "analysis" || section.id.toLowerCase() === "attribution" ? widget : null;
+}
+
 function createLayoutItemForWidget(widget: DashboardWidget, source?: LayoutItem, y = 0): LayoutItem {
   const defaults = defaultSizeForWidget(widget);
   const minSize = minSizeForWidget(widget);
-  const w = Math.min(DASHBOARD_GRID_COLUMNS, Math.max(minSize.minW ?? 1, source?.w ?? defaults.w));
+  const maxW = widget.kind === "status_grid" && widget.pointBindings.length <= 1 ? 1 : DASHBOARD_GRID_COLUMNS;
+  const w = Math.min(maxW, Math.max(minSize.minW ?? 1, widget.kind === "status_grid" && widget.pointBindings.length <= 1 ? defaults.w : source?.w ?? defaults.w));
   return {
     i: widget.id,
     x: Math.min(Math.max(0, source?.x ?? 0), DASHBOARD_GRID_COLUMNS - w),
@@ -628,7 +796,7 @@ function createLayoutItemForWidget(widget: DashboardWidget, source?: LayoutItem,
     w,
     h: defaults.h,
     ...minSize,
-    maxW: DASHBOARD_GRID_COLUMNS,
+    maxW,
     maxH: defaults.h,
     isBounded: true,
     resizeHandles: ["e"]
@@ -643,6 +811,7 @@ function chartWidgetSignature(widget: DashboardWidget): string {
     widget.pointBindings.map((binding) => [
       binding.id ?? "",
       binding.source ?? "",
+      binding.bmsSourceId ?? "",
       binding.pointName ?? "",
       binding.objectRef ?? "",
       binding.metricInstanceId ?? "",
@@ -650,7 +819,9 @@ function chartWidgetSignature(widget: DashboardWidget): string {
       binding.entityId ?? "",
       binding.label ?? "",
       binding.role ?? "",
-      binding.unit ?? ""
+      binding.unit ?? "",
+      binding.description ?? "",
+      JSON.stringify(binding.fddParameters ?? [])
     ].join(",")).join(";")
   ].join(":");
 }
@@ -658,7 +829,7 @@ function chartWidgetSignature(widget: DashboardWidget): string {
 function chartWidgetDataSignature(widget: DashboardWidget): string {
   return [
     widget.id,
-    widget.pointBindings.map((binding, index) => `${index}:${pointKey(binding) || binding.id || ""}:${binding.source ?? ""}`).join(";")
+    widget.pointBindings.map((binding, index) => `${index}:${binding.bmsSourceId ?? ""}:${pointKey(binding) || binding.id || ""}:${binding.source ?? ""}`).join(";")
   ].join(":");
 }
 
@@ -742,8 +913,8 @@ function toChartPoints(rows: BmsCollectorTimeseriesRow[]): Array<{ ts: string; v
   return rows.map((row) => {
     const numeric = typeof row.value_num === "number" && Number.isFinite(row.value_num)
       ? row.value_num
-      : Number(row.value ?? row.value_text ?? "");
-    return { ts: row.ts, value: Number.isFinite(numeric) ? numeric : null };
+      : numericValueFromUnknown(row.value ?? row.value_text ?? "");
+    return { ts: row.ts, value: numeric };
   });
 }
 
@@ -774,6 +945,7 @@ function historyQueryForBinding(
   return {
     key,
     source: "bms",
+    ...(binding.bmsSourceId ? { bms_source_id: binding.bmsSourceId } : {}),
     ...(binding.pointName ? { name: binding.pointName } : {}),
     ...(binding.objectRef ? { object_ref: binding.objectRef } : {}),
     from,
@@ -799,6 +971,7 @@ function latestQueryForBinding(binding: DashboardPointBinding, key: string): Bms
   return {
     key,
     source: "bms",
+    ...(binding.bmsSourceId ? { bms_source_id: binding.bmsSourceId } : {}),
     ...(binding.pointName ? { name: binding.pointName } : {}),
     ...(binding.objectRef ? { object_ref: binding.objectRef } : {})
   };
@@ -815,6 +988,7 @@ function widgetValues(
     return {
       key: key || `binding-${index}`,
       label: pointDisplayName(binding),
+      groupLabel: binding.groupId || binding.entityId || pointDisplayName(binding),
       unit: binding.unit ?? "",
       point,
       numeric: pointNumericRaw(point)
@@ -1380,6 +1554,918 @@ function BarComparisonWidget({ values }: { values: WidgetValue[] }) {
   );
 }
 
+type FddAttributionCategory = "sensor" | "equipment" | "status" | "data" | "fault";
+
+interface FddFaultStats {
+  faultCount: number;
+  normalCount: number;
+  greyCount: number;
+  activeCount: number;
+  totalCount: number;
+  faultRate: number | null;
+  faultTimes: number[];
+  normalTimes: number[];
+}
+
+interface FddAttributionFacts {
+  unit: string;
+  historySamples: number;
+  numericSamples: number;
+  outputFaultSamples: number;
+  outputNormalSamples: number;
+  outputValidSamples: number;
+  outputTotalSamples: number;
+  faultAlignedSamples: number;
+  normalAlignedSamples: number;
+  missingFaultSamples: number;
+  missingFaultFraction: number | null;
+  zeroHistorySamples: number;
+  zeroFaultAlignedSamples: number;
+  zeroHistoryFraction: number | null;
+  zeroFaultAlignedFraction: number | null;
+  min: number | null;
+  max: number | null;
+  faultAverage: number | null;
+  normalAverage: number | null;
+  statusState: string | null;
+  statusFraction: number | null;
+  windowMinutes: number | null;
+}
+
+interface FddAttributionRow {
+  entityLabel: string;
+  contributorLabel: string;
+  pointName: string;
+  windowMinutes: number | null;
+  category: FddAttributionCategory;
+  evidence: string;
+  action: string;
+  basis: "missing" | "zero" | "flatline" | "shift" | "status" | "weak" | "output";
+  score: number;
+  faultCount: number;
+  activeCount: number;
+  totalCount: number;
+  faultRate: number | null;
+  coverage: number | null;
+  facts: FddAttributionFacts;
+}
+
+interface FddAttributionGroup {
+  entityLabel: string;
+  output?: ChartSeries;
+  stats: FddFaultStats;
+  candidateRows: FddAttributionRow[];
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]): number {
+  const avg = average(values);
+  if (avg === null || values.length < 2) return 0;
+  const variance = values.reduce((total, value) => total + ((value - avg) ** 2), 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function roundedFact(value: number | null | undefined, digits = 3): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Number(value.toFixed(digits));
+}
+
+function numericSeriesValues(series: ChartSeries): number[] {
+  return series.points
+    .map((point) => point.value)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+}
+
+function percentageLabel(count: number, total: number): string {
+  if (total <= 0) return "0%";
+  return `${((count / total) * 100).toFixed(0)}%`;
+}
+
+function minMaxLabel(values: number[], unit: string): string {
+  if (values.length === 0) return "no numeric samples";
+  return `min ${formatNumber(Math.min(...values), unit)}, max ${formatNumber(Math.max(...values), unit)}`;
+}
+
+function pointLabelWithDescription(pointName: string, description: string | undefined): string {
+  const trimmedDescription = description?.trim();
+  if (!trimmedDescription) return pointName;
+  if (pointName.toLowerCase().includes(`(${trimmedDescription.toLowerCase()})`)) return pointName;
+  return `${pointName} (${trimmedDescription})`;
+}
+
+function pointReferenceLabel(series: ChartSeries): string {
+  const raw = series.pointName.replace(/^derived:/u, "");
+  if (!raw || raw.startsWith("missing-")) return attributionContributorLabel(series);
+  return pointLabelWithDescription(raw, series.description);
+}
+
+function numericFddParameter(series: ChartSeries | undefined, key: string): number | null {
+  for (const parameter of series?.fddParameters ?? []) {
+    if (parameter.key !== key) continue;
+    const rawValue = parameter.value;
+    const value = typeof rawValue === "number" ? rawValue : typeof rawValue === "string" ? Number(rawValue) : NaN;
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function fddAttributionWindowMinutes(output: ChartSeries | undefined): number {
+  return numericFddParameter(output, "window_minutes") ?? FDD_ATTRIBUTION_ALIGNMENT_MINUTES;
+}
+
+function zeroToleranceForSeries(series: ChartSeries): number {
+  const text = `${series.role ?? ""} ${series.label} ${series.pointName} ${series.unit}`.toLowerCase();
+  if (/\b(flow|gpm|l\/s|m3\/h|kw|power|load|amp|current|ton|rt)\b/u.test(text)) return 0.05;
+  return 0.005;
+}
+
+function nearZeroCount(series: ChartSeries, values: number[]): number {
+  const tolerance = zeroToleranceForSeries(series);
+  return values.filter((value) => Math.abs(value) <= tolerance).length;
+}
+
+function seriesEntityLabel(series: ChartSeries): string {
+  return compactStatusEntityLabel(series.groupLabel || series.label || series.pointName);
+}
+
+function attributionContributorLabel(series: ChartSeries): string {
+  const source = series.label || series.role || series.pointName;
+  return source
+    .replace(/[\\[\]{}"`']/gu, "")
+    .replace(/_/gu, " ")
+    .replace(/\s+/gu, " ")
+    .replace(/\bchw\b/giu, "CHW")
+    .replace(/\bfdd\b/giu, "FDD")
+    .replace(/\bcop\b/giu, "COP")
+    .replace(/\bkw\b/giu, "kW")
+    .trim() || "Input signal";
+}
+
+function attributionCategoryForSeries(series: ChartSeries): FddAttributionCategory {
+  const text = `${series.role ?? ""} ${series.label} ${series.pointName}`.toLowerCase();
+  if (/\b(status|run|running|enable|proof|command|on|off)\b/u.test(text)) return "status";
+  if (/\b(sensor|temperature|temp|flow|pressure|humidity|meter|supply|return)\b/u.test(text)) return "sensor";
+  if (/\b(power|load|valve|damper|fan|pump|coil|chiller|tower|compressor)\b/u.test(text)) return "equipment";
+  return "equipment";
+}
+
+function fddFaultStats(series: ChartSeries | undefined): FddFaultStats {
+  let faultCount = 0;
+  let normalCount = 0;
+  let greyCount = 0;
+  const faultTimes: number[] = [];
+  const normalTimes: number[] = [];
+  for (const point of series?.points ?? []) {
+    const timestamp = Date.parse(point.ts);
+    if (typeof point.value !== "number" || !Number.isFinite(point.value)) {
+      greyCount += 1;
+    } else if (point.value >= 0.5) {
+      faultCount += 1;
+      if (Number.isFinite(timestamp)) faultTimes.push(timestamp);
+    } else {
+      normalCount += 1;
+      if (Number.isFinite(timestamp)) normalTimes.push(timestamp);
+    }
+  }
+  const activeCount = faultCount + normalCount;
+  const totalCount = faultCount + normalCount + greyCount;
+  return {
+    faultCount,
+    normalCount,
+    greyCount,
+    activeCount,
+    totalCount,
+    faultRate: activeCount > 0 ? faultCount / activeCount : null,
+    faultTimes,
+    normalTimes
+  };
+}
+
+function valuesNearTimes(series: ChartSeries, timestamps: number[], toleranceMs = FDD_ATTRIBUTION_ALIGNMENT_MINUTES * 60 * 1000): number[] {
+  if (timestamps.length === 0) return [];
+  const numericPoints = series.points
+    .map((point) => ({ ts: Date.parse(point.ts), value: point.value }))
+    .filter((point): point is { ts: number; value: number } => Number.isFinite(point.ts) && typeof point.value === "number" && Number.isFinite(point.value))
+    .sort((left, right) => left.ts - right.ts);
+  if (numericPoints.length === 0) return [];
+  const values: number[] = [];
+  let pointer = 0;
+  for (const timestamp of [...timestamps].sort((left, right) => left - right)) {
+    while (pointer + 1 < numericPoints.length && Math.abs(numericPoints[pointer + 1]!.ts - timestamp) <= Math.abs(numericPoints[pointer]!.ts - timestamp)) {
+      pointer += 1;
+    }
+    const candidate = numericPoints[pointer];
+    if (candidate && Math.abs(candidate.ts - timestamp) <= toleranceMs) {
+      values.push(candidate.value);
+    }
+  }
+  return values;
+}
+
+function flatlineScore(series: ChartSeries, values: number[]): number {
+  if (values.length < 12) return 0;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min;
+  const avgAbs = average(values.map((value) => Math.abs(value))) ?? 0;
+  const relativeRange = avgAbs > 0 ? range / avgAbs : range;
+  const text = `${series.role ?? ""} ${series.label}`.toLowerCase();
+  const absoluteThreshold = /\b(temp|temperature)\b/u.test(text) ? 0.1 : /\bflow\b/u.test(text) ? 1 : 0.01;
+  if (range <= absoluteThreshold || relativeRange <= 0.005) return 1;
+  if (range <= absoluteThreshold * 3 || relativeRange <= 0.015) return 0.65;
+  return 0;
+}
+
+function shiftScore(faultValues: number[], normalValues: number[]): number {
+  if (faultValues.length < 3 || normalValues.length < 3) return 0;
+  const faultAvg = average(faultValues);
+  const normalAvg = average(normalValues);
+  if (faultAvg === null || normalAvg === null) return 0;
+  const normalStd = standardDeviation(normalValues);
+  const normalRange = Math.max(...normalValues) - Math.min(...normalValues);
+  const denominator = Math.max(normalStd * 2, normalRange * 0.25, Math.abs(normalAvg) * 0.05, 0.1);
+  return clamp01(Math.abs(faultAvg - normalAvg) / denominator);
+}
+
+function statusAssociationScore(values: number[]): { score: number; state: string; fraction: number } {
+  if (values.length === 0) return { score: 0, state: "unknown", fraction: 0 };
+  const onFraction = values.filter((value) => value >= 0.5).length / values.length;
+  const offFraction = 1 - onFraction;
+  if (onFraction >= offFraction) return { score: onFraction >= 0.65 ? onFraction : 0, state: "active", fraction: onFraction };
+  return { score: offFraction >= 0.65 ? offFraction : 0, state: "inactive", fraction: offFraction };
+}
+
+function fddInputAttribution(series: ChartSeries, output: ChartSeries | undefined, stats: FddFaultStats): FddAttributionRow {
+  const contributorLabel = attributionContributorLabel(series);
+  const pointName = pointReferenceLabel(series);
+  const windowMinutes = fddAttributionWindowMinutes(output);
+  const windowMs = windowMinutes * 60 * 1000;
+  const numericValues = numericSeriesValues(series);
+  const coverage = series.points.length > 0 ? numericValues.length / series.points.length : null;
+  const category = attributionCategoryForSeries(series);
+  const faultValues = output ? valuesNearTimes(series, stats.faultTimes, windowMs) : [];
+  const normalValues = output ? valuesNearTimes(series, stats.normalTimes, windowMs) : [];
+  const faultCoverage = stats.faultTimes.length > 0 ? faultValues.length / stats.faultTimes.length : null;
+  const missingScore = faultCoverage === null ? 0 : 1 - faultCoverage;
+  const missingFaultCount = Math.max(0, stats.faultTimes.length - faultValues.length);
+  const zeroAllCount = nearZeroCount(series, numericValues);
+  const zeroFaultCount = nearZeroCount(series, faultValues);
+  const zeroAllFraction = numericValues.length > 0 ? zeroAllCount / numericValues.length : 0;
+  const zeroFaultFraction = faultValues.length > 0 ? zeroFaultCount / faultValues.length : 0;
+  const zeroScore = Math.max(zeroAllFraction >= 0.9 && numericValues.length >= 6 ? zeroAllFraction : 0, zeroFaultFraction >= 0.8 && faultValues.length >= 3 ? zeroFaultFraction : 0);
+  const flatScore = category === "sensor" ? flatlineScore(series, numericValues) : 0;
+  const shiftedScore = shiftScore(faultValues, normalValues);
+  const statusScore = category === "status" ? statusAssociationScore(faultValues) : { score: 0, state: "unknown", fraction: 0 };
+  const strongestScore = Math.max(missingScore * 0.95, zeroScore * 0.94, flatScore * 0.9, shiftedScore * 0.85, statusScore.score * 0.7);
+  const faultWeight = stats.faultRate === null ? 0 : 0.55 + (stats.faultRate * 0.45);
+  const score = stats.faultCount > 0 ? clamp01(strongestScore * faultWeight) : 0;
+  const faultAvg = average(faultValues);
+  const normalAvg = average(normalValues);
+  let evidence = "The FDD output did not report fault samples in the last 7 days.";
+  let action = `No point-level check is required for ${contributorLabel} unless new fault samples appear.`;
+  let basis: FddAttributionRow["basis"] = "output";
+  let resolvedCategory = category;
+  if (stats.activeCount === 0) {
+    evidence = "No usable FDD output samples were available for the last 7 days.";
+    action = `Verify the FDD output binding for ${seriesEntityLabel(series)} before interpreting ${contributorLabel}.`;
+    basis = "output";
+    resolvedCategory = "data";
+  } else if (stats.faultCount > 0 && missingScore >= 0.5) {
+    evidence = `${missingFaultCount}/${stats.faultTimes.length} fault timestamps have no ${pointName} sample within the configured ${windowMinutes}-minute FDD window; overall history coverage is ${percentageLabel(numericValues.length, series.points.length)} (${numericValues.length}/${series.points.length}).`;
+    action = `Check ${pointName} for ${seriesEntityLabel(series)} in the BMS trend and local controller. The point has no usable readings near the fault times, so first confirm it is being recorded and belongs to this chiller; then rerun the FDD check.`;
+    basis = "missing";
+    resolvedCategory = "data";
+  } else if (stats.faultCount > 0 && zeroScore >= 0.65) {
+    const zeroScope = zeroAllFraction >= zeroFaultFraction
+      ? `${zeroAllCount}/${numericValues.length} history samples`
+      : `${zeroFaultCount}/${faultValues.length} fault-aligned samples`;
+    evidence = `${contributorLabel} is at or near 0 in ${zeroScope} (${minMaxLabel(numericValues, series.unit)}), which is not a credible operating trend for this input when the FDD is active.`;
+    action = `Inspect ${pointName} for ${seriesEntityLabel(series)}. It is reading 0 while the FDD is active; confirm the sensor or calculated point is not disabled, forced to zero, or assigned to the wrong chiller point.`;
+    basis = "zero";
+    resolvedCategory = "data";
+  } else if (stats.faultCount > 0 && flatScore >= 0.65) {
+    evidence = `${contributorLabel} barely moves across ${numericValues.length} history samples (${minMaxLabel(numericValues, series.unit)}), so the fault is likely being driven by a frozen or invalid input trend.`;
+    action = `Open the trend for ${pointName} at the source controller for ${seriesEntityLabel(series)}. If the value is frozen there too, check the sensor, calculated point, or controller update.`;
+    basis = "flatline";
+    resolvedCategory = "data";
+  } else if (stats.faultCount > 0 && shiftedScore >= 0.45 && faultAvg !== null && normalAvg !== null) {
+    evidence = `During fault samples, ${contributorLabel} averages ${formatNumber(faultAvg, series.unit)} versus ${formatNumber(normalAvg, series.unit)} during normal samples, a meaningful shift based on ${faultValues.length} fault-aligned and ${normalValues.length} normal-aligned readings.`;
+    action = `Check ${pointName} on ${seriesEntityLabel(series)} against the chiller trend; the fault-period value separates from normal operation enough to explain the FDD trigger.`;
+    basis = "shift";
+  } else if (stats.faultCount > 0 && statusScore.score >= 0.45) {
+    evidence = `${contributorLabel} is ${statusScore.state === "active" ? "on/active" : "off/inactive"} in ${percentageLabel(Math.round(statusScore.fraction * faultValues.length), faultValues.length)} of fault-aligned samples.`;
+    action = `Check ${pointName} for ${seriesEntityLabel(series)} against the local controller. Confirm whether active means the expected field condition, such as flow proven, pump on, or chiller running.`;
+    basis = "status";
+  } else if (stats.faultCount > 0) {
+    evidence = `${contributorLabel} is the strongest bound input by the available data, but its fault-vs-normal separation is weak (${faultValues.length} fault-aligned samples, ${normalValues.length} normal-aligned samples).`;
+    action = `Do not call a single root cause yet. Collect more history for ${pointName}, or ask an operator to confirm the field condition on ${seriesEntityLabel(series)}.`;
+    basis = "weak";
+  }
+  const facts: FddAttributionFacts = {
+    unit: series.unit,
+    historySamples: series.points.length,
+    numericSamples: numericValues.length,
+    outputFaultSamples: stats.faultCount,
+    outputNormalSamples: stats.normalCount,
+    outputValidSamples: stats.activeCount,
+    outputTotalSamples: stats.totalCount,
+    faultAlignedSamples: faultValues.length,
+    normalAlignedSamples: normalValues.length,
+    missingFaultSamples: missingFaultCount,
+    missingFaultFraction: stats.faultTimes.length > 0 ? roundedFact(missingFaultCount / stats.faultTimes.length) : null,
+    zeroHistorySamples: zeroAllCount,
+    zeroFaultAlignedSamples: zeroFaultCount,
+    zeroHistoryFraction: numericValues.length > 0 ? roundedFact(zeroAllFraction) : null,
+    zeroFaultAlignedFraction: faultValues.length > 0 ? roundedFact(zeroFaultFraction) : null,
+    min: numericValues.length > 0 ? roundedFact(Math.min(...numericValues)) : null,
+    max: numericValues.length > 0 ? roundedFact(Math.max(...numericValues)) : null,
+    faultAverage: roundedFact(faultAvg),
+    normalAverage: roundedFact(normalAvg),
+    statusState: category === "status" ? statusScore.state : null,
+    statusFraction: category === "status" ? roundedFact(statusScore.fraction) : null,
+    windowMinutes
+  };
+
+  return {
+    entityLabel: seriesEntityLabel(series),
+    contributorLabel,
+    pointName,
+    windowMinutes,
+    category: resolvedCategory,
+    evidence,
+    action,
+    basis,
+    score,
+    faultCount: stats.faultCount,
+    activeCount: stats.activeCount,
+    totalCount: stats.totalCount,
+    faultRate: stats.faultRate,
+    coverage,
+    facts
+  };
+}
+
+function outputOnlyAttribution(series: ChartSeries | undefined, entityLabel: string, stats: FddFaultStats): FddAttributionRow {
+  const numericValues = series ? numericSeriesValues(series) : [];
+  return {
+    entityLabel,
+    contributorLabel: series ? attributionContributorLabel(series) : "FDD output",
+    pointName: series ? pointReferenceLabel(series) : "FDD output",
+    windowMinutes: series ? fddAttributionWindowMinutes(series) : null,
+    category: stats.activeCount === 0 ? "data" : "fault",
+    evidence: stats.activeCount === 0
+      ? "No usable FDD output samples were available for the last 7 days."
+      : stats.faultCount > 0
+        ? "The FDD output reported a fault, but no input dependencies are bound, so the specific sensor or equipment input cannot be attributed."
+        : "The FDD output did not report fault samples in the last 7 days.",
+    action: stats.faultCount > 0
+      ? `Bind the FDD input dependencies for ${entityLabel}; the output alone cannot identify whether the cause is sensor data, flow, power, or equipment state.`
+      : `No point-level check is required for ${entityLabel} unless new fault samples appear.`,
+    basis: "output",
+    score: stats.faultRate ?? 0,
+    faultCount: stats.faultCount,
+    activeCount: stats.activeCount,
+    totalCount: stats.totalCount,
+    faultRate: stats.faultRate,
+    coverage: stats.totalCount > 0 ? stats.activeCount / stats.totalCount : null,
+    facts: {
+      unit: series?.unit ?? "boolean",
+      historySamples: series?.points.length ?? stats.totalCount,
+      numericSamples: numericValues.length,
+      outputFaultSamples: stats.faultCount,
+      outputNormalSamples: stats.normalCount,
+      outputValidSamples: stats.activeCount,
+      outputTotalSamples: stats.totalCount,
+      faultAlignedSamples: 0,
+      normalAlignedSamples: 0,
+      missingFaultSamples: 0,
+      missingFaultFraction: null,
+      zeroHistorySamples: 0,
+      zeroFaultAlignedSamples: 0,
+      zeroHistoryFraction: null,
+      zeroFaultAlignedFraction: null,
+      min: numericValues.length > 0 ? roundedFact(Math.min(...numericValues)) : null,
+      max: numericValues.length > 0 ? roundedFact(Math.max(...numericValues)) : null,
+      faultAverage: null,
+      normalAverage: null,
+      statusState: null,
+      statusFraction: null,
+      windowMinutes: series ? fddAttributionWindowMinutes(series) : null
+    }
+  };
+}
+
+function fddAttributionGroups(series: ChartSeries[]): FddAttributionGroup[] {
+  const groups = new Map<string, ChartSeries[]>();
+  for (const entry of series) {
+    const entity = seriesEntityLabel(entry);
+    groups.set(entity, [...(groups.get(entity) ?? []), entry]);
+  }
+
+  return [...groups.entries()].map(([entityLabel, entries]) => {
+    const outputs = entries.filter((entry) => entry.dependencyRole !== "input");
+    const output = outputs
+      .map((entry) => ({ entry, stats: fddFaultStats(entry) }))
+      .sort((left, right) => right.stats.faultCount - left.stats.faultCount || right.stats.activeCount - left.stats.activeCount)[0];
+    const stats = output?.stats ?? fddFaultStats(undefined);
+    const inputRows = entries
+      .filter((entry) => entry.dependencyRole === "input")
+      .map((entry) => fddInputAttribution(entry, output?.entry, stats))
+      .sort((left, right) => right.score - left.score || left.contributorLabel.localeCompare(right.contributorLabel, undefined, { numeric: true, sensitivity: "base" }));
+    return {
+      entityLabel,
+      ...(output?.entry ? { output: output.entry } : {}),
+      stats,
+      candidateRows: inputRows.length > 0 ? inputRows : [outputOnlyAttribution(output?.entry, entityLabel, stats)]
+    };
+  }).sort((left, right) => {
+    const leftTop = left.candidateRows[0];
+    const rightTop = right.candidateRows[0];
+    return (rightTop?.score ?? 0) - (leftTop?.score ?? 0)
+      || (right.stats.faultRate ?? -1) - (left.stats.faultRate ?? -1)
+      || left.entityLabel.localeCompare(right.entityLabel, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
+function fddAttributionRowsFromGroups(groups: FddAttributionGroup[]): FddAttributionRow[] {
+  return groups.map((group) => group.candidateRows[0]).filter((row): row is FddAttributionRow => Boolean(row)).sort((left, right) => {
+    if (right.score !== left.score) return right.score - left.score;
+    return (right.faultRate ?? -1) - (left.faultRate ?? -1) || left.entityLabel.localeCompare(right.entityLabel, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
+function fddAttributionRows(series: ChartSeries[]): FddAttributionRow[] {
+  return fddAttributionRowsFromGroups(fddAttributionGroups(series));
+}
+
+function fddParametersForGeneration(series: ChartSeries[]): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const parameters: Array<Record<string, unknown>> = [];
+  for (const entry of series) {
+    for (const parameter of entry.fddParameters ?? []) {
+      const key = typeof parameter.key === "string" ? parameter.key : "parameter";
+      const signature = `${key}:${JSON.stringify(parameter.value ?? null)}`;
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      parameters.push({
+        key,
+        value: parameter.value ?? null,
+        source: typeof parameter.source === "string" ? parameter.source : "dashboard_binding",
+        ...(typeof parameter.description === "string" ? { description: parameter.description } : {})
+      });
+      if (parameters.length >= 12) return parameters;
+    }
+  }
+  return parameters;
+}
+
+function buildFddAttributionGenerationSummary(params: {
+  groups: FddAttributionGroup[];
+  series: ChartSeries[];
+  inputCount: number;
+  activeTotal: number;
+  faultTotal: number;
+  weightedFaultRate: number | null;
+  windowMinutes: number;
+}): Record<string, unknown> | null {
+  const faultGroups = params.groups.filter((group) => group.stats.faultCount > 0);
+  const analyzedEquipmentCount = params.groups.filter((group) => group.stats.activeCount > 0).length || params.groups.length;
+  if (faultGroups.length === 0) return null;
+  return {
+    rangeLabel: FDD_ANALYSIS_RANGE_LABEL,
+    fddWindowMinutes: params.windowMinutes,
+    fddParameters: fddParametersForGeneration(params.series),
+    outputSummary: {
+      analyzedEquipmentCount,
+      faultyEquipmentCount: faultGroups.length,
+      faultFreeEquipmentCount: Math.max(0, analyzedEquipmentCount - faultGroups.length),
+      validOutputSamples: params.activeTotal,
+      faultOutputSamples: params.faultTotal,
+      overallFaultRate: roundedFact(params.weightedFaultRate),
+      boundInputCount: params.inputCount
+    },
+    faultEntities: faultGroups.slice(0, 8).map((group) => ({
+      equipment: group.entityLabel,
+      outputPoint: group.output ? pointReferenceLabel(group.output) : "FDD output",
+      outputFaultSamples: group.stats.faultCount,
+      outputNormalSamples: group.stats.normalCount,
+      outputValidSamples: group.stats.activeCount,
+      outputTotalSamples: group.stats.totalCount,
+      outputFaultRate: roundedFact(group.stats.faultRate),
+      candidateInputs: group.candidateRows.slice(0, 4).map((row) => ({
+        signal: row.contributorLabel,
+        point: row.pointName,
+        signalType: fddCategoryLabel(row.category),
+        computedBasis: row.basis,
+        confidenceScore: roundedFact(row.score),
+        inputCoverage: roundedFact(row.coverage),
+        facts: row.facts
+      }))
+    }))
+  };
+}
+
+function fddAttributionGenerationKey(summary: Record<string, unknown> | null): string {
+  return summary ? JSON.stringify(summary) : "";
+}
+
+function fddAttributionLocalDayKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function fddAttributionCacheHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function fddAttributionCachePart(value: string): string {
+  return value.replace(/[^a-z0-9_-]+/giu, "_").replace(/^_+|_+$/gu, "").slice(0, 80) || "unknown";
+}
+
+function fddAttributionDailyCacheKey(projectId: string, widgetId: string, series: ChartSeries[]): string {
+  const scope = series.map((entry) => ({
+    pointName: entry.pointName,
+    label: entry.label,
+    role: entry.role ?? "",
+    dependencyRole: entry.dependencyRole ?? "",
+    description: entry.description ?? "",
+    fddParameters: entry.fddParameters ?? []
+  }));
+  return [
+    FDD_ATTRIBUTION_ANALYSIS_CACHE_PREFIX,
+    fddAttributionCachePart(projectId),
+    fddAttributionCachePart(widgetId),
+    fddAttributionLocalDayKey(),
+    fddAttributionCacheHash(JSON.stringify(scope))
+  ].join(":");
+}
+
+function readFddAttributionAnalysisCache(cacheKey: string): string | null {
+  try {
+    const raw = window.localStorage.getItem(cacheKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { content?: unknown };
+    const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
+    return content && isUsableGeneratedFddAnalysis(content) ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeFddAttributionAnalysisCache(cacheKey: string, content: string): void {
+  try {
+    window.localStorage.setItem(cacheKey, JSON.stringify({
+      content,
+      generatedAt: new Date().toISOString()
+    }));
+  } catch {
+    // Storage can be unavailable in private browsing or quota-limited sessions.
+  }
+}
+
+function isUsableGeneratedFddAnalysis(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return content.length >= 120 && normalized.includes("overall summary") && normalized.includes("likely cause") && normalized.includes("data-based next check");
+}
+
+function fddGenerationErrorText(response: { error?: string; requestId: string; diagnostic?: { code: string; status?: number; responseDetail?: string } }): string {
+  const diagnosticParts = [
+    response.diagnostic?.code,
+    response.diagnostic?.status === undefined ? null : `status ${response.diagnostic.status}`,
+    response.diagnostic?.responseDetail
+  ].filter((part): part is string => Boolean(part));
+  const diagnosticText = diagnosticParts.length > 0 ? `: ${diagnosticParts.join(" · ")}` : "";
+  return `${response.error ?? "BuildingGPT did not return an analysis."}${diagnosticText} (request ${response.requestId})`;
+}
+
+function fddOverallSummaryText(groups: FddAttributionGroup[], rows: FddAttributionRow[], activeTotal: number, faultTotal: number, weightedFaultRate: number | null): string | null {
+  const analyzedEquipmentCount = groups.filter((group) => group.stats.activeCount > 0).length || groups.length;
+  if (analyzedEquipmentCount === 0 || activeTotal === 0) return null;
+  const faultEquipmentCount = groups.filter((group) => group.stats.faultCount > 0).length;
+  const faultRate = weightedFaultRate === null ? `${((faultTotal / activeTotal) * 100).toFixed(1)}%` : `${(weightedFaultRate * 100).toFixed(1)}%`;
+  const strongest = rows.find((row) => row.faultCount > 0);
+  const strongestText = strongest
+    ? ` The strongest evidence is on ${strongest.entityLabel}, driven by ${strongest.pointName}.`
+    : " No equipment has fault samples in the current 7-day evidence packet.";
+  return `Over the last 7 days, ${faultEquipmentCount} of ${analyzedEquipmentCount} analyzed chillers showed fault samples; ${faultTotal}/${activeTotal} valid FDD output samples were faults (${faultRate}).${strongestText}`;
+}
+
+function fddCategoryLabel(category: FddAttributionCategory): string {
+  if (category === "sensor") return "sensor";
+  if (category === "equipment") return "equipment";
+  if (category === "status") return "status point";
+  if (category === "data") return "data quality";
+  return "fault output";
+}
+
+function FddAnalysisHighlightedCopy({
+  rows,
+  inputCount,
+  loading,
+  analysisText,
+  generationLoading,
+  overallSummaryText,
+  generationError
+}: {
+  rows: FddAttributionRow[];
+  inputCount: number;
+  loading: boolean;
+  analysisText?: string | undefined;
+  generationLoading?: boolean | undefined;
+  overallSummaryText?: string | null | undefined;
+  generationError?: string | null | undefined;
+}) {
+  const trimmedAnalysisText = analysisText?.trim();
+  if (trimmedAnalysisText) {
+    const needsOverallSummary = Boolean(overallSummaryText && !/overall\s+summary\s*:/iu.test(trimmedAnalysisText));
+    return (
+      <>
+        {needsOverallSummary ? (
+          <p className="dashboard-fdd-analysis-overall">
+            <strong>Overall summary:</strong> {overallSummaryText}
+          </p>
+        ) : null}
+        <div className="dashboard-fdd-analysis-markdown">
+          <Markdown source={trimmedAnalysisText} />
+        </div>
+      </>
+    );
+  }
+  if (generationLoading && rows.some((row) => row.faultCount > 0)) {
+    return (
+      <p>
+        BuildingGPT is reviewing the fault samples, FDD window, and related input signals for the last 7 days.
+      </p>
+    );
+  }
+  if (rows.length === 0) {
+    return (
+      <p>
+        {loading
+          ? "Reading the last 7 days of FDD output and input histories. The fault cause analysis will update when the data is ready."
+          : "No FDD history is available for the last 7 days. Confirm the rule is deployed and producing samples."}
+      </p>
+    );
+  }
+  const activeTotal = rows.reduce((total, row) => total + row.activeCount, 0);
+  const faultTotal = rows.reduce((total, row) => total + row.faultCount, 0);
+  const faultRows = rows.filter((row) => row.faultCount > 0);
+  if (activeTotal === 0) {
+    return (
+      <p>
+        No usable FDD output samples were found in the last 7 days. <strong>{inputCount}</strong> input points are bound, but there is not enough output evidence to identify a specific sensor or equipment cause.
+      </p>
+    );
+  }
+  if (faultRows.length === 0) {
+    return (
+      <p>
+        The last 7 days include <strong>{activeTotal}</strong> valid FDD samples and <mark className="dashboard-fdd-analysis-highlight is-normal">no detected fault samples</mark>. <strong>{inputCount}</strong> input points are bound; no point-level corrective check is indicated by the current data.
+      </p>
+    );
+  }
+
+  const primary = faultRows[0]!;
+  const faultRate = ((faultTotal / activeTotal) * 100).toFixed(1);
+  if (generationError) {
+    return (
+      <p>
+        <strong>BuildingGPT analysis is unavailable:</strong> {generationError} The current evidence packet includes <strong>{faultRows.length}</strong> chiller{faultRows.length === 1 ? "" : "s"} with fault samples and <strong>{faultTotal}/{activeTotal}</strong> valid samples in fault state (<strong>{faultRate}%</strong>); the strongest local evidence is on <strong>{primary.entityLabel}</strong>. Click <strong>Refresh</strong> to try again.
+      </p>
+    );
+  }
+  return (
+    <p>
+      BuildingGPT has not produced the written fault-cause analysis yet. The current evidence packet includes <strong>{faultRows.length}</strong> chiller{faultRows.length === 1 ? "" : "s"} with fault samples and <strong>{faultTotal}/{activeTotal}</strong> valid samples in fault state (<strong>{faultRate}%</strong>); the strongest local evidence is on <strong>{primary.entityLabel}</strong>. Click <strong>Refresh</strong> to request the BuildingGPT analysis again.
+    </p>
+  );
+}
+
+function FddAttributionAnalysisWidget({
+  token,
+  projectId,
+  widgetId,
+  series,
+  loading,
+  onRefresh,
+  analysisText
+}: {
+  token: string;
+  projectId: string;
+  widgetId: string;
+  series: ChartSeries[];
+  loading: boolean;
+  onRefresh: () => void;
+  analysisText?: string | undefined;
+}) {
+  const groups = useMemo(() => fddAttributionGroups(series), [series]);
+  const rows = useMemo(() => fddAttributionRowsFromGroups(groups), [groups]);
+  const activeTotal = rows.reduce((total, row) => total + row.activeCount, 0);
+  const faultTotal = rows.reduce((total, row) => total + row.faultCount, 0);
+  const weightedFaultRate = activeTotal > 0 ? faultTotal / activeTotal : null;
+  const inputCount = series.filter((entry) => entry.dependencyRole === "input").length;
+  const outputSeries = series.find((entry) => entry.dependencyRole !== "input");
+  const windowMinutes = fddAttributionWindowMinutes(outputSeries);
+  const [generationNonce, setGenerationNonce] = useState(0);
+  const [generatedAnalysis, setGeneratedAnalysis] = useState<string | null>(null);
+  const [generationLoading, setGenerationLoading] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const generationSummary = useMemo(() => buildFddAttributionGenerationSummary({
+    groups,
+    series,
+    inputCount,
+    activeTotal,
+    faultTotal,
+    weightedFaultRate,
+    windowMinutes
+  }), [activeTotal, faultTotal, groups, inputCount, series, weightedFaultRate, windowMinutes]);
+  const generationKey = useMemo(() => fddAttributionGenerationKey(generationSummary), [generationSummary]);
+  const dailyCacheKey = useMemo(() => fddAttributionDailyCacheKey(projectId, widgetId, series), [projectId, series, widgetId]);
+  const overallSummaryText = useMemo(
+    () => fddOverallSummaryText(groups, rows, activeTotal, faultTotal, weightedFaultRate),
+    [activeTotal, faultTotal, groups, rows, weightedFaultRate]
+  );
+  const displayedAnalysisText = generatedAnalysis ?? (generationLoading ? undefined : analysisText);
+
+  useEffect(() => {
+    if (!generationSummary || !generationKey) {
+      setGeneratedAnalysis(null);
+      setGenerationLoading(false);
+      setGenerationError(null);
+      return undefined;
+    }
+    const forceGeneration = generationNonce > 0;
+    const cachedAnalysis = forceGeneration ? null : readFddAttributionAnalysisCache(dailyCacheKey);
+    if (cachedAnalysis) {
+      setGeneratedAnalysis(cachedAnalysis);
+      setGenerationLoading(false);
+      setGenerationError(null);
+      return undefined;
+    }
+    let active = true;
+    setGenerationLoading(true);
+    setGenerationError(null);
+    void generateFddAttributionAnalysis(
+      token,
+      projectId,
+      {
+        widgetTitle: FDD_ANALYSIS_TITLE,
+        rangeLabel: FDD_ANALYSIS_RANGE_LABEL,
+        summary: generationSummary
+      }
+    ).then((response) => {
+      if (!active) return;
+      if (!response.ok) {
+        setGenerationError(fddGenerationErrorText(response));
+        return;
+      }
+      const content = response.ok ? response.content?.trim() : "";
+      if (content && isUsableGeneratedFddAnalysis(content)) {
+        setGeneratedAnalysis(content);
+        writeFddAttributionAnalysisCache(dailyCacheKey, content);
+        setGenerationError(null);
+      } else {
+        setGenerationError(`BuildingGPT returned an incomplete analysis (request ${response.requestId}).`);
+      }
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (active) {
+        setGenerationError(error instanceof Error ? error.message : "BuildingGPT fault analysis request failed.");
+      }
+    }).finally(() => {
+      if (active) {
+        setGenerationLoading(false);
+        if (forceGeneration) setGenerationNonce(0);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [dailyCacheKey, generationKey, generationNonce, generationSummary, projectId, token]);
+
+  function handleRefresh() {
+    setGeneratedAnalysis(null);
+    setGenerationNonce((current) => current + 1);
+    onRefresh();
+  }
+
+  return (
+    <div className="dashboard-fdd-analysis-widget">
+      <div className="dashboard-widget-toolbar dashboard-drag-cancel">
+        <span className="dashboard-fdd-analysis-range">{FDD_ANALYSIS_RANGE_LABEL}</span>
+        <button className="dashboard-widget-icon-button" onClick={handleRefresh} title="Refresh fault cause analysis" type="button">
+          Refresh
+        </button>
+      </div>
+      <div className="dashboard-fdd-analysis-meta" aria-label="Fault cause analysis summary">
+        <span>
+          <small>Fault rate</small>
+          <strong>{weightedFaultRate === null ? "--" : `${(weightedFaultRate * 100).toFixed(1)}%`}</strong>
+        </span>
+        <span>
+          <small>Inputs</small>
+          <strong>{inputCount}</strong>
+        </span>
+        <span>
+          <small>Valid samples</small>
+          <strong>{activeTotal}</strong>
+        </span>
+        <span>
+          <small>Window</small>
+          <strong>{windowMinutes} min</strong>
+        </span>
+      </div>
+      <div className="dashboard-fdd-analysis-copy">
+        <FddAnalysisHighlightedCopy
+          rows={rows}
+          inputCount={inputCount}
+          loading={loading}
+          analysisText={displayedAnalysisText}
+          generationLoading={generationLoading}
+          overallSummaryText={overallSummaryText}
+          generationError={generationError}
+        />
+      </div>
+      {loading || generationLoading ? <span className="dashboard-chart-refreshing">Updating</span> : null}
+    </div>
+  );
+}
+
+type StatusGridState = "fault" | "normal" | "inactive";
+
+function compactStatusEntityLabel(value: string): string {
+  return value
+    .replace(/^WCC_(\d+)$/iu, "WCC-$1")
+    .replace(/_/gu, "-")
+    .replace(/\b0+(\d+)\b/gu, "$1");
+}
+
+function statusGridState(entry: WidgetValue): StatusGridState {
+  const status = entry.point?.status?.toLowerCase() ?? "";
+  const quality = entry.point?.quality?.toLowerCase() ?? "";
+  const raw = String(entry.point?.last_value ?? "").toLowerCase();
+  if (status === "fault" || raw === "fault" || entry.numeric === 1) return "fault";
+  if (quality === "good" && (status === "ok" || status === "normal" || raw === "normal" || entry.numeric === 0)) return "normal";
+  return "inactive";
+}
+
+function statusGridLabel(state: StatusGridState): string {
+  if (state === "fault") return "Fault";
+  if (state === "normal") return "Normal";
+  return "No data / inactive";
+}
+
+function StatusGridWidget({ values }: { values: WidgetValue[] }) {
+  const tiles = values.map((entry) => ({ entry, state: statusGridState(entry) }));
+  const faultCount = tiles.filter((tile) => tile.state === "fault").length;
+  const normalCount = tiles.filter((tile) => tile.state === "normal").length;
+  const inactiveCount = tiles.filter((tile) => tile.state === "inactive").length;
+
+  return (
+    <div className={`dashboard-status-grid-widget${values.length <= 1 ? " is-single" : ""}`}>
+      {values.length > 1 ? (
+        <div className="dashboard-status-grid-summary">
+          <span className="is-normal"><b>{normalCount}</b> normal</span>
+          <span className="is-fault"><b>{faultCount}</b> fault</span>
+          <span className="is-inactive"><b>{inactiveCount}</b> grey</span>
+        </div>
+      ) : null}
+      <div className="dashboard-status-grid">
+        {tiles.map(({ entry, state }) => {
+          const label = compactStatusEntityLabel(entry.groupLabel || entry.label);
+          const updatedAt = entry.point?.last_polled_at ? `${formatHktDateTime(entry.point.last_polled_at)} HKT` : "No latest value";
+          return (
+            <span
+              className={`dashboard-status-tile is-${state}`}
+              key={entry.key}
+              title={`${label}: ${statusGridLabel(state)} · ${updatedAt}`}
+            >
+              <span aria-hidden="true" />
+              <strong>{label}</strong>
+            </span>
+          );
+        })}
+      </div>
+      {values.length === 0 ? <span className="dashboard-chart-empty">No entities linked yet</span> : null}
+    </div>
+  );
+}
+
 function LiveValueGridWidget({ values }: { values: WidgetValue[] }) {
   return (
     <div className="dashboard-live-grid">
@@ -1872,6 +2958,7 @@ export function DashboardView({
   const [renameEditor, setRenameEditor] = useState<WidgetRenameEditorState | null>(null);
   const [renameEditorSaving, setRenameEditorSaving] = useState(false);
   const chartHistoryKeysRef = useRef<Record<string, string>>({});
+  const nativeDraggingIdRef = useRef<string | null>(null);
   const savingLayoutRef = useRef(false);
   const pendingGridLayoutSaveRef = useRef<PendingGridLayoutSave | null>(null);
   const gridLayoutSaveTimerRef = useRef<number | null>(null);
@@ -1881,12 +2968,21 @@ export function DashboardView({
   const gridWidth = Math.max(320, Math.round(effectiveContainerWidth));
   const activeGridColumns = dashboardGridColumnsForWidth(effectiveContainerWidth, forceCompactLayout);
   const usingCompactGrid = activeGridColumns < DASHBOARD_GRID_COLUMNS;
+  const fddAnalysisGridColumns = effectiveContainerWidth < DASHBOARD_MOBILE_WIDTH ? DASHBOARD_MOBILE_GRID_COLUMNS : DASHBOARD_TABLET_GRID_COLUMNS;
+  const fddAnalysisColumnSpan = Math.min(fddAnalysisGridColumns, fddAnalysisColumnSpanForWidth(effectiveContainerWidth, forceCompactLayout));
+  const fddAnalysisWidth = dashboardGridSpanWidth(gridWidth, fddAnalysisGridColumns, fddAnalysisColumnSpan);
+  const fddAnalysisSectionStyle = { "--dashboard-fdd-analysis-width": `${fddAnalysisWidth}px` } as CSSProperties;
   const canEditCanonicalLayout = layoutEditing && !usingCompactGrid;
   const activeGridLayoutBySection = usingCompactGrid ? compactGridLayoutBySection : gridLayoutBySection;
   const widgetsById = useMemo(() => new Map(dashboard.widgets.map((widget) => [widget.id, widget])), [dashboard.widgets]);
+  const visibleWidgetIds = useMemo(() => new Set(
+    dashboardSections
+      .filter((section) => !section.collapsed)
+      .flatMap((section) => section.widgetIds)
+  ), [dashboardSections]);
   const historyWidgets = useMemo(
-    () => dashboard.widgets.filter((widget) => widget.kind === "timeseries_chart" || widget.kind === "stat_value"),
-    [dashboard.widgets]
+    () => dashboard.widgets.filter((widget) => visibleWidgetIds.has(widget.id) && (widget.kind === "timeseries_chart" || widget.kind === "stat_value" || isFddAttributionWidget(widget))),
+    [dashboard.widgets, visibleWidgetIds]
   );
   const sectionViewModels = useMemo(
     () => dashboardSections.map((section) => ({
@@ -1972,6 +3068,8 @@ export function DashboardView({
     setRenameEditor(null);
     setRenameEditorSaving(false);
     setPlacementWidgetId(null);
+    nativeDraggingIdRef.current = null;
+    setNativeDraggingId(null);
   }, [dashboard.id]);
 
   useEffect(() => {
@@ -2050,7 +3148,7 @@ export function DashboardView({
       const now = new Date();
       const queries = jobs.flatMap((job) => {
         const from = new Date(now.getTime() - hoursForRange(job.range) * 60 * 60 * 1000);
-        const limit = job.range === "7d" ? "1400" : "720";
+        const limit = historyLimitForRange(job.range);
         return job.widget.pointBindings.map((binding, index) => {
           return historyQueryForBinding(binding, `${job.widget.id}:${index}`, from.toISOString(), now.toISOString(), job.range, limit);
         }).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
@@ -2327,6 +3425,7 @@ export function DashboardView({
       return;
     }
     clearBrowserSelection();
+    nativeDraggingIdRef.current = widgetId;
     setNativeDraggingId(widgetId);
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = "move";
@@ -2344,10 +3443,12 @@ export function DashboardView({
 
   function handleNativeDrop(sectionId: string, targetId: string) {
     if (!canEditCanonicalLayout) return;
-    if (!nativeDraggingId || nativeDraggingId === targetId) return;
+    const draggedId = nativeDraggingIdRef.current ?? nativeDraggingId;
+    if (!draggedId || draggedId === targetId) return;
     clearBrowserSelection();
     const sectionLayout = activeGridLayoutBySection[sectionId] ?? [];
-    const nextLayout = reorderLayout(sectionLayout, nativeDraggingId, targetId, activeGridColumns);
+    const nextLayout = reorderLayout(sectionLayout, draggedId, targetId, activeGridColumns);
+    nativeDraggingIdRef.current = null;
     setNativeDraggingId(null);
     if (usingCompactGrid) {
       setCompactGridLayoutBySection((current) => nextLayoutsBySection(sectionId, nextLayout, current));
@@ -2356,13 +3457,14 @@ export function DashboardView({
       setGridLayoutBySection(nextLayouts);
       void saveGridLayouts(nextLayouts);
     }
-    if (nativeDraggingId === placementWidgetId) {
+    if (draggedId === placementWidgetId) {
       setPlacementWidgetId(null);
     }
   }
 
   function handleNativeDragEnd() {
     clearBrowserSelection();
+    nativeDraggingIdRef.current = null;
     setNativeDraggingId(null);
   }
 
@@ -2432,6 +3534,7 @@ export function DashboardView({
   }
 
   function standardSection(id: DashboardSection["kind"]): DashboardSection {
+    if (id === "analysis") return { id: "analysis", title: FDD_ANALYSIS_TITLE, kind: "analysis", widgetIds: [] };
     if (id === "comparison") return { id: "comparison", title: "Comparison", kind: "comparison", widgetIds: [] };
     if (id === "trends") return { id: "trends", title: "Trends", kind: "trends", widgetIds: [] };
     if (id === "custom") return { id: "custom", title: "Custom", kind: "custom", widgetIds: [] };
@@ -2592,7 +3695,7 @@ export function DashboardView({
       pointBindings: []
     } as DashboardWidget;
     const targetSection = dashboardSections.find((section) => section.id === targetSectionId)
-      ?? (targetSectionId === "comparison" || targetSectionId === "trends" || targetSectionId === "overview"
+      ?? (targetSectionId === "analysis" || targetSectionId === "comparison" || targetSectionId === "trends" || targetSectionId === "overview"
         ? standardSection(targetSectionId)
         : targetSectionId === "notes"
           ? { id: "notes", title: "Notes", kind: "custom" as const, widgetIds: [] }
@@ -2661,10 +3764,10 @@ export function DashboardView({
     const requested = window.prompt(`Move to section: ${sectionChoices()}`, sourceSection.id)?.trim().toLowerCase();
     if (!requested || requested === sourceSection.id || requested === sourceSection.title.toLowerCase()) return;
     const existingTarget = dashboardSections.find((section) => section.id.toLowerCase() === requested || section.title.toLowerCase() === requested);
-    const standardKind = requested === "overview" || requested === "comparison" || requested === "trends" || requested === "custom" ? requested : null;
+    const standardKind = requested === "overview" || requested === "analysis" || requested === "comparison" || requested === "trends" || requested === "custom" ? requested : null;
     const targetSection = existingTarget ?? (standardKind ? standardSection(standardKind) : null);
     if (!targetSection) {
-      window.alert("Use an existing section id/title, or overview, comparison, trends, custom.");
+      window.alert("Use an existing section id/title, or overview, analysis, comparison, trends, custom.");
       return;
     }
 
@@ -2839,16 +3942,18 @@ export function DashboardView({
       ) : (
         <div ref={containerRef as RefObject<HTMLDivElement>} className="dashboard-sections-shell">
           {mounted ? (
-            sectionViewModels.map(({ section, layout, widgets }) => (
+            sectionViewModels.map(({ section, layout, widgets }) => {
+              const directFddWidget = directFddAnalysisWidget(section, widgets);
+              return (
               <section className={`dashboard-section${section.collapsed ? " is-collapsed" : ""}`} key={`${dashboard.id}:${section.id}`}>
                 <div className="dashboard-section-header">
                   <div className="dashboard-section-title">
                     <strong>{section.title}</strong>
-                    <span>{widgets.length} widgets</span>
+                    <span>{directFddWidget ? FDD_ANALYSIS_RANGE_LABEL : `${widgets.length} widgets`}</span>
                   </div>
                   <div className="dashboard-section-actions">
-                    <Badge tone="neutral">{section.kind}</Badge>
-                    {onDashboardChange && canEditCanonicalLayout ? (
+                    {directFddWidget ? null : <Badge tone="neutral">{section.kind}</Badge>}
+                    {onDashboardChange && canEditCanonicalLayout && !directFddWidget ? (
                       <button
                         className="dashboard-widget-icon-button dashboard-drag-cancel"
                         type="button"
@@ -2867,7 +3972,23 @@ export function DashboardView({
                     </button>
                   </div>
                 </div>
-                {section.collapsed ? null : (
+                {section.collapsed ? null : directFddWidget ? (
+                  <div
+                    className="dashboard-fdd-analysis-section"
+                    data-analysis-columns={fddAnalysisColumnSpan}
+                    style={fddAnalysisSectionStyle}
+                  >
+                    <FddAttributionAnalysisWidget
+                      token={token}
+                      projectId={dashboard.projectId}
+                      widgetId={directFddWidget.id}
+                      series={chartSeriesByWidget[directFddWidget.id] ?? []}
+                      loading={Boolean(loadingWidgets[directFddWidget.id])}
+                      analysisText={directFddWidget.content}
+                      onRefresh={() => setRefreshByWidget((current) => ({ ...current, [directFddWidget.id]: (current[directFddWidget.id] ?? 0) + 1 }))}
+                    />
+                  </div>
+                ) : (
                   <div className="dashboard-grid-shell">
                     <GridLayout
                       key={`${dashboard.id}:${section.id}:${activeGridColumns}`}
@@ -2978,11 +4099,23 @@ export function DashboardView({
 	                                />
                               ) : widget.kind === "live_value_grid" ? (
                                 <LiveValueGridWidget values={values} />
-                              ) : widget.kind === "stat_value" ? (
-                                <StatValueWidget values={values} historySeries={chartSeriesByWidget[widget.id] ?? []} />
-                              ) : widget.kind === "bar_comparison" ? (
-                                <BarComparisonWidget values={values} />
-                              ) : (
+	                              ) : widget.kind === "stat_value" ? (
+	                                <StatValueWidget values={values} historySeries={chartSeriesByWidget[widget.id] ?? []} />
+	                              ) : widget.kind === "status_grid" ? (
+	                                <StatusGridWidget values={values} />
+	                              ) : isFddAttributionWidget(widget) ? (
+	                                <FddAttributionAnalysisWidget
+	                                  token={token}
+	                                  projectId={dashboard.projectId}
+	                                  widgetId={widget.id}
+	                                  series={chartSeriesByWidget[widget.id] ?? []}
+	                                  loading={loading}
+                                    analysisText={widget.content}
+	                                  onRefresh={() => setRefreshByWidget((current) => ({ ...current, [widget.id]: (current[widget.id] ?? 0) + 1 }))}
+	                                />
+	                              ) : widget.kind === "bar_comparison" ? (
+	                                <BarComparisonWidget values={values} />
+	                              ) : (
                                 <TimeSeriesWidget
                                   series={chartSeriesByWidget[widget.id] ?? []}
                                   range={range}
@@ -2999,7 +4132,8 @@ export function DashboardView({
                   </div>
                 )}
               </section>
-            ))
+              );
+            })
           ) : null}
         </div>
       )}

@@ -27,8 +27,12 @@ import type { ProcessRegistry } from "./processRegistry.js";
 import { chartSanityViolation, executeCodeInjectedHeader } from "./chartStyle.js";
 import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
-import { bmsCollectorBaseUrl } from "../bmsCollectorUrl.js";
 import { fetchTimeseries, type BmsTimeseriesRow } from "../bmsTimeseries.js";
+import {
+  defaultProjectBmsAccess,
+  projectBmsAccessErrorPayload,
+  type ProjectBmsAccessResolver
+} from "../bmsProjectAccess.js";
 import {
   alignNumericSeries,
   DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS,
@@ -43,6 +47,9 @@ const MAX_READ_BYTES = 200_000;
 const MAX_WRITE_BYTES = 500_000;
 const TERMINAL_TIMEOUT_MS = 30_000;
 const TERMINAL_MAX_OUTPUT = 100_000;
+const FDD_ANALYSIS_TITLE = "Fault Cause Analysis";
+const FDD_ANALYSIS_RANGE = "7d";
+const FDD_TRENDS_TITLE = "Chiller Trends";
 
 const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".ttl", ".rdf", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".hpp", ".sh", ".bash", ".zsh", ".sql", ".graphql", ".proto", ".toml", ".ini", ".cfg", ".conf", ".env", ".log"]);
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
@@ -106,6 +113,16 @@ function optionalBoolValueFrom(record: Record<string, unknown>, keys: string[]):
   return undefined;
 }
 
+function recordArrayValueFrom(record: Record<string, unknown>, keys: string[]): Array<Record<string, unknown>> | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (!Array.isArray(value)) continue;
+    const entries = value.filter((entry): entry is Record<string, unknown> => isPlainRecord(entry));
+    if (entries.length > 0) return entries;
+  }
+  return undefined;
+}
+
 function normalizeDashboardId(value: string, fallback: string): string {
   const source = value || fallback;
   const normalized = source
@@ -160,6 +177,7 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
     : sourceRaw === "bms" || sourceRaw === "raw_point" || sourceRaw === "point"
       ? "bms"
       : undefined;
+  const bmsSourceId = stringValueFrom(value, ["bmsSourceId", "bms_source_id", "source_id"]);
   if (source === "derived_metric" && !metricInstanceId && (!metricKey || !entityId)) return null;
   if (source !== "derived_metric" && !pointName && !objectRef) return null;
 
@@ -169,8 +187,11 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
   const defaultVisible = optionalBoolValueFrom(value, ["defaultVisible", "default_visible"]);
   const groupId = stringValueFrom(value, ["groupId", "group_id"]);
   const unit = stringValue(value.unit);
+  const description = stringValue(value.description);
+  const fddParameters = recordArrayValueFrom(value, ["fddParameters", "fdd_parameters"]);
   return {
     ...(source ? { source } : {}),
+    ...(source !== "derived_metric" && bmsSourceId ? { bmsSourceId } : {}),
     ...(pointName ? { pointName } : {}),
     ...(objectRef ? { objectRef } : {}),
     ...(metricInstanceId ? { metricInstanceId } : {}),
@@ -181,20 +202,30 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
     ...(dependencyRole ? { dependencyRole } : {}),
     ...(defaultVisible !== undefined ? { defaultVisible } : {}),
     ...(groupId ? { groupId } : {}),
-    ...(unit ? { unit } : {})
+    ...(unit ? { unit } : {}),
+    ...(description ? { description } : {}),
+    ...(fddParameters ? { fddParameters } : {})
   };
 }
 
 function normalizeDashboardWidget(value: unknown, index: number): Record<string, unknown> | null {
   if (!isPlainRecord(value)) return null;
-  const kind = stringValue(value.kind);
-  const title = stringValueFrom(value, ["title", "name"])
+  const rawKind = stringValue(value.kind);
+  const kind = rawKind === "fdd_fault_rate_comparison" ? "fdd_attribution_analysis" : rawKind;
+  const explicitTitle = stringValueFrom(value, ["title", "name"]);
+  const title = (kind === "fdd_attribution_analysis" && /fault\s*rate|comparison|ranking|rank|attribution|30-?day|30d/iu.test(explicitTitle)
+    ? FDD_ANALYSIS_TITLE
+    : explicitTitle)
     || (kind === "timeseries_chart"
       ? "Historical trend"
       : kind === "stat_value"
         ? "Current value"
         : kind === "bar_comparison"
           ? "Current comparison"
+            : kind === "status_grid"
+              ? "Status overview"
+            : kind === "fdd_attribution_analysis"
+              ? FDD_ANALYSIS_TITLE
           : kind === "note"
             ? "Note"
             : "Live values");
@@ -228,6 +259,7 @@ function normalizeDashboardWidget(value: unknown, index: number): Record<string,
     .filter((entry): entry is Record<string, unknown> => entry !== null);
 
   const defaultTimeRange = stringValueFrom(value, ["defaultTimeRange", "default_time_range", "timeRange", "range"]);
+  const content = stringValue(value.content);
   const tone = stringValue(value.tone);
 
   return {
@@ -235,9 +267,14 @@ function normalizeDashboardWidget(value: unknown, index: number): Record<string,
     kind,
     title,
     pointBindings,
-    ...(defaultTimeRange ? { defaultTimeRange } : {}),
+    ...(defaultTimeRange || kind === "fdd_attribution_analysis" ? { defaultTimeRange: kind === "fdd_attribution_analysis" ? FDD_ANALYSIS_RANGE : defaultTimeRange } : {}),
+    ...(kind === "fdd_attribution_analysis" && content ? { content } : {}),
     ...(kind === "note" ? { content: stringValue(value.content), ...(tone ? { tone } : {}) } : {})
   };
+}
+
+function isFddAttributionDashboardKind(kind: string): boolean {
+  return kind === "fdd_attribution_analysis" || kind === "fdd_fault_rate_comparison";
 }
 
 function equipmentLabelFromBinding(binding: Record<string, unknown>): string | null {
@@ -283,8 +320,8 @@ function equipmentLabelFromWidget(widget: Record<string, unknown>): string {
 
 function dashboardWidgetKindRank(widget: Record<string, unknown>): number {
   const kind = stringValue(widget.kind);
-  if (kind === "live_value_grid" || kind === "stat_value") return 0;
-  if (kind === "bar_comparison") return 1;
+  if (kind === "status_grid" || kind === "live_value_grid" || kind === "stat_value") return 0;
+  if (kind === "bar_comparison" || isFddAttributionDashboardKind(kind)) return 1;
   if (kind === "timeseries_chart") return 2;
   return 3;
 }
@@ -292,6 +329,7 @@ function dashboardWidgetKindRank(widget: Record<string, unknown>): number {
 function dashboardWidgetSectionInfo(widget: Record<string, unknown>): Record<string, unknown> {
   const kind = stringValue(widget.kind);
   if (kind === "timeseries_chart") return { id: "trends", title: "Trends", kind: "trends" };
+  if (isFddAttributionDashboardKind(kind)) return { id: "analysis", title: FDD_ANALYSIS_TITLE, kind: "analysis" };
   if (kind === "bar_comparison") return { id: "comparison", title: "Comparison", kind: "comparison" };
   if (kind === "note") return { id: "notes", title: "Notes", kind: "custom" };
   return { id: "overview", title: "Overview", kind: "overview" };
@@ -501,7 +539,7 @@ function enrichWidgetDerivedMetricBindings(
 ): Record<string, unknown> {
   if (!derivedMetrics) return widget;
   const kind = stringValue(widget.kind);
-  const includeAuditInputs = kind === "live_value_grid" || kind === "timeseries_chart";
+  const includeAuditInputs = kind === "live_value_grid" || kind === "timeseries_chart" || isFddAttributionDashboardKind(kind);
   const bindings = dashboardWidgetBindings(widget);
   if (bindings.length === 0) return widget;
 
@@ -529,7 +567,7 @@ function enrichWidgetDerivedMetricBindings(
     for (const inputBinding of derivedMetricInputDashboardBindings(instance.entityId, derivedMetricInstanceDependencyInputs(instance))) {
       const enrichedInput = {
         ...inputBinding,
-        defaultVisible: kind === "timeseries_chart" ? false : true
+        defaultVisible: kind === "timeseries_chart" || isFddAttributionDashboardKind(kind) ? false : true
       };
       const inputKey = dashboardBindingSourceIdentity(enrichedInput);
       if (seen.has(inputKey)) continue;
@@ -711,7 +749,7 @@ function widgetsByEquipment(widgets: Array<Record<string, unknown>>): Map<string
   const groups = new Map<string, Array<Record<string, unknown>>>();
   for (const widget of widgets) {
     const kind = stringValue(widget.kind);
-    if (kind === "note") continue;
+    if (kind === "note" || kind === "status_grid" || isFddAttributionDashboardKind(kind)) continue;
     const equipment = explicitEquipmentLabelFromWidget(widget);
     if (!equipment) continue;
     groups.set(equipment, [...(groups.get(equipment) ?? []), widget]);
@@ -759,7 +797,7 @@ function ensureDefaultDashboardWidgets(
     for (const [equipment, equipmentWidgets] of equipmentGroups) {
       const hasOverview = equipmentWidgets.some((widget) => {
         const kind = stringValue(widget.kind);
-        return kind === "live_value_grid" || kind === "stat_value";
+        return kind === "live_value_grid" || kind === "stat_value" || kind === "status_grid";
       });
       if (hasOverview) continue;
       const source = equipmentWidgets.find((widget) => stringValue(widget.kind) === "timeseries_chart")
@@ -793,6 +831,10 @@ function preferredDashboardLayoutSize(widget: Record<string, unknown>): { w: num
   const bindingCount = Array.isArray(widget.pointBindings) ? widget.pointBindings.length : 0;
   if (kind === "timeseries_chart") return { w: 6, h: 4 };
   if (kind === "bar_comparison") return { w: 6, h: Math.max(3, Math.min(6, 3 + Math.ceil(Math.max(0, bindingCount - 8) / 4))) };
+  if (isFddAttributionDashboardKind(kind)) return { w: 6, h: 3 };
+  if (kind === "status_grid") return bindingCount <= 1
+    ? { w: 1, h: 1 }
+    : { w: 6, h: Math.max(2, Math.min(3, 2 + Math.ceil(Math.max(0, bindingCount - 12) / 12))) };
   if (kind === "live_value_grid") return { w: 3, h: bindingCount > 2 ? 3 : 2 };
   return { w: 3, h: 2 };
 }
@@ -836,8 +878,9 @@ function fallbackDashboardLayout(widgets: Array<Record<string, unknown>>): Array
 }
 
 function normalizedDashboardSectionKind(id: string, value: string): string {
-  if (value === "overview" || value === "comparison" || value === "trends" || value === "custom") return value;
+  if (value === "overview" || value === "analysis" || value === "comparison" || value === "trends" || value === "custom") return value;
   if (id === "overview") return "overview";
+  if (id === "analysis" || id === "attribution") return "analysis";
   if (id === "comparison") return "comparison";
   if (id === "trends") return "trends";
   return "custom";
@@ -848,6 +891,12 @@ function normalizeDashboardSections(
   args: Record<string, unknown>
 ): Array<Record<string, unknown>> {
   const widgetIds = new Set(widgets.map((widget) => stringValue(widget.id)).filter(Boolean));
+  const widgetById = new Map<string, Record<string, unknown>>();
+  for (const widget of widgets) {
+    const widgetId = stringValue(widget.id);
+    if (widgetId) widgetById.set(widgetId, widget);
+  }
+  const hasFddAttribution = widgets.some((widget) => isFddAttributionDashboardKind(stringValue(widget.kind)));
   const usedWidgetIds = new Set<string>();
   const sections: Array<Record<string, unknown>> = [];
 
@@ -860,26 +909,42 @@ function normalizeDashboardSections(
       if (!id || usedSectionIds.has(id)) continue;
       const title = stringValue(sectionValue.title) || (id === "overview"
         ? "Overview"
+        : id === "analysis" || id === "attribution"
+          ? FDD_ANALYSIS_TITLE
         : id === "comparison"
           ? "Comparison"
           : id === "trends"
-            ? "Trends"
+            ? hasFddAttribution ? FDD_TRENDS_TITLE : "Trends"
             : "Notes");
       const kind = normalizedDashboardSectionKind(id, stringValue(sectionValue.kind));
+      const sectionId = hasFddAttribution && (kind === "analysis" || id === "attribution") ? "analysis" : id;
+      if (usedSectionIds.has(sectionId)) continue;
+      const displayKind = hasFddAttribution && sectionId === "analysis" ? "analysis" : kind;
+      const displayTitle = hasFddAttribution && sectionId === "analysis"
+        ? FDD_ANALYSIS_TITLE
+        : hasFddAttribution && displayKind === "trends"
+          ? FDD_TRENDS_TITLE
+          : title;
       const widgetIdsForSection = Array.isArray(sectionValue.widgetIds)
         ? sectionValue.widgetIds
           .map((entry) => stringValue(entry))
           .filter((entry) => entry && widgetIds.has(entry) && !usedWidgetIds.has(entry))
+          .filter((entry) => {
+            if (!hasFddAttribution) return true;
+            const widget = widgetById.get(entry);
+            const isFddWidget = widget ? isFddAttributionDashboardKind(stringValue(widget.kind)) : false;
+            return sectionId === "analysis" ? isFddWidget : !isFddWidget;
+          })
         : [];
       if (widgetIdsForSection.length === 0) continue;
       for (const widgetId of widgetIdsForSection) usedWidgetIds.add(widgetId);
-      usedSectionIds.add(id);
+      usedSectionIds.add(sectionId);
       sections.push({
-        id,
-        title,
-        kind,
+        id: sectionId,
+        title: displayTitle,
+        kind: displayKind,
         widgetIds: widgetIdsForSection,
-        ...(typeof sectionValue.collapsed === "boolean" ? { collapsed: sectionValue.collapsed } : {})
+        ...(typeof sectionValue.collapsed === "boolean" ? { collapsed: sectionValue.collapsed } : hasFddAttribution && displayKind === "trends" ? { collapsed: true } : {})
       });
     }
   }
@@ -891,7 +956,11 @@ function normalizeDashboardSections(
     const sectionId = stringValue(info.id);
     let section = sections.find((candidate) => stringValue(candidate.id) === sectionId);
     if (!section) {
-      section = { ...info, widgetIds: [] };
+      section = {
+        ...info,
+        ...(hasFddAttribution && sectionId === "trends" ? { title: FDD_TRENDS_TITLE, collapsed: true } : {}),
+        widgetIds: []
+      };
       sections.push(section);
     }
     (section.widgetIds as string[]).push(widgetId);
@@ -901,10 +970,11 @@ function normalizeDashboardSections(
   const sectionRank = (section: Record<string, unknown>) => {
     const id = stringValue(section.id);
     if (id === "overview") return 0;
-    if (id === "comparison") return 1;
-    if (id === "trends") return 2;
-    if (id === "notes") return 3;
-    return 4;
+    if (id === "analysis" || id === "attribution") return 1;
+    if (id === "comparison") return 2;
+    if (id === "trends") return 3;
+    if (id === "notes") return 4;
+    return 5;
   };
 
   return sections
@@ -912,7 +982,7 @@ function normalizeDashboardSections(
     .sort((left, right) => sectionRank(left) - sectionRank(right) || stringValue(left.title).localeCompare(stringValue(right.title)));
 }
 
-function normalizeDashboardCreateArgs(
+export function normalizeDashboardCreateArgs(
   args: Record<string, unknown>,
   derivedMetrics?: DerivedMetricStore,
   projectId = ""
@@ -1266,9 +1336,12 @@ function configureDerivedMetricMaterialization(
 }
 
 function derivedMetricOutputDashboardBinding(
-  instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string },
+  instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string; formula?: string; formulaDescription?: string; metadata?: Record<string, unknown> },
   unitFallback = ""
 ): Record<string, unknown> {
+  const fddParameters = Array.isArray(instance.metadata?.fddParameters)
+    ? instance.metadata.fddParameters.filter((parameter): parameter is Record<string, unknown> => isPlainRecord(parameter))
+    : undefined;
   return {
     source: "derived_metric",
     metricInstanceId: instance.instanceId,
@@ -1279,12 +1352,33 @@ function derivedMetricOutputDashboardBinding(
     role: "output",
     dependencyRole: "output",
     defaultVisible: true,
-    unit: instance.unit ?? unitFallback
+    unit: instance.unit ?? unitFallback,
+    ...(instance.formulaDescription || instance.formula ? { description: instance.formulaDescription ?? instance.formula } : {}),
+    ...(fddParameters ? { fddParameters } : {})
   };
+}
+
+function dashboardPointDescription(pointName: string | undefined, role: string | undefined): string | undefined {
+  const name = pointName ?? "";
+  const suffix = name.replace(/^.*[_-]([^_-]+)$/u, "$1").toUpperCase();
+  if (suffix === "TLKW") return "Motor Kilowatts";
+  if (suffix === "TLKWH") return "Motor Kilowatt-Hours";
+  if (suffix === "Q") return "Cooling load";
+  if (suffix === "P") return "Power";
+  if (suffix === "COP") return "Coefficient of Performance";
+  if (/_Run_Status$/u.test(name) || role === "chiller_status") return "Run Status";
+  if (/CHWST$/u.test(name)) return "Chilled Water Supply Temperature";
+  if (/CHWRT$/u.test(name)) return "Chilled Water Return Temperature";
+  if (/CHWFWR$/u.test(name)) return "Chilled Water Flow Rate";
+  if (/CHWFWS$/u.test(name)) return "Chilled Water Flow Status";
+  if (role === "chiller_power") return "Motor Kilowatts";
+  if (role === "cooling_load") return "Cooling load";
+  return undefined;
 }
 
 function derivedMetricInputDashboardBindings(entityId: string, dependencies: DerivedMetricDependencyInput[]): Array<Record<string, unknown>> {
   return dependencies.map((dependency) => {
+    const description = dashboardPointDescription(dependency.pointName ?? dependency.sourceId, dependency.role);
     const base = {
       entityId,
       groupId: entityId,
@@ -1292,7 +1386,8 @@ function derivedMetricInputDashboardBindings(entityId: string, dependencies: Der
       role: dependency.role,
       dependencyRole: "input",
       defaultVisible: false,
-      ...(dependency.unit ? { unit: dependency.unit } : {})
+      ...(dependency.unit ? { unit: dependency.unit } : {}),
+      ...(description ? { description } : {})
     };
     if (dependency.sourceType === "metric") {
       return {
@@ -1398,6 +1493,8 @@ function numericSeriesFromRows(rows: BmsTimeseriesRow[]): Map<string, number> {
 
 async function readDerivedMetricDependencySeries(
   derivedMetrics: DerivedMetricStore,
+  projectBmsAccess: ProjectBmsAccessResolver,
+  projectId: string,
   dependency: DerivedMetricDependencyInput,
   from: string,
   to: string,
@@ -1427,7 +1524,9 @@ async function readDerivedMetricDependencySeries(
   } else {
     params.name = dependency.sourceId;
   }
-  const result = await fetchTimeseries(bmsCollectorBaseUrl(), params);
+  const access = await projectBmsAccess(projectId);
+  if (!access.ok) return new Map();
+  const result = await fetchTimeseries(access.baseUrl, params);
   return numericSeriesFromRows(result.items);
 }
 
@@ -1560,7 +1659,8 @@ export function createGenericToolRegistry(
   projectFeedbackBindings?: ProjectFeedbackBindings,
   sessionIndex?: SessionSearchIndex,
   projectMemoryProposalBindings?: ProjectMemoryProposalBindings,
-  derivedMetrics?: DerivedMetricStore
+  derivedMetrics?: DerivedMetricStore,
+  projectBmsAccess: ProjectBmsAccessResolver = defaultProjectBmsAccess
 ): AgentToolRegistry {
   const registry = new AgentToolRegistry();
   const tools: AgentTool[] = [
@@ -1919,8 +2019,8 @@ export function createGenericToolRegistry(
         try {
           const limit = Math.min(Math.max(1, numArg(args, "limit", 2000)), DERIVED_METRIC_SOURCE_LIMIT);
           const [leftSeries, rightSeries] = await Promise.all([
-            readDerivedMetricDependencySeries(derivedMetrics, leftDependency, from, to, limit),
-            readDerivedMetricDependencySeries(derivedMetrics, rightDependency, from, to, limit)
+            readDerivedMetricDependencySeries(derivedMetrics, projectBmsAccess, context.projectId, leftDependency, from, to, limit),
+            readDerivedMetricDependencySeries(derivedMetrics, projectBmsAccess, context.projectId, rightDependency, from, to, limit)
           ]);
           const calculated = calculateAlignedDerivedMetricSamples(
             kind,
@@ -2149,8 +2249,8 @@ export function createGenericToolRegistry(
         try {
           const limit = DERIVED_METRIC_SOURCE_LIMIT;
           const [leftSeries, rightSeries] = await Promise.all([
-            readDerivedMetricDependencySeries(derivedMetrics, leftDependency, from, to, limit),
-            readDerivedMetricDependencySeries(derivedMetrics, rightDependency, from, to, limit)
+            readDerivedMetricDependencySeries(derivedMetrics, projectBmsAccess, context.projectId, leftDependency, from, to, limit),
+            readDerivedMetricDependencySeries(derivedMetrics, projectBmsAccess, context.projectId, rightDependency, from, to, limit)
           ]);
           const calculated = calculateAlignedDerivedMetricSamples(
             kind,
@@ -2727,28 +2827,35 @@ export function createGenericToolRegistry(
       name: "bms_live_read",
       category: "utility",
       description:
-        "Read current present-value from enteliWEB for Element chiller points (demo server has credentials pre-configured). Prefer this over curl for live BACnet values.",
+        "Read current present-value from the current project's configured BMS source. Prefer this over curl for live BACnet values.",
       schema: {
         name: "bms_live_read",
         description:
-          "Fetch live BACnet present-value via enteliWEB. Provide point_name (e.g. WCC_1_Chilled_Water_Temp), object_ref, or full api_path. Resolves api_path from local BMS catalog (server BMS_DATABASE_API_URL, default 127.0.0.1:8765) when needed.",
+          "Fetch live BACnet present-value for the current project's BMS source. Provide point_name, object_ref, or full api_path. Resolves api_path from the project's BMS catalog when needed.",
         parameters: {
           type: "object",
           properties: {
             point_name: { type: "string", description: "Point name in BMS-database catalog, e.g. WCC_1_Chilled_Water_Temp" },
             object_ref: { type: "string", description: "BACnet object ref, e.g. //Elements/10101.AV5" },
-            api_path: { type: "string", description: "Full enteliWEB URL if already known" }
+            api_path: { type: "string", description: "Full enteliWEB URL if already known" },
+            source_id: { type: "string", description: "Optional BMS source id when the current project has multiple BMS sources." }
           },
           required: []
         }
       },
-      async run(args) {
+      async run(args, context) {
+        const sourceId = textArg(args, "source_id");
+        const access = await projectBmsAccess(context.projectId, sourceId ? { sourceId } : {});
+        if (!access.ok) {
+          return projectBmsAccessErrorPayload(access);
+        }
         const result = await fetchEnteliLiveValue({
           pointName: textArg(args, "point_name"),
           objectRef: textArg(args, "object_ref"),
-          apiPath: textArg(args, "api_path")
+          apiPath: textArg(args, "api_path"),
+          bmsDatabaseApiUrl: access.baseUrl
         });
-        return { ...result };
+        return { ...result, projectId: access.projectId, sourceId: access.sourceId, sourceName: access.sourceName };
       }
     },
 
@@ -2756,27 +2863,33 @@ export function createGenericToolRegistry(
       name: "bms_points_query",
       category: "building",
       description:
-        "Fast BMS catalog lookup (local collector API). Returns point names, object_ref, api_path, last_value (~5min). Prefer over terminal/curl.",
+        "Fast current-project BMS catalog lookup. Returns point names, object_ref, api_path, last_value (~5min). Prefer over terminal/curl.",
       schema: {
         name: "bms_points_query",
         description:
-          "Search the local BMS-database point catalog. Server-only http://127.0.0.1:8765. Use before bms_live_read when api_path is unknown.",
+          "Search the current project's BMS point catalog. Use before bms_live_read when api_path is unknown.",
         parameters: {
           type: "object",
           properties: {
             q: { type: "string", description: "Search keyword, e.g. WCC_3 or WCC_3_Chilled_Water_Temp" },
-            limit: { type: "number", description: "Max rows (default 50, max 200)" }
+            limit: { type: "number", description: "Max rows (default 50, max 200)" },
+            source_id: { type: "string", description: "Optional BMS source id when the current project has multiple BMS sources." }
           },
           required: ["q"]
         }
       },
-      async run(args) {
+      async run(args, context) {
+        const sourceId = textArg(args, "source_id");
+        const access = await projectBmsAccess(context.projectId, sourceId ? { sourceId } : {});
+        if (!access.ok) {
+          return projectBmsAccessErrorPayload(access);
+        }
         const q = textArg(args, "q");
         if (!q) {
           return { error: "q is required" };
         }
         const limit = Math.min(Math.max(1, Math.floor(numArg(args, "limit", 50))), 200);
-        const base = bmsCollectorBaseUrl();
+        const base = access.baseUrl;
         const url = `${base}/api/v1/points?${new URLSearchParams({ q, limit: String(limit) }).toString()}`;
         try {
           const response = await fetch(url, { headers: { accept: "application/json" } });
@@ -2789,6 +2902,9 @@ export function createGenericToolRegistry(
           return {
             total,
             items,
+            projectId: access.projectId,
+            sourceId: access.sourceId,
+            sourceName: access.sourceName,
             base_url: base,
             ...(total === 0
               ? {
@@ -2798,7 +2914,7 @@ export function createGenericToolRegistry(
               : {})
           };
         } catch (error) {
-          return { error: error instanceof Error ? error.message : "bms_points_query_failed", base_url: base };
+          return { error: error instanceof Error ? error.message : "bms_points_query_failed", projectId: access.projectId, sourceId: access.sourceId, base_url: base };
         }
       }
     },
@@ -2807,11 +2923,11 @@ export function createGenericToolRegistry(
       name: "bms_timeseries_query",
       category: "building",
       description:
-        "Fast historical BMS series (merged poll+history/readings). Prefer over terminal/curl. Times in UTC; display to users as HKT / Asia_Hong_Kong.",
+        "Fast historical current-project BMS series (merged poll+history/readings). Prefer over terminal/curl. Times in UTC; display to users as HKT / Asia_Hong_Kong.",
       schema: {
         name: "bms_timeseries_query",
         description:
-          "Fetch historical readings from local BMS-database GET /api/v1/timeseries with /api/v1/readings fallback. Provide name OR point_id OR object_ref, plus from (UTC ISO). For yesterday/today use from/to from CURRENT TIME CALENDAR RANGES in the system prompt.",
+          "Fetch historical readings from the current project's BMS-database GET /api/v1/timeseries with /api/v1/readings fallback. Provide name OR point_id OR object_ref, plus from (UTC ISO). For yesterday/today use from/to from CURRENT TIME CALENDAR RANGES in the system prompt.",
         parameters: {
           type: "object",
           properties: {
@@ -2821,12 +2937,18 @@ export function createGenericToolRegistry(
             from: { type: "string", description: "Start time UTC ISO8601, e.g. 2026-05-17T00:00:00Z" },
             to: { type: "string", description: "End time UTC ISO8601 (optional)" },
             limit: { type: "number", description: "Max points (default 2000, max 20000)" },
-            order: { type: "string", enum: ["asc", "desc"], description: "Sort order (default asc)" }
+            order: { type: "string", enum: ["asc", "desc"], description: "Sort order (default asc)" },
+            source_id: { type: "string", description: "Optional BMS source id when the current project has multiple BMS sources." }
           },
           required: ["from"]
         }
       },
-      async run(args) {
+      async run(args, context) {
+        const sourceId = textArg(args, "source_id");
+        const access = await projectBmsAccess(context.projectId, sourceId ? { sourceId } : {});
+        if (!access.ok) {
+          return projectBmsAccessErrorPayload(access);
+        }
         const from = textArg(args, "from");
         if (!from) {
           return { error: "from is required (UTC ISO8601)" };
@@ -2847,17 +2969,20 @@ export function createGenericToolRegistry(
         if (objectRef) params.object_ref = objectRef;
         const to = textArg(args, "to");
         if (to) params.to = to;
-        const base = bmsCollectorBaseUrl();
+        const base = access.baseUrl;
         try {
           const result = await fetchTimeseries(base, params);
           return {
             total: result.total,
             items: result.items.slice(0, Number(params.limit)),
+            projectId: access.projectId,
+            sourceId: access.sourceId,
+            sourceName: access.sourceName,
             base_url: base,
             query: params
           };
         } catch (error) {
-          return { error: error instanceof Error ? error.message : "bms_timeseries_query_failed", base_url: base };
+          return { error: error instanceof Error ? error.message : "bms_timeseries_query_failed", projectId: access.projectId, sourceId: access.sourceId, base_url: base };
         }
       }
     },
@@ -2870,7 +2995,7 @@ export function createGenericToolRegistry(
       schema: {
         name: "dashboard_create",
         description:
-          "Create a dashboard with typed widgets. Provide title and widgets; layout and sections are optional because this tool normalizes them into a canonical 12-column layout. Never generate raw HTML/JS. Supported widgets: live_value_grid for compact live tables, stat_value for one prominent current/latest value, timeseries_chart for history, bar_comparison for comparing latest numeric values across equipment or points, and note for operator annotations without point bindings. For multi-equipment monitoring, group live/stat widgets by equipment; one focused trend per equipment/asset is added when trends are not explicitly disabled. This tool repairs missing/invalid sections into Overview, Comparison, Trends, and conditional Notes. Preferred widget fields are id, kind, title, pointBindings; note widgets should use content and optional tone. The tool accepts raw BMS bindings ({pointName,label,unit}) and derived metric bindings ({source:\"derived_metric\",metricInstanceId} or {source:\"derived_metric\",metricKey,entityId,label,unit}). Bindings may include entityId/groupId, dependencyRole, and defaultVisible=false for audit/input trend series.",
+          "Create a dashboard with typed widgets. Provide title and widgets; layout and sections are optional because this tool normalizes them into a canonical 12-column layout. Never generate raw HTML/JS. Supported widgets: live_value_grid for compact live tables, stat_value for one prominent current/latest value, status_grid for compact per-entity status squares, fdd_attribution_analysis for 7-day FDD fault-cause text analysis, timeseries_chart for history, bar_comparison for comparing latest numeric values across equipment or points, and note for operator annotations without point bindings. For multi-equipment monitoring, group live/stat widgets by equipment; FDD dashboards should use one 1x1 status_grid per entity plus one fdd_attribution_analysis titled Fault Cause Analysis with defaultTimeRange:\"7d\" and content containing the data-backed attribution result; before summarizing the dashboard, follow the FDD FAULT ATTRIBUTION skill and analyze FDD fault timestamps against actual bound input histories. Trend widgets for the chillers belong in a Chiller Trends section that is collapsed by default. This tool repairs missing/invalid sections into Overview, Fault Cause Analysis, Chiller Trends, Comparison, and conditional Notes. Preferred widget fields are id, kind, title, pointBindings; for fdd_attribution_analysis, content may contain concise Markdown with exact point names, point expansions, FDD parameters used, zero/missing/flatline evidence, and the specific point-level next check; note widgets should use content and optional tone. The tool accepts raw BMS bindings ({pointName,label,unit,description}) and derived metric bindings ({source:\"derived_metric\",metricInstanceId} or {source:\"derived_metric\",metricKey,entityId,label,unit,description,fddParameters}). Bindings may include entityId/groupId, dependencyRole, defaultVisible=false, description, and fddParameters for audit/input trend series.",
         parameters: {
           type: "object",
           properties: {
@@ -2881,7 +3006,7 @@ export function createGenericToolRegistry(
             widgets: {
               type: "array",
               description:
-                "Widget definitions. Supported kinds: live_value_grid, stat_value, timeseries_chart, bar_comparison, note. Use pointBindings with raw BMS bindings [{pointName,label,role,unit}] or derived metric bindings [{source:\"derived_metric\",metricInstanceId,metricKey,entityId,label,unit}]. Optional binding fields: entityId/groupId, dependencyRole, defaultVisible. Use stat_value for one key current value; use bar_comparison for latest-value comparisons; use note with content/tone for board annotations."
+                "Widget definitions. Supported kinds: live_value_grid, stat_value, status_grid, fdd_attribution_analysis, timeseries_chart, bar_comparison, note. Use pointBindings with raw BMS bindings [{pointName,label,role,unit,description}] or derived metric bindings [{source:\"derived_metric\",metricInstanceId,metricKey,entityId,label,unit,description,fddParameters}]. Optional binding fields: entityId/groupId, dependencyRole, defaultVisible, description, fddParameters. Use status_grid for compact per-entity health/fault squares, fdd_attribution_analysis for 7-day fault-cause analysis text based on actual FDD outputs and input histories; for FDD attribution, include content with the exact equipment, problem input point, point expansion, FDD parameters used, evidence numbers such as zero/missing/flatline counts or fault-vs-normal averages, and the specific point-level next check. Use stat_value for one key current value, bar_comparison only for explicit latest-value comparisons, and note with content/tone for board annotations."
             },
             layout: {
               type: "array",
@@ -2891,7 +3016,7 @@ export function createGenericToolRegistry(
             sections: {
               type: "array",
               description:
-                "Optional section hints. If omitted or invalid, the tool generates Overview, Trends, Comparison when needed, and Notes only when note widgets exist."
+                "Optional section hints. If omitted or invalid, the tool generates Overview, Fault Cause Analysis, Chiller Trends, Comparison when needed, and Notes only when note widgets exist."
             },
             includeOverview: {
               type: "boolean",
