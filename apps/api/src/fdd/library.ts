@@ -1,18 +1,27 @@
 import type { SeedStore } from "../seed.js";
+import { importedEquipmentFddAlgorithms } from "./importedEquipmentLibrary.js";
+import { hasExecutableFddEvaluator } from "./runtimeRegistry.js";
 
 export type FddAlgorithmScope = "global_builtin" | "global_community";
-export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "sensor";
+export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "vav" | "sensor";
 export type FddMethod = "rule_based" | "bayesian_network" | "performance_indicator" | "statistical";
 export type FddDeployabilityStatus = "can_deploy" | "uncertain" | "cannot_deploy";
 export type FddTaskSource = "global_library" | "project_upload" | "buildinggpt_generated";
 export type FddSharingScope = "project_only" | "global_community";
 export type FddTaskStatus = "checking" | "ready" | "running" | "paused" | "cannot_deploy";
 export type FddCheckSource = "auto" | "manual";
-export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" | "load" | "status" | "pressure" | "humidity" | "position" | "speed" | "current" | "unknown";
+export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" | "load" | "status" | "pressure" | "humidity" | "position" | "speed" | "current" | "level" | "concentration" | "unknown";
+export type FddDefinitionStatus = "implementation_ready" | "requires_configuration" | "requires_review";
+export type FddDefinitionParameterResolution = "source_default" | "source_expression" | "site_required";
 export type FddUnitCompatibility = "match" | "convertible" | "mismatch" | "unknown";
 export type FddParameterType = "number" | "boolean" | "select";
 export type FddParameterValue = string | number | boolean;
 export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended" | "user_override";
+
+// Cached deployability checks are persisted in the project store. Bump this
+// contract whenever the evidence required for `can_deploy` changes so a check
+// produced by older, weaker validation cannot authorize a deployment.
+export const FDD_DEPLOYABILITY_POLICY_VERSION = "v2-observed-history";
 
 export interface FddRequiredPoint {
   slot: string;
@@ -23,10 +32,27 @@ export interface FddRequiredPoint {
   unitRoleDescription: string;
   acceptableUnits?: string[];
   keywords?: string[];
+  sourceSymbols?: string[];
+  sourceBrickClasses?: string[];
   historyRequirement?: {
     minDays: number;
     preferredDays: number;
   };
+}
+
+export interface FddDefinitionParameter {
+  symbol: string;
+  rawDefault?: string;
+  resolution: FddDefinitionParameterResolution;
+}
+
+export interface FddSourceDefinition {
+  ruleId: string;
+  sourceFile: string;
+  sha256: string;
+  requiredPointsRaw: string;
+  tunableParametersRaw: string;
+  brickClassesRaw: string;
 }
 
 export interface FddOutput {
@@ -80,6 +106,10 @@ export interface FddAlgorithm {
   sourcePaperId?: string;
   authorUserId?: string;
   deployableRuntime: boolean;
+  definitionStatus?: FddDefinitionStatus;
+  definitionIssues?: string[];
+  definitionParameters?: FddDefinitionParameter[];
+  sourceDefinition?: FddSourceDefinition;
 }
 
 export interface FddPointCandidate {
@@ -143,6 +173,7 @@ export interface FddDeployabilityCheck {
   algorithmId?: string;
   projectTaskId?: string;
   algorithmVersion: string;
+  checkPolicyVersion?: string;
   projectId: string;
   status: FddDeployabilityStatus;
   pointCandidates: FddPointCandidate[];
@@ -198,7 +229,7 @@ export interface FddAlgorithmCreateInput {
 
 const DEFAULT_HISTORY_REQUIREMENT = { minDays: 7, preferredDays: 30 };
 const BUILTIN_FDD_VERSION = "v13";
-const FDD_QUANTITY_KINDS: readonly FddQuantityKind[] = ["temperature", "flow_rate", "power", "energy", "load", "status", "pressure", "humidity", "position", "speed", "current", "unknown"];
+const FDD_QUANTITY_KINDS: readonly FddQuantityKind[] = ["temperature", "flow_rate", "power", "energy", "load", "status", "pressure", "humidity", "position", "speed", "current", "level", "concentration", "unknown"];
 
 function numberParameter(
   key: string,
@@ -275,6 +306,8 @@ function inferQuantityKind(slot: string, label: string, semantic: string, accept
   if (/\b(flow|flowrate|gpm|l\/s|m3\/h|cfm)\b/u.test(text)) return "flow_rate";
   if (/\b(pressure|delta p|differential pressure|dp|pa|psi)\b/u.test(text)) return "pressure";
   if (/\b(humidity|humid)\b/u.test(text)) return "humidity";
+  if (/\b(level|water level|height)\b/u.test(text)) return "level";
+  if (/\b(co2|carbon dioxide|concentration|ppm|ppb)\b/u.test(text)) return "concentration";
   if (/\b(damper|valve|position|command|%)\b/u.test(text)) return "position";
   if (/\b(speed|rpm)\b/u.test(text)) return "speed";
   return "unknown";
@@ -989,19 +1022,21 @@ function toAlgorithm(seed: AlgorithmSeed): FddAlgorithm {
     formula,
     logicSummary: seed.logic,
     ...(seed.sourcePaperId ? { sourcePaperId: seed.sourcePaperId } : {}),
-    deployableRuntime: seed.deployableRuntime ?? false
+    deployableRuntime: Boolean(seed.deployableRuntime) && hasExecutableFddEvaluator(seed.key)
   };
 }
 
 export function seedFddAlgorithms(): FddAlgorithm[] {
-  return BUILTIN_ALGORITHM_SEEDS.map(toAlgorithm);
+  return [...BUILTIN_ALGORITHM_SEEDS.map(toAlgorithm), ...importedEquipmentFddAlgorithms()];
 }
 
 export function ensureStoreFddLibrary(store: SeedStore): boolean {
   let changed = false;
   const builtins = seedFddAlgorithms();
   const communityAlgorithms = Array.isArray(store.fddAlgorithms)
-    ? store.fddAlgorithms.filter((algorithm) => algorithm.scope === "global_community")
+    ? store.fddAlgorithms
+      .filter((algorithm) => algorithm.scope === "global_community")
+      .map((algorithm) => algorithm.deployableRuntime ? { ...algorithm, deployableRuntime: false } : algorithm)
     : [];
   const nextAlgorithms = [...builtins, ...communityAlgorithms];
   if (!Array.isArray(store.fddAlgorithms) || JSON.stringify(store.fddAlgorithms) !== JSON.stringify(nextAlgorithms)) {
@@ -1011,6 +1046,23 @@ export function ensureStoreFddLibrary(store: SeedStore): boolean {
   if (!store.fddTasksByProject) {
     store.fddTasksByProject = {};
     changed = true;
+  } else {
+    for (const tasks of Object.values(store.fddTasksByProject)) {
+      for (const task of tasks) {
+        const runtimeReady = task.source === "global_library"
+          && task.algorithmSnapshot.scope === "global_builtin"
+          && hasExecutableFddEvaluator(task.algorithmSnapshot.algorithmKey);
+        if (task.algorithmSnapshot.deployableRuntime !== runtimeReady) {
+          task.algorithmSnapshot = { ...task.algorithmSnapshot, deployableRuntime: runtimeReady };
+          changed = true;
+        }
+        if (!runtimeReady && (task.status === "running" || task.status === "ready")) {
+          task.status = "cannot_deploy";
+          task.updatedAt = new Date().toISOString();
+          changed = true;
+        }
+      }
+    }
   }
   if (!store.fddChecksByProject) {
     store.fddChecksByProject = {};
@@ -1151,7 +1203,9 @@ export function evaluateFddDeployability(input: {
       });
     }
     const minDays = point.historyRequirement?.minDays ?? 0;
-    if (typeof best.historyDays === "number" && best.historyDays < minDays) {
+    if (minDays > 0 && typeof best.historyDays !== "number") {
+      historyIssues.push(`${point.label} history coverage is unverified; requires ${minDays}d.`);
+    } else if (typeof best.historyDays === "number" && best.historyDays < minDays) {
       historyIssues.push(`${point.label} has ${best.historyDays}d history; requires ${minDays}d.`);
     }
     selectedMappings.push({
@@ -1172,6 +1226,7 @@ export function evaluateFddDeployability(input: {
     algorithmId: input.algorithm.id,
     ...(input.projectTaskId ? { projectTaskId: input.projectTaskId } : {}),
     algorithmVersion: input.algorithm.version,
+    checkPolicyVersion: FDD_DEPLOYABILITY_POLICY_VERSION,
     projectId: input.projectId,
     status,
     pointCandidates: input.pointCandidates,
@@ -1229,7 +1284,7 @@ export function normalizeFddCreateInput(value: unknown): FddAlgorithmCreateInput
   const name = typeof record.name === "string" ? record.name.trim() : "";
   if (!name) return { error: "name is required." };
   const equipmentType = record.equipmentType;
-  if (equipmentType !== "ahu" && equipmentType !== "chiller" && equipmentType !== "pump" && equipmentType !== "cooling_tower" && equipmentType !== "fcu" && equipmentType !== "sensor") {
+  if (equipmentType !== "ahu" && equipmentType !== "chiller" && equipmentType !== "pump" && equipmentType !== "cooling_tower" && equipmentType !== "fcu" && equipmentType !== "vav" && equipmentType !== "sensor") {
     return { error: "equipmentType is invalid." };
   }
   const method = record.method;
@@ -1314,6 +1369,9 @@ export function createFddAlgorithmFromInput(input: FddAlgorithmCreateInput, user
     formula: input.formula,
     logicSummary: input.logicSummary,
     authorUserId: userId,
-    deployableRuntime: input.method === "rule_based" || input.method === "performance_indicator"
+    // Community formulas are specifications until an executable evaluator is
+    // explicitly registered. Treating every rule-based upload as runnable can
+    // create a "running" task that only emits no_data.
+    deployableRuntime: false
   };
 }

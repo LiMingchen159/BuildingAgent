@@ -264,13 +264,15 @@ export interface DerivedMetricAsset {
 }
 
 export type FddAlgorithmScope = "global_builtin" | "global_community";
-export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "sensor";
+export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "vav" | "sensor";
 export type FddMethod = "rule_based" | "bayesian_network" | "performance_indicator" | "statistical";
 export type FddDeployabilityStatus = "can_deploy" | "uncertain" | "cannot_deploy";
 export type FddTaskStatus = "checking" | "ready" | "running" | "paused" | "cannot_deploy";
 export type FddTaskSource = "global_library" | "project_upload" | "buildinggpt_generated";
 export type FddSharingScope = "project_only" | "global_community";
-export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" | "load" | "status" | "pressure" | "humidity" | "position" | "speed" | "current" | "unknown";
+export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" | "load" | "status" | "pressure" | "humidity" | "position" | "speed" | "current" | "level" | "concentration" | "unknown";
+export type FddDefinitionStatus = "implementation_ready" | "requires_configuration" | "requires_review";
+export type FddDefinitionParameterResolution = "source_default" | "source_expression" | "site_required";
 export type FddUnitCompatibility = "match" | "convertible" | "mismatch" | "unknown";
 export type FddParameterType = "number" | "boolean" | "select";
 export type FddParameterValue = string | number | boolean;
@@ -285,10 +287,27 @@ export interface FddRequiredPoint {
   unitRoleDescription: string;
   acceptableUnits?: string[];
   keywords?: string[];
+  sourceSymbols?: string[];
+  sourceBrickClasses?: string[];
   historyRequirement?: {
     minDays: number;
     preferredDays: number;
   };
+}
+
+export interface FddDefinitionParameter {
+  symbol: string;
+  rawDefault?: string;
+  resolution: FddDefinitionParameterResolution;
+}
+
+export interface FddSourceDefinition {
+  ruleId: string;
+  sourceFile: string;
+  sha256: string;
+  requiredPointsRaw: string;
+  tunableParametersRaw: string;
+  brickClassesRaw: string;
 }
 
 export interface FddOutput {
@@ -342,6 +361,10 @@ export interface FddAlgorithm {
   sourcePaperId?: string;
   authorUserId?: string;
   deployableRuntime: boolean;
+  definitionStatus?: FddDefinitionStatus;
+  definitionIssues?: string[];
+  definitionParameters?: FddDefinitionParameter[];
+  sourceDefinition?: FddSourceDefinition;
 }
 
 export interface FddPointCandidate {
@@ -405,6 +428,7 @@ export interface FddDeployabilityCheck {
   algorithmId?: string;
   projectTaskId?: string;
   algorithmVersion: string;
+  checkPolicyVersion?: string;
   projectId: string;
   status: FddDeployabilityStatus;
   pointCandidates: FddPointCandidate[];
@@ -440,6 +464,7 @@ export interface FddLibraryResponse {
   algorithms: FddAlgorithm[];
   checks: FddDeployabilityCheck[];
   tasks: ProjectFddTask[];
+  checksPending?: boolean;
   requestId: string;
 }
 
@@ -1971,12 +1996,47 @@ function parseFddRequiredPoint(value: unknown): FddRequiredPoint | null {
       : `${value.label} provides ${quantityKind.replace(/_/g, " ")} evidence for the FDD formula.`,
     ...(acceptableUnits ? { acceptableUnits } : {}),
     ...(Array.isArray(value.keywords) ? { keywords: value.keywords.filter((keyword): keyword is string => typeof keyword === "string") } : {}),
+    ...(Array.isArray(value.sourceSymbols) ? { sourceSymbols: value.sourceSymbols.filter((symbol): symbol is string => typeof symbol === "string") } : {}),
+    ...(Array.isArray(value.sourceBrickClasses) ? { sourceBrickClasses: value.sourceBrickClasses.filter((brickClass): brickClass is string => typeof brickClass === "string") } : {}),
     ...(historyRequirement ? { historyRequirement } : {})
   };
 }
 
+function parseFddDefinitionParameter(value: unknown): FddDefinitionParameter | null {
+  if (!isRecord(value)
+    || typeof value.symbol !== "string"
+    || (value.resolution !== "source_default" && value.resolution !== "source_expression" && value.resolution !== "site_required")) {
+    return null;
+  }
+  return {
+    symbol: value.symbol,
+    ...(typeof value.rawDefault === "string" ? { rawDefault: value.rawDefault } : {}),
+    resolution: value.resolution
+  };
+}
+
+function parseFddSourceDefinition(value: unknown): FddSourceDefinition | null {
+  if (!isRecord(value)
+    || typeof value.ruleId !== "string"
+    || typeof value.sourceFile !== "string"
+    || typeof value.sha256 !== "string"
+    || typeof value.requiredPointsRaw !== "string"
+    || typeof value.tunableParametersRaw !== "string"
+    || typeof value.brickClassesRaw !== "string") {
+    return null;
+  }
+  return {
+    ruleId: value.ruleId,
+    sourceFile: value.sourceFile,
+    sha256: value.sha256,
+    requiredPointsRaw: value.requiredPointsRaw,
+    tunableParametersRaw: value.tunableParametersRaw,
+    brickClassesRaw: value.brickClassesRaw
+  };
+}
+
 function parseFddQuantityKind(value: unknown): FddQuantityKind | null {
-  return value === "temperature" || value === "flow_rate" || value === "power" || value === "energy" || value === "load" || value === "status" || value === "pressure" || value === "humidity" || value === "position" || value === "speed" || value === "current" || value === "unknown"
+  return value === "temperature" || value === "flow_rate" || value === "power" || value === "energy" || value === "load" || value === "status" || value === "pressure" || value === "humidity" || value === "position" || value === "speed" || value === "current" || value === "level" || value === "concentration" || value === "unknown"
     ? value
     : null;
 }
@@ -1993,6 +2053,8 @@ function inferFddQuantityKind(slot: string, label: string, semantic: string, acc
   if (/\b(flow|flowrate|gpm|l\/s|m3\/h|cfm)\b/u.test(text)) return "flow_rate";
   if (/\b(pressure|delta p|differential pressure|\bdp\b|pa|kpa|psi|inh2o)\b/u.test(text)) return "pressure";
   if (/\b(humidity|humid|rh|g\/kg)\b/u.test(text)) return "humidity";
+  if (/\b(level|water level|height)\b/u.test(text)) return "level";
+  if (/\b(co2|carbon dioxide|concentration|ppm|ppb)\b/u.test(text)) return "concentration";
   if (/\b(damper|valve|position|command|%)\b/u.test(text)) return "position";
   if (/\b(speed|rpm|hz)\b/u.test(text)) return "speed";
   return "unknown";
@@ -2088,7 +2150,7 @@ function parseFddAlgorithm(value: unknown): FddAlgorithm | null {
     || typeof value.algorithmKey !== "string"
     || typeof value.version !== "string"
     || typeof value.name !== "string"
-    || (value.equipmentType !== "ahu" && value.equipmentType !== "chiller" && value.equipmentType !== "pump" && value.equipmentType !== "cooling_tower" && value.equipmentType !== "fcu" && value.equipmentType !== "sensor")
+    || (value.equipmentType !== "ahu" && value.equipmentType !== "chiller" && value.equipmentType !== "pump" && value.equipmentType !== "cooling_tower" && value.equipmentType !== "fcu" && value.equipmentType !== "vav" && value.equipmentType !== "sensor")
     || (value.method !== "rule_based" && value.method !== "bayesian_network" && value.method !== "performance_indicator" && value.method !== "statistical")
     || typeof value.faultType !== "string"
     || !Array.isArray(value.requiredPoints)
@@ -2102,7 +2164,15 @@ function parseFddAlgorithm(value: unknown): FddAlgorithm | null {
   const parameters = Array.isArray(value.parameters)
     ? value.parameters.map((entry) => parseFddParameterSpec(entry)).filter((entry): entry is FddParameterSpec => entry !== null)
     : [];
-  if (requiredPoints.length !== value.requiredPoints.length || outputs.length !== value.outputs.length || (Array.isArray(value.parameters) && parameters.length !== value.parameters.length)) return null;
+  const definitionParameters = Array.isArray(value.definitionParameters)
+    ? value.definitionParameters.map((entry) => parseFddDefinitionParameter(entry)).filter((entry): entry is FddDefinitionParameter => entry !== null)
+    : undefined;
+  const sourceDefinition = value.sourceDefinition === undefined ? undefined : parseFddSourceDefinition(value.sourceDefinition);
+  if (requiredPoints.length !== value.requiredPoints.length
+    || outputs.length !== value.outputs.length
+    || (Array.isArray(value.parameters) && parameters.length !== value.parameters.length)
+    || (Array.isArray(value.definitionParameters) && definitionParameters?.length !== value.definitionParameters.length)
+    || (value.sourceDefinition !== undefined && !sourceDefinition)) return null;
   const category = typeof value.categoryKey === "string" && typeof value.categoryLabel === "string"
     ? { categoryKey: value.categoryKey, categoryLabel: value.categoryLabel }
     : fallbackFddCategory(value.equipmentType, value.faultType);
@@ -2124,7 +2194,15 @@ function parseFddAlgorithm(value: unknown): FddAlgorithm | null {
     logicSummary: value.logicSummary,
     ...(typeof value.sourcePaperId === "string" ? { sourcePaperId: value.sourcePaperId } : {}),
     ...(typeof value.authorUserId === "string" ? { authorUserId: value.authorUserId } : {}),
-    deployableRuntime: value.deployableRuntime
+    deployableRuntime: value.deployableRuntime,
+    ...(value.definitionStatus === "implementation_ready" || value.definitionStatus === "requires_configuration" || value.definitionStatus === "requires_review"
+      ? { definitionStatus: value.definitionStatus }
+      : {}),
+    ...(Array.isArray(value.definitionIssues)
+      ? { definitionIssues: value.definitionIssues.filter((issue): issue is string => typeof issue === "string") }
+      : {}),
+    ...(definitionParameters ? { definitionParameters } : {}),
+    ...(sourceDefinition ? { sourceDefinition } : {})
   };
 }
 
@@ -2254,6 +2332,7 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
     ...(typeof value.algorithmId === "string" ? { algorithmId: value.algorithmId } : {}),
     ...(typeof value.projectTaskId === "string" ? { projectTaskId: value.projectTaskId } : {}),
     algorithmVersion: value.algorithmVersion,
+    ...(typeof value.checkPolicyVersion === "string" ? { checkPolicyVersion: value.checkPolicyVersion } : {}),
     projectId: value.projectId,
     status: value.status,
     pointCandidates,
@@ -2572,6 +2651,7 @@ export async function getFddLibrary(token: string, projectId: string): Promise<F
     algorithms: algorithms as FddAlgorithm[],
     checks: checks as FddDeployabilityCheck[],
     tasks: tasks as ProjectFddTask[],
+    ...(typeof payload.checksPending === "boolean" ? { checksPending: payload.checksPending } : {}),
     requestId: payload.requestId
   };
 }

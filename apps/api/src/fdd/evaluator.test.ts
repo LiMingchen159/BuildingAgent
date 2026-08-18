@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DerivedMetricInstance } from "../derivedMetrics.js";
 import { evaluateFddRuleSample, materializerSortedSeries, type MaterializerNumericPoint } from "./evaluator.js";
+import { executableFddAlgorithmKeys } from "./runtimeRegistry.js";
 
 const baseMs = Date.parse("2026-08-11T00:00:00.000Z");
 
@@ -48,6 +49,13 @@ function latestInputs(seriesByRole: Map<string, MaterializerNumericPoint[]>): Re
 }
 
 describe("FDD evaluator", () => {
+  it("has a non-fallback evaluator path for every registered runtime algorithm", () => {
+    for (const algorithmKey of executableFddAlgorithmKeys()) {
+      const evaluation = evaluateFddRuleSample(testInstance(algorithmKey, {}), {}, new Map(), baseMs, 60);
+      expect(evaluation.reason, algorithmKey).not.toBe("No executable FDD rule evaluator is available for this algorithm.");
+    }
+  });
+
   it("evaluates CH-51 with normalized heat-balance error", () => {
     const instance = testInstance("chiller_ch_51_heat_balance_sensor_consistency", {
       window_minutes: 10,

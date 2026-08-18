@@ -2699,6 +2699,7 @@ function fddEquipmentLabel(value: FddEquipmentType): string {
     pump: "Pump",
     cooling_tower: "Cooling Tower",
     fcu: "FCU",
+    vav: "VAV",
     sensor: "Sensor"
   };
   return labels[value];
@@ -2715,10 +2716,28 @@ function fddMethodLabel(value: FddMethod): string {
 }
 
 function fddDeployabilityLabel(status: FddDeployabilityStatus | undefined): string {
-  if (status === "can_deploy") return "Can deploy";
+  if (status === "can_deploy") return "Inputs matched";
   if (status === "uncertain") return "Uncertain";
   if (status === "cannot_deploy") return "Cannot deploy";
   return "Not checked";
+}
+
+function fddRuntimeLabel(algorithm: FddAlgorithm): string {
+  return algorithm.deployableRuntime ? "Runtime ready" : "Spec only";
+}
+
+function fddDefinitionLabel(algorithm: FddAlgorithm): string {
+  if (algorithm.definitionStatus === "requires_review") return "Needs review";
+  if (algorithm.definitionStatus === "requires_configuration") return "Needs thresholds";
+  if (algorithm.definitionStatus === "implementation_ready") return "Ready to implement";
+  return algorithm.deployableRuntime ? "Implemented" : "Not classified";
+}
+
+function fddDefinitionTone(algorithm: FddAlgorithm): "neutral" | "success" | "warning" | "danger" {
+  if (algorithm.definitionStatus === "requires_review") return "danger";
+  if (algorithm.definitionStatus === "requires_configuration") return "warning";
+  if (algorithm.definitionStatus === "implementation_ready") return "success";
+  return "neutral";
 }
 
 function fddDeployabilityTone(status: FddDeployabilityStatus | undefined): "neutral" | "success" | "warning" | "danger" {
@@ -2775,25 +2794,39 @@ function metricMetadataString(asset: DerivedMetricAsset, key: string): string | 
 }
 
 const CHILLER_DOC_RULE_KEY_PATTERN = /^chiller_ch_(0[1-9]|[1-4]\d|5[01])_/u;
+const IMPORTED_EQUIPMENT_RULE_KEY_PATTERN = /^(?:ahu|fcu|pump|cooling_tower|vav)_fdd_(?:0[1-9]|[1-3]\d|4[0-4])$/u;
 
-function isImportedChillerDocAlgorithm(algorithm: FddAlgorithm): boolean {
-  return algorithm.equipmentType === "chiller" && CHILLER_DOC_RULE_KEY_PATTERN.test(algorithm.algorithmKey);
+function isCuratedFddAlgorithm(algorithm: FddAlgorithm): boolean {
+  return (algorithm.equipmentType === "chiller" && CHILLER_DOC_RULE_KEY_PATTERN.test(algorithm.algorithmKey))
+    || (algorithm.sourcePaperId?.startsWith("docx:") === true && IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(algorithm.algorithmKey));
 }
 
-function chillerDocRuleNumber(algorithm: FddAlgorithm): number {
-  const match = algorithm.algorithmKey.match(/^chiller_ch_(\d{2})_/u);
-  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+function curatedFddRuleRank(algorithm: FddAlgorithm): number {
+  const equipmentRank: Record<FddEquipmentType, number> = {
+    chiller: 0,
+    ahu: 1,
+    vav: 2,
+    fcu: 3,
+    pump: 4,
+    cooling_tower: 5,
+    sensor: 6
+  };
+  const chillerMatch = algorithm.algorithmKey.match(/^chiller_ch_(\d{2})_/u);
+  const equipmentMatch = algorithm.algorithmKey.match(/_fdd_(\d{2})$/u);
+  const ruleNumber = Number(chillerMatch?.[1] ?? equipmentMatch?.[1] ?? 999);
+  return equipmentRank[algorithm.equipmentType] * 1000 + ruleNumber;
 }
 
-function isImportedChillerDocMetricAsset(asset: DerivedMetricAsset): boolean {
+function isCuratedFddMetricAsset(asset: DerivedMetricAsset): boolean {
   const metricKey = asset.instance.metricKey.toLowerCase();
   const algorithmKey = metricMetadataString(asset, "fddAlgorithmKey")?.toLowerCase();
   return CHILLER_DOC_RULE_KEY_PATTERN.test(metricKey)
-    || (algorithmKey ? CHILLER_DOC_RULE_KEY_PATTERN.test(algorithmKey) : false);
+    || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(metricKey)
+    || (algorithmKey ? CHILLER_DOC_RULE_KEY_PATTERN.test(algorithmKey) || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(algorithmKey) : false);
 }
 
 function isVisibleDerivedMetricAsset(asset: DerivedMetricAsset): boolean {
-  return derivedAssetKindLabel(asset) !== "FDD" || isImportedChillerDocMetricAsset(asset);
+  return derivedAssetKindLabel(asset) !== "FDD" || isCuratedFddMetricAsset(asset);
 }
 
 function dashboardBindingReferencesFdd(binding: DashboardPointBinding, metricByInstanceId: Map<string, DerivedMetricAsset>, metricsByKey: Map<string, DerivedMetricAsset[]>): boolean {
@@ -2803,22 +2836,23 @@ function dashboardBindingReferencesFdd(binding: DashboardPointBinding, metricByI
   }
   if (binding.metricKey) {
     const normalizedKey = binding.metricKey.toLowerCase();
-    if (CHILLER_DOC_RULE_KEY_PATTERN.test(normalizedKey)) return true;
+    if (CHILLER_DOC_RULE_KEY_PATTERN.test(normalizedKey) || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(normalizedKey)) return true;
     if (/\b(fdd|fd|fault|detection|diagnostic)\b/u.test(normalizedKey)) return true;
     return (metricsByKey.get(normalizedKey) ?? []).some((metric) => derivedAssetKindLabel(metric) === "FDD");
   }
   return false;
 }
 
-function dashboardBindingReferencesVisibleChRule(binding: DashboardPointBinding, metricByInstanceId: Map<string, DerivedMetricAsset>, metricsByKey: Map<string, DerivedMetricAsset[]>): boolean {
+function dashboardBindingReferencesVisibleCuratedFdd(binding: DashboardPointBinding, metricByInstanceId: Map<string, DerivedMetricAsset>, metricsByKey: Map<string, DerivedMetricAsset[]>): boolean {
   if (binding.metricInstanceId) {
     const metric = metricByInstanceId.get(binding.metricInstanceId);
-    if (metric) return isImportedChillerDocMetricAsset(metric);
+    if (metric) return isCuratedFddMetricAsset(metric);
   }
   if (binding.metricKey) {
     const normalizedKey = binding.metricKey.toLowerCase();
     return CHILLER_DOC_RULE_KEY_PATTERN.test(normalizedKey)
-      || (metricsByKey.get(normalizedKey) ?? []).some(isImportedChillerDocMetricAsset);
+      || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(normalizedKey)
+      || (metricsByKey.get(normalizedKey) ?? []).some(isCuratedFddMetricAsset);
   }
   return false;
 }
@@ -2847,7 +2881,7 @@ function isDashboardVisibleForCurrentFddScope(dashboard: DashboardRecord, metric
   for (const widget of dashboard.widgets) {
     const isFddWidget = widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison";
     const bindingHasFdd = widget.pointBindings.some((binding) => dashboardBindingReferencesFdd(binding, metricByInstanceId, metricsByKey));
-    const bindingHasVisibleChRule = widget.pointBindings.some((binding) => dashboardBindingReferencesVisibleChRule(binding, metricByInstanceId, metricsByKey));
+    const bindingHasVisibleChRule = widget.pointBindings.some((binding) => dashboardBindingReferencesVisibleCuratedFdd(binding, metricByInstanceId, metricsByKey));
     hasVisibleChRuleFdd = hasVisibleChRuleFdd || bindingHasVisibleChRule;
 
     if ((isFddWidget || bindingHasFdd) && !bindingHasVisibleChRule) {
@@ -3113,8 +3147,8 @@ function fddTaskMatchesAlgorithm(task: ProjectFddTask, algorithm: FddAlgorithm):
     || task.algorithmSnapshot.algorithmKey === algorithm.algorithmKey;
 }
 
-function isImportedChillerDocTask(task: ProjectFddTask): boolean {
-  return isImportedChillerDocAlgorithm(task.algorithmSnapshot);
+function isCuratedFddTask(task: ProjectFddTask): boolean {
+  return isCuratedFddAlgorithm(task.algorithmSnapshot);
 }
 
 function deployedFddTaskForAlgorithm(tasks: ProjectFddTask[], algorithm: FddAlgorithm): ProjectFddTask | undefined {
@@ -3535,7 +3569,7 @@ function FddTaskDetailPanel({
   const groupBackgroundStatus = metricGroup ? groupMaterializationStatus(metricGroup) : "Not deployed";
   const linkedDashboardIds = metricGroup ? linkedDashboardIdsForGroup(metricGroup) : new Set<string>();
   const linkedDashboards = dashboards.filter((dashboard) => linkedDashboardIds.has(dashboard.id));
-  const canDeploy = task.status !== "cannot_deploy";
+  const canDeploy = task.algorithmSnapshot.deployableRuntime && check?.status === "can_deploy";
   const editedCount = (task.parameterValues ?? []).filter((parameter) => parameter.source === "user_override").length;
   const isDeployed = Boolean(metricGroup?.metrics.length);
   const taskDeploymentProgress = deploymentProgress?.taskId === task.id ? deploymentProgress : null;
@@ -3571,6 +3605,7 @@ function FddTaskDetailPanel({
           <div className="fdd-task-header-badges">
             <Badge tone={fddTaskStatusTone(task.status)}>{fddTaskStatusLabel(task.status)}</Badge>
             <Badge tone={fddDeployabilityTone(check?.status)}>{fddDeployabilityLabel(check?.status)}</Badge>
+            <Badge tone={algorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(algorithm)}</Badge>
             <Button type="button" size="sm" variant="secondary" className="asset-danger-button" onClick={() => onDeleteTask(task.id)}>
               <Icon name="trash" />
               Delete
@@ -3646,9 +3681,9 @@ function FddTaskDetailPanel({
               <Icon name="activity" />
               Test with data
             </Button>
-            <Button type="button" loading={Boolean(taskDeploymentProgress)} disabled={!canDeploy} onClick={() => onDeployTask(task.id)}>
+            <Button type="button" loading={Boolean(taskDeploymentProgress)} disabled={!canDeploy} title={task.algorithmSnapshot.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented"} onClick={() => onDeployTask(task.id)}>
               {taskDeploymentProgress ? <span className="spinner" aria-hidden="true" /> : <Icon name="zap" />}
-              {taskDeploymentProgress ? fddDeploymentPhaseLabel(taskDeploymentProgress.phase) : "Deploy all"}
+              {taskDeploymentProgress ? fddDeploymentPhaseLabel(taskDeploymentProgress.phase) : task.algorithmSnapshot.deployableRuntime ? "Deploy all" : "Evaluator required"}
             </Button>
           </div>
           <div className="fdd-task-check-card">
@@ -3790,8 +3825,8 @@ function WorkspaceFddTaskList({
   return (
     <ul className="workspace-right-fdd-task-list" aria-label="Project FDD tasks">
       {tasks.map((task) => {
-        const canDeploy = task.status !== "cannot_deploy";
         const check = task.deployabilityCheck;
+        const canDeploy = task.algorithmSnapshot.deployableRuntime && check?.status === "can_deploy";
         const isActive = activeTaskId === task.id;
         return (
           <li key={task.id} className={`workspace-right-fdd-task-row${isActive ? " is-active" : ""}`}>
@@ -3814,7 +3849,7 @@ function WorkspaceFddTaskList({
                 <Icon name="activity" />
                 <span>Test</span>
               </button>
-              <button type="button" className="is-primary" title="Deploy" aria-label={`Deploy ${task.algorithmSnapshot.name}`} disabled={!canDeploy} onClick={(event) => { event.stopPropagation(); onDeployTask(task.id); }}>
+              <button type="button" className="is-primary" title={task.algorithmSnapshot.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented"} aria-label={`Deploy ${task.algorithmSnapshot.name}`} disabled={!canDeploy} onClick={(event) => { event.stopPropagation(); onDeployTask(task.id); }}>
                 <Icon name="zap" />
                 <span>Deploy</span>
               </button>
@@ -3848,9 +3883,9 @@ function FddLibraryPanel({
   const algorithms = library?.algorithms ?? [];
   const checks = library?.checks ?? [];
   const tasks = library?.tasks ?? [];
-  const importedChillerAlgorithms = algorithms.filter(isImportedChillerDocAlgorithm);
+  const curatedAlgorithms = algorithms.filter(isCuratedFddAlgorithm);
   const normalizedQuery = query.trim().toLowerCase();
-  const filteredAlgorithms = importedChillerAlgorithms.filter((algorithm) => {
+  const filteredAlgorithms = curatedAlgorithms.filter((algorithm) => {
     if (!normalizedQuery) return true;
     return [
       algorithm.name,
@@ -3858,12 +3893,14 @@ function FddLibraryPanel({
       algorithm.categoryLabel,
       fddEquipmentLabel(algorithm.equipmentType),
       fddMethodLabel(algorithm.method),
+      fddRuntimeLabel(algorithm),
+      fddDefinitionLabel(algorithm),
       algorithm.formula,
       algorithm.logicSummary
     ].join(" ").toLowerCase().includes(normalizedQuery);
   });
   const sortedAlgorithms = [...filteredAlgorithms].sort((left, right) => {
-    const ruleRank = chillerDocRuleNumber(left) - chillerDocRuleNumber(right);
+    const ruleRank = curatedFddRuleRank(left) - curatedFddRuleRank(right);
     return ruleRank || left.name.localeCompare(right.name);
   });
   const categorySectionsFor = (sectionAlgorithms: FddAlgorithm[]) => {
@@ -3877,29 +3914,33 @@ function FddLibraryPanel({
       .map((category) => ({
         ...category,
         algorithms: category.algorithms.sort((left, right) => {
-          const ruleRank = chillerDocRuleNumber(left) - chillerDocRuleNumber(right);
+          const ruleRank = curatedFddRuleRank(left) - curatedFddRuleRank(right);
           return ruleRank || left.name.localeCompare(right.name);
         })
       }))
       .sort((left, right) => {
-        const leftRank = Math.min(...left.algorithms.map(chillerDocRuleNumber));
-        const rightRank = Math.min(...right.algorithms.map(chillerDocRuleNumber));
+        const leftRank = Math.min(...left.algorithms.map(curatedFddRuleRank));
+        const rightRank = Math.min(...right.algorithms.map(curatedFddRuleRank));
         if (leftRank !== rightRank) return leftRank - rightRank;
         return left.label.localeCompare(right.label);
       });
   };
-  const chillerCategories = categorySectionsFor(sortedAlgorithms);
-  const canDeployCount = importedChillerAlgorithms.filter((algorithm) => latestFddCheckForAlgorithm(checks, algorithm)?.status === "can_deploy").length;
-  const deployedCount = importedChillerAlgorithms.filter((algorithm) => deployedFddTaskForAlgorithm(tasks, algorithm)).length;
-  const equipmentSections = sortedAlgorithms.length > 0
-    ? [{
-        id: "chiller" as FddEquipmentType,
-        label: "Chiller",
-        algorithms: sortedAlgorithms,
-        categories: chillerCategories
-      }]
-    : [];
-  const selectedAlgorithm = importedChillerAlgorithms.find((algorithm) => algorithm.id === selectedAlgorithmId) ?? null;
+  const equipmentOrder: FddEquipmentType[] = ["chiller", "ahu", "vav", "fcu", "pump", "cooling_tower"];
+  const equipmentSections = equipmentOrder.flatMap((equipmentType) => {
+    const equipmentAlgorithms = sortedAlgorithms.filter((algorithm) => algorithm.equipmentType === equipmentType);
+    return equipmentAlgorithms.length > 0
+      ? [{
+          id: equipmentType,
+          label: fddEquipmentLabel(equipmentType),
+          algorithms: equipmentAlgorithms,
+          categories: categorySectionsFor(equipmentAlgorithms)
+        }]
+      : [];
+  });
+  const categoryCount = new Set(curatedAlgorithms.map((algorithm) => algorithm.categoryKey)).size;
+  const runtimeReadyCount = curatedAlgorithms.filter((algorithm) => algorithm.deployableRuntime).length;
+  const specificationOnlyCount = curatedAlgorithms.length - runtimeReadyCount;
+  const selectedAlgorithm = curatedAlgorithms.find((algorithm) => algorithm.id === selectedAlgorithmId) ?? null;
   const selectedCheck = selectedAlgorithm ? latestFddCheckForAlgorithm(checks, selectedAlgorithm) : undefined;
   const selectedRequiredSlots = new Set(selectedAlgorithm?.requiredPoints.filter((point) => point.required).map((point) => point.slot) ?? []);
   const selectedRequiredMappings = (selectedCheck?.selectedMappings ?? []).filter((mapping) => selectedRequiredSlots.has(mapping.slot));
@@ -3930,66 +3971,66 @@ function FddLibraryPanel({
     <Surface className="fdd-library-page">
       <header className="fdd-library-header">
         <div>
-          <h2>Chiller FDD Library</h2>
-          <p>Document-imported chiller rules CH-01 through CH-51, grouped by fault category.</p>
+          <h2>FDD Algorithm Library</h2>
+          <p>Curated Chiller, AHU, VAV, FCU, Pump, and Cooling Tower rules, grouped by equipment and source fault category.</p>
         </div>
         <div className="fdd-library-header-actions">
           <label className="fdd-search">
             <Icon name="search" />
-            <Input value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Search CH-01 to CH-51" aria-label="Search CH-01 to CH-51" />
+            <Input value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Search rule, equipment, or category" aria-label="Search FDD algorithms" />
           </label>
         </div>
       </header>
 
-      <section className="fdd-chiller-overview" aria-label="Chiller FDD summary">
+      <section className="fdd-chiller-overview" aria-label="FDD library summary">
         <div>
-          <span>Visible rules</span>
-          <strong>{importedChillerAlgorithms.length}</strong>
-          <small>CH-01 to CH-51 only</small>
+          <span>Curated rules</span>
+          <strong>{curatedAlgorithms.length}</strong>
+          <small>6 equipment types</small>
         </div>
         <div>
           <span>Categories</span>
-          <strong>{chillerCategories.length}</strong>
+          <strong>{categoryCount}</strong>
           <small>document fault groups</small>
         </div>
         <div>
-          <span>Can deploy</span>
-          <strong>{canDeployCount}</strong>
-          <small>after project data check</small>
+          <span>Runtime ready</span>
+          <strong>{runtimeReadyCount}</strong>
+          <small>executable evaluators registered</small>
         </div>
         <div>
-          <span>Deployed</span>
-          <strong>{deployedCount}</strong>
-          <small>project runtime tasks</small>
+          <span>Spec only</span>
+          <strong>{specificationOnlyCount}</strong>
+          <small>catalogued, not executable</small>
         </div>
       </section>
 
-      <div className="fdd-equipment-nav fdd-category-nav" aria-label="Chiller FDD category sections">
-        {chillerCategories.map((category) => (
+      <div className="fdd-equipment-nav fdd-category-nav" aria-label="FDD equipment sections">
+        {equipmentSections.map((section) => (
           <button
-            key={category.key}
+            key={section.id}
             type="button"
-            onClick={() => document.getElementById(`fdd-category-${category.key}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            onClick={() => document.getElementById(`fdd-equipment-${section.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
-            {category.label}
-            <span>{category.algorithms.length}</span>
+            {section.label}
+            <span>{section.algorithms.length}</span>
           </button>
         ))}
       </div>
 
       <div className="fdd-library-sections">
         {equipmentSections.length === 0 ? (
-          <EmptyState title={loading ? "Loading CH rules" : "No matching CH rules"}>
-            {loading ? "CH-01 to CH-51 will appear here as soon as they load." : "Change the search query."}
+          <EmptyState title={loading ? "Loading FDD rules" : "No matching FDD rules"}>
+            {loading ? "Curated FDD rules will appear here as soon as they load." : "Change the search query."}
           </EmptyState>
         ) : equipmentSections.map((section) => (
           <section className="fdd-equipment-section" id={`fdd-equipment-${section.id}`} key={section.id}>
             <header className="fdd-equipment-section-header">
               <div>
-                <h3>CH-01 to CH-51</h3>
+                <h3>{section.label}</h3>
                 <p>{section.categories.length} categories · {section.algorithms.length} visible rules</p>
               </div>
-              <Badge tone="neutral">{importedChillerAlgorithms.length} CH rules</Badge>
+              <Badge tone="neutral">{section.algorithms.length} rules</Badge>
             </header>
             <div className="fdd-category-stack">
               {section.categories.map((category) => (
@@ -4008,7 +4049,9 @@ function FddLibraryPanel({
                           <th>Fault type</th>
                           <th>Method</th>
                           <th>Inputs</th>
-                          <th>Deployability</th>
+                          <th>Definition</th>
+                          <th>Data check</th>
+                          <th>Runtime</th>
                           <th>Project</th>
                           <th>Actions</th>
                         </tr>
@@ -4029,7 +4072,9 @@ function FddLibraryPanel({
                               <td>{algorithm.faultType}</td>
                               <td>{fddMethodLabel(algorithm.method)}</td>
                               <td>{algorithm.requiredPoints.filter((point) => point.required).length}</td>
+                              <td><Badge tone={fddDefinitionTone(algorithm)}>{fddDefinitionLabel(algorithm)}</Badge></td>
                               <td><Badge tone={fddDeployabilityTone(check?.status)}>{fddDeployabilityLabel(check?.status)}</Badge></td>
+                              <td><Badge tone={algorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(algorithm)}</Badge></td>
                               <td>
                                 {algorithmProgress ? (
                                   <Badge tone="info">{fddDeploymentPhaseLabel(algorithmProgress.phase)}</Badge>
@@ -4054,9 +4099,9 @@ function FddLibraryPanel({
                                   ) : (
                                     <button
                                       type="button"
-                                      title="Deploy"
+                                      title={algorithm.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented"}
                                       aria-label={`Deploy ${algorithm.name}`}
-                                      disabled={Boolean(deploymentProgress && !algorithmProgress) || !check || check.status === "cannot_deploy"}
+                                      disabled={!algorithm.deployableRuntime || Boolean(deploymentProgress && !algorithmProgress) || check?.status !== "can_deploy"}
                                       onClick={() => onDeployAlgorithm(algorithm.id)}
                                     >
                                       <Icon name="zap" />
@@ -4087,6 +4132,8 @@ function FddLibraryPanel({
               </div>
               <div className="fdd-detail-status-badges">
                 <Badge tone={fddDeployabilityTone(selectedCheck?.status)}>{fddDeployabilityLabel(selectedCheck?.status)}</Badge>
+                <Badge tone={selectedAlgorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(selectedAlgorithm)}</Badge>
+                <Badge tone={fddDefinitionTone(selectedAlgorithm)}>{fddDefinitionLabel(selectedAlgorithm)}</Badge>
                 {selectedDeploymentProgress ? (
                   <Badge tone="info">{fddDeploymentPhaseLabel(selectedDeploymentProgress.phase)}</Badge>
                 ) : selectedDeployedTask ? (
@@ -4100,8 +4147,18 @@ function FddLibraryPanel({
               <div><dt>Method</dt><dd>{fddMethodLabel(selectedAlgorithm.method)}</dd></div>
               <div><dt>Inputs</dt><dd>{selectedAlgorithm.requiredPoints.filter((point) => point.required).length}</dd></div>
               <div><dt>Version</dt><dd>{selectedAlgorithm.version}</dd></div>
+              <div><dt>Runtime</dt><dd>{fddRuntimeLabel(selectedAlgorithm)}</dd></div>
+              <div><dt>Definition</dt><dd>{fddDefinitionLabel(selectedAlgorithm)}</dd></div>
               <div><dt>Project</dt><dd>{selectedDeployedTask ? "Deployed" : selectedDeploymentProgress ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase) : "Not deployed"}</dd></div>
             </dl>
+            {selectedAlgorithm.definitionIssues?.length ? (
+              <section className="fdd-detail-section">
+                <h4>Definition Validation</h4>
+                <div className="fdd-issue-chip-list">
+                  {selectedAlgorithm.definitionIssues.map((issue) => <span className="fdd-issue-chip" key={issue}>{issue}</span>)}
+                </div>
+              </section>
+            ) : null}
             <section className="fdd-detail-section">
               <h4>Required Inputs</h4>
               <div className="fdd-input-chip-grid">
@@ -4110,10 +4167,25 @@ function FddLibraryPanel({
                     <strong>{point.label}</strong>
                     <span>{point.quantityKind.replace(/_/gu, " ")}{point.acceptableUnits?.length ? ` · ${point.acceptableUnits.join(", ")}` : ""}</span>
                     <small>{point.unitRoleDescription}</small>
+                    {point.sourceBrickClasses?.length ? <small>Brick: {point.sourceBrickClasses.join(" / ")}</small> : null}
                   </div>
                 ))}
               </div>
             </section>
+            {selectedAlgorithm.definitionParameters?.length ? (
+              <section className="fdd-detail-section">
+                <h4>Source Thresholds</h4>
+                <div className="fdd-input-chip-grid">
+                  {selectedAlgorithm.definitionParameters.map((parameter) => (
+                    <div className={`fdd-input-chip ${parameter.resolution === "site_required" ? "is-optional" : ""}`} key={`${parameter.symbol}:${parameter.resolution}`}>
+                      <strong>{parameter.symbol}</strong>
+                      <span>{parameter.rawDefault ?? "Site value required"}</span>
+                      <small>{parameter.resolution.replace(/_/gu, " ")}</small>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
             {selectedAlgorithm.requiredPoints.some((point) => !point.required) ? (
               <section className="fdd-detail-section">
                 <h4>Optional Inputs</h4>
@@ -4136,12 +4208,21 @@ function FddLibraryPanel({
               <h4>Logic Summary</h4>
               <p>{selectedAlgorithm.logicSummary}</p>
             </section>
+            {selectedAlgorithm.sourceDefinition ? (
+              <section className="fdd-detail-section">
+                <h4>Source Provenance</h4>
+                <p>{selectedAlgorithm.sourceDefinition.sourceFile} · {selectedAlgorithm.sourceDefinition.ruleId} · SHA-256 {selectedAlgorithm.sourceDefinition.sha256.slice(0, 12)}…</p>
+                <p><strong>Required points:</strong> {selectedAlgorithm.sourceDefinition.requiredPointsRaw}</p>
+                <p><strong>Tunable parameters:</strong> {selectedAlgorithm.sourceDefinition.tunableParametersRaw}</p>
+              </section>
+            ) : null}
             {selectedCheck ? (
               <section className="fdd-detail-section">
                 <div className="fdd-project-check-head">
-                  <h4>Project Check</h4>
+                  <h4>Project Point Check</h4>
                   <span>{formatFriendlyDateTime(selectedCheck.checkedAt)} · {fddCheckWorkflowLabel(selectedCheck)}{selectedCheck.exampleEntityKey ? ` · Entity ${selectedCheck.exampleEntityKey}` : ""}</span>
                 </div>
+                <p className="kpi-muted">Point matching includes an observed first-to-latest history-span check. It does not prove sample continuity, engineering-unit conversion, or evaluator execution.</p>
                 {selectedCheck.missingPoints.length > 0 || selectedCheck.historyIssues.length > 0 ? (
                   <div className="fdd-issue-chip-list">
                     {[...selectedCheck.missingPoints, ...selectedCheck.historyIssues].map((issue) => (
@@ -4201,7 +4282,7 @@ function FddLibraryPanel({
               <Button
                 type="button"
                 loading={Boolean(selectedDeploymentProgress)}
-                disabled={Boolean(deploymentProgress && !selectedDeploymentProgress) || (!selectedDeployedTask && (selectedCheck?.status === "cannot_deploy" || !selectedCheck))}
+                disabled={!selectedAlgorithm.deployableRuntime || Boolean(deploymentProgress && !selectedDeploymentProgress) || (!selectedDeployedTask && selectedCheck?.status !== "can_deploy")}
                 onClick={() => {
                   if (selectedDeployedTask) {
                     onOpenTask(selectedDeployedTask.id);
@@ -4211,7 +4292,13 @@ function FddLibraryPanel({
                 }}
               >
                 {selectedDeploymentProgress ? <span className="spinner" aria-hidden="true" /> : <Icon name={selectedDeployedTask ? "file-search" : "zap"} />}
-                {selectedDeploymentProgress ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase) : selectedDeployedTask ? "Open task" : "Deploy"}
+                {selectedDeploymentProgress
+                  ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase)
+                  : selectedDeployedTask
+                    ? "Open task"
+                    : selectedAlgorithm.deployableRuntime
+                      ? "Deploy"
+                      : "Evaluator required"}
               </Button>
             </div>
           </article>
@@ -4436,7 +4523,7 @@ function WorkspaceRightPanel({
   const assetGroups = groupDerivedMetricAssets(visibleDerivedMetrics);
   const fddGroups = assetGroups.filter((group) =>
     derivedAssetKindLabel(group.representative) === "FDD"
-    && group.metrics.some(isImportedChillerDocMetricAsset)
+    && group.metrics.some(isCuratedFddMetricAsset)
   );
   const kpiGroups = assetGroups.filter((group) => derivedAssetKindLabel(group.representative) === "KPI");
   const taskCount = fddGroups.length;
@@ -4724,7 +4811,7 @@ function Workspace({
     { id: "dashboards", label: "Dashboards" },
     { id: "reports", label: "Auto Report" },
     { id: "kpis", label: "KPI" },
-    { id: "fdd-library", label: "Chiller FDD" },
+    { id: "fdd-library", label: "FDD Library" },
     { id: "registry", label: "Platform Registry" },
     { id: "gateways", label: "Gateways" },
     { id: "building", label: "Building Domain" }
@@ -4732,8 +4819,8 @@ function Workspace({
 
   const [leftOpen, setLeftOpen] = useState(project !== null);
   const [rightOpen, setRightOpen] = useState(false);
-  const activeFddTask = useMemo(() => fddTasks.find((task) => task.id === activeFddTaskId && isImportedChillerDocTask(task)) ?? null, [fddTasks, activeFddTaskId]);
-  const activeChillerFddTaskId = activeFddTask ? activeFddTaskId : null;
+  const activeFddTask = useMemo(() => fddTasks.find((task) => task.id === activeFddTaskId && isCuratedFddTask(task)) ?? null, [fddTasks, activeFddTaskId]);
+  const visibleActiveFddTaskId = activeFddTask ? activeFddTaskId : null;
   const activeFddTaskMetricGroup = useMemo(() => fddMetricGroupForTask(activeFddTask, derivedMetrics), [activeFddTask, derivedMetrics]);
   const centerContentRef = useRef<HTMLDivElement | null>(null);
   const activeCenterViewKey = [
@@ -4865,7 +4952,7 @@ function Workspace({
         {activeTab === "fdd-tasks" ? (
           <FddTaskDetailPanel
             task={activeFddTask}
-            activeTaskId={activeChillerFddTaskId}
+            activeTaskId={visibleActiveFddTaskId}
             metricGroup={activeFddTaskMetricGroup}
             dashboards={dashboards}
             deploymentProgress={fddDeploymentProgress}
@@ -4993,7 +5080,7 @@ function Workspace({
             derivedMetrics={project ? derivedMetrics : []}
             activeDashboardId={activeDashboard?.id ?? null}
             activeMetricId={activeMetricId}
-            activeFddTaskId={activeChillerFddTaskId}
+            activeFddTaskId={visibleActiveFddTaskId}
             disabled={!project}
             onOpenDashboard={onOpenDashboard}
             onOpenMetric={onOpenMetric}
@@ -5049,8 +5136,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
   const [pathnameProjectId, setPathnameProjectId] = useState<string | null>(() => parseWorkspacePath(window.location.pathname)?.projectId ?? null);
   const [locationSearch, setLocationSearch] = useState(() => window.location.search);
-  const fddLibraryHasFullChillerImport = fddLibrary?.algorithms.some((algorithm) => algorithm.algorithmKey === "chiller_ch_51_heat_balance_sensor_consistency") ?? false;
-  const visibleFddTasks = useMemo(() => fddTasks.filter(isImportedChillerDocTask), [fddTasks]);
+  const fddLibraryHasFullCuratedImport = [
+    "chiller_ch_51_heat_balance_sensor_consistency",
+    "ahu_fdd_44",
+    "vav_fdd_17",
+    "fcu_fdd_20",
+    "pump_fdd_18",
+    "cooling_tower_fdd_12"
+  ].every((algorithmKey) => fddLibrary?.algorithms.some((algorithm) => algorithm.algorithmKey === algorithmKey)) ?? false;
+  const visibleFddTasks = useMemo(() => fddTasks.filter(isCuratedFddTask), [fddTasks]);
   const [banner, setBanner] = useState<BannerState | null>(null);
   const [busy, setBusy] = useState(false);
   const [fddDeploymentProgress, setFddDeploymentProgress] = useState<FddDeploymentProgress | null>(null);
@@ -5819,7 +5913,7 @@ export default function App() {
 
   useEffect(() => {
     if (!token || !selectedProject || activeTab !== "fdd-library") return;
-    if (fddLibrary?.projectId === selectedProject.id && fddLibraryHasFullChillerImport) return;
+    if (fddLibrary?.projectId === selectedProject.id && fddLibraryHasFullCuratedImport) return;
     let cancelled = false;
     const projectId = selectedProject.id;
     async function hydrateFddLibrary() {
@@ -5846,7 +5940,35 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, fddLibrary?.projectId, fddLibraryHasFullChillerImport, selectedProject?.id ?? null, token]);
+  }, [activeTab, fddLibrary?.projectId, fddLibraryHasFullCuratedImport, selectedProject?.id ?? null, token]);
+
+  useEffect(() => {
+    if (!token || !selectedProject || activeTab !== "fdd-library" || !fddLibrary?.checksPending) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    const projectId = selectedProject.id;
+    async function pollAutomaticFddChecks() {
+      try {
+        const response = await getFddLibrary(token!, projectId);
+        if (cancelled) return;
+        setFddLibrary(response);
+        setFddTasks(response.tasks);
+        if (response.checksPending) {
+          timer = window.setTimeout(() => void pollAutomaticFddChecks(), 2_000);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        if (isAuthFailure(error)) {
+          clearAuth(errorBanner(error, "Session expired"));
+        }
+      }
+    }
+    timer = window.setTimeout(() => void pollAutomaticFddChecks(), 1_500);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [activeTab, fddLibrary?.checksPending, selectedProject?.id ?? null, token]);
 
   async function handleLogin(email: string, password: string) {
     setBusy(true);
@@ -6891,7 +7013,7 @@ export default function App() {
   function handleOpenFddTask(taskId: string) {
     if (!selectedProject) return;
     const task = fddTasks.find((entry) => entry.id === taskId);
-    if (task && !isImportedChillerDocTask(task)) return;
+    if (task && !isCuratedFddTask(task)) return;
     applyWorkspacePath(selectedProject.id, "fdd-tasks", null, null, taskId);
     setBanner(null);
   }
@@ -7018,7 +7140,7 @@ export default function App() {
   async function handleCreateProjectFdd() {
     if (!token || !selectedProject) return;
     const equipmentType: FddEquipmentType = "chiller";
-    const name = window.prompt("Chiller FDD algorithm name", "Custom Chiller FDD detection")?.trim();
+    const name = window.prompt("FDD algorithm name", "Custom FDD detection")?.trim();
     if (!name) return;
     const faultType = window.prompt("Chiller fault type", "Custom chiller fault")?.trim() || "Custom chiller fault";
     const formula = window.prompt("Formula", "fault = evaluate(required_points, thresholds, window)")?.trim() || "fault = evaluate(required_points, thresholds, window)";

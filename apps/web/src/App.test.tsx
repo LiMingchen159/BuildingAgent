@@ -1503,10 +1503,10 @@ describe("BuildingGPT Web flow", () => {
     expect(screen.getByRole("button", { name: /other conversation dashboard/i })).toBeInTheDocument();
   });
 
-  it("limits the visible FDD frontend to imported CH-01 through CH-51 rules", async () => {
+  it("shows curated FDD rules across six equipment types and blocks spec-only deployment", async () => {
     const project = alphaProject;
     const now = "2026-08-11T00:00:00.000Z";
-    const fddAlgorithm = (algorithmKey: string, name: string, equipmentType = "chiller") => ({
+    const fddAlgorithm = (algorithmKey: string, name: string, equipmentType = "chiller", sourcePaperId?: string, deployableRuntime = true) => ({
       id: `fddalg_${algorithmKey}`,
       scope: "global_builtin",
       algorithmKey,
@@ -1529,12 +1529,19 @@ describe("BuildingGPT Web flow", () => {
       parameters: [],
       formula: "fault = false",
       logicSummary: `${name} logic`,
-      deployableRuntime: true
+      ...(sourcePaperId ? { sourcePaperId } : {}),
+      deployableRuntime,
+      ...(deployableRuntime ? {} : { definitionStatus: "implementation_ready" })
     });
     const ch01 = fddAlgorithm("chiller_ch_01_commanded_chiller_fails_to_start", "CH-01 Commanded Chiller Fails to Start");
     const ch51 = fddAlgorithm("chiller_ch_51_heat_balance_sensor_consistency", "CH-51 Heat Balance Sensor Consistency Fault");
     const oldChiller = fddAlgorithm("chiller_low_cop_detection", "Chiller Low COP Detection");
     const oldAhu = fddAlgorithm("ahu_supply_air_flow_sensor_fault", "AHU Supply Air Flow Sensor Fault", "ahu");
+    const ahu01 = fddAlgorithm("ahu_fdd_01", "AHU-01 AHU启动失败", "ahu", "docx:AHU_FDD_Library.docx:sha", false);
+    const vav01 = fddAlgorithm("vav_fdd_01", "VAV-01 区域温度过高", "vav", "docx:VAV_Box_FDD_Library.docx:sha", false);
+    const fcu01 = fddAlgorithm("fcu_fdd_01", "FCU-01 FCU有命令但未运行", "fcu", "docx:FCU_FDD_Library.docx:sha", false);
+    const pump01 = fddAlgorithm("pump_fdd_01", "PMP-01 水泵有命令但未运行", "pump", "docx:Pump_FDD_Library.docx:sha", false);
+    const ct01 = fddAlgorithm("cooling_tower_fdd_01", "CT-01 冷却塔有命令但未运行", "cooling_tower", "docx:Cooling_Tower_FDD_Library.docx:sha", false);
     const oldTask = {
       id: "fddtask_old",
       projectId: project.id,
@@ -1583,7 +1590,7 @@ describe("BuildingGPT Web flow", () => {
       if (url === `/api/projects/${project.id}/fdd-library`) {
         return jsonResponse({
           projectId: project.id,
-          algorithms: [oldAhu, oldChiller, ch51, ch01],
+          algorithms: [oldAhu, oldChiller, ct01, pump01, fcu01, vav01, ahu01, ch51, ch01],
           checks: [],
           tasks: [oldTask],
           requestId: "req_fdd_library"
@@ -1599,6 +1606,13 @@ describe("BuildingGPT Web flow", () => {
 
     expect((await screen.findAllByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i })).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /AHU-01 AHU启动失败/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /VAV-01 区域温度过高/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /FCU-01 FCU有命令但未运行/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /PMP-01 水泵有命令但未运行/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /CT-01 冷却塔有命令但未运行/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Deploy VAV-01 区域温度过高/i })).toBeDisabled();
+    expect(screen.getByText("FDD Algorithm Library")).toBeInTheDocument();
     expect(screen.queryByText("Chiller Low COP Detection")).not.toBeInTheDocument();
     expect(screen.queryByText("AHU Supply Air Flow Sensor Fault")).not.toBeInTheDocument();
     expect(screen.queryByText("Chiller Low COP Detection Dashboard")).not.toBeInTheDocument();

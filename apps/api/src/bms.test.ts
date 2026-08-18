@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { DerivedMetricStore } from "./derivedMetrics.js";
+import { ensureStoreFddLibrary, evaluateFddDeployability, type FddPointCandidate, type ProjectFddTask } from "./fddLibrary.js";
 import { buildServer } from "./server.js";
 import { createSeedStore } from "./seed.js";
 
@@ -310,6 +315,392 @@ describe("BMS API contract", () => {
     expect(response.json().checks.some((check: { historyIssues?: string[] }) =>
       check.historyIssues?.includes("No BMS source is configured for this project.")
     )).toBe(true);
+  });
+
+  it("allows catalog checks but rejects deployment for specification-only DOCX algorithms", async () => {
+    const store = createSeedStore();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ total: 0, items: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    const app = buildServer({ store, fetch: fetchMock as typeof fetch });
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer() });
+
+    const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "vav_fdd_01");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+
+    const checked = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_alpha/fdd-library/${algorithm.id}/test`,
+      headers: bearer()
+    });
+    expect(checked.statusCode).toBe(200);
+    expect(checked.json().algorithm).toMatchObject({ algorithmKey: "vav_fdd_01", deployableRuntime: false });
+
+    const beforeTasks = store.fddTasksByProject?.project_alpha?.length ?? 0;
+    const deployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_alpha/fdd-library/${algorithm.id}/deploy`,
+      headers: bearer()
+    });
+    expect(deployed.statusCode).toBe(422);
+    expect(deployed.json().error).toMatchObject({ code: "fdd_runtime_not_supported" });
+    expect(store.fddTasksByProject?.project_alpha?.length ?? 0).toBe(beforeTasks);
+  });
+
+  it("keeps uploaded specifications non-runnable through create, test, and deploy", async () => {
+    const store = createSeedStore();
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.includes("/api/v1/points?")) {
+        return new Response(JSON.stringify({
+          total: 1,
+          items: [{
+            id: 501,
+            name: "VAV_01_Zone_Temperature",
+            object_ref: "//VAV/01/ZoneTemperature",
+            description: "VAV zone air temperature sensor",
+            unit: "degC"
+          }]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      const to = new URL(href).searchParams.get("to");
+      const ts = to ? "2023-01-01T00:00:00.000Z" : "2023-05-10T00:00:00.000Z";
+      return new Response(JSON.stringify({
+        total: 100,
+        items: [{ ts, name: "VAV_01_Zone_Temperature", object_ref: "//VAV/01/ZoneTemperature", value_num: 23.5 }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const app = buildServer({
+      store,
+      env: { BMS_DATABASE_API_URL: "http://collector.test" },
+      fetch: fetchMock as typeof fetch
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer() });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/fdd-tasks",
+      headers: bearer(),
+      payload: {
+        name: "Uploaded VAV temperature specification",
+        equipmentType: "vav",
+        faultType: "zone temperature",
+        method: "rule_based",
+        sharingScope: "project_only",
+        formula: "fault = zone_temp > zone_temp_setpoint + threshold",
+        logicSummary: "Uploaded specification without a registered evaluator.",
+        requiredPoints: [
+          { slot: "zone_temp", label: "Zone temperature", semantic: "Zone air temperature", required: true }
+        ]
+      }
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().task).toMatchObject({ status: "cannot_deploy", algorithmSnapshot: { deployableRuntime: false } });
+    const taskId = created.json().task.id as string;
+
+    const checked = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/test`,
+      headers: bearer()
+    });
+    expect(checked.statusCode).toBe(200);
+    expect(checked.json().task.status).toBe("cannot_deploy");
+    expect(checked.json().task.deployabilityCheck.pointCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pointName: "VAV_01_Zone_Temperature", historyDays: expect.any(Number) })
+    ]));
+    expect(checked.json().task.deployabilityCheck.historyIssues).not.toContain(expect.stringContaining("history coverage is unverified"));
+    const historyProbeUrls = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .filter((href) => href.includes("/api/v1/readings?"));
+    expect(historyProbeUrls.length).toBeGreaterThanOrEqual(2);
+    expect(historyProbeUrls.every((href) => new URL(href).searchParams.get("order") === "desc")).toBe(true);
+    expect(historyProbeUrls.some((href) => new URL(href).searchParams.has("to"))).toBe(true);
+
+    const deployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/deploy`,
+      headers: bearer()
+    });
+    expect(deployed.statusCode).toBe(422);
+    expect(deployed.json().error).toMatchObject({ code: "fdd_runtime_not_supported" });
+  });
+
+  it("rejects cached deployability checks created before observed-history validation", async () => {
+    const store = createSeedStore();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ total: 0, items: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    const app = buildServer({
+      store,
+      env: { BMS_DATABASE_API_URL: "http://collector.test" },
+      fetch: fetchMock as typeof fetch
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer() });
+
+    const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_low_cop_detection");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+
+    const checked = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers: bearer()
+    });
+    expect(checked.statusCode).toBe(200);
+    expect(checked.json().check).toMatchObject({
+      status: "cannot_deploy",
+      checkPolicyVersion: "v2-observed-history"
+    });
+
+    const legacyCheck = store.fddChecksByProject?.project_element?.[0];
+    expect(legacyCheck).toBeTruthy();
+    if (!legacyCheck) return;
+    delete legacyCheck.checkPolicyVersion;
+    legacyCheck.status = "can_deploy";
+    legacyCheck.missingPoints = [];
+    legacyCheck.historyIssues = [];
+    legacyCheck.deployableEntities = [];
+    legacyCheck.checkedAt = "2026-01-01T00:00:00.000Z";
+
+    const deployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers: bearer()
+    });
+    expect(deployed.statusCode).toBe(422);
+    expect(store.fddChecksByProject?.project_element?.[0]).not.toBe(legacyCheck);
+    expect(store.fddChecksByProject?.project_element?.[0]).toMatchObject({
+      status: "cannot_deploy",
+      checkPolicyVersion: "v2-observed-history"
+    });
+
+    const staleCheck = store.fddChecksByProject?.project_element?.[0];
+    expect(staleCheck).toBeTruthy();
+    if (!staleCheck) return;
+    staleCheck.status = "can_deploy";
+    staleCheck.checkedAt = "2026-01-01T00:00:00.000Z";
+    staleCheck.missingPoints = [];
+    staleCheck.historyIssues = [];
+    staleCheck.deployableEntities = [];
+    const staleDeploy = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers: bearer()
+    });
+    expect(staleDeploy.statusCode).toBe(422);
+    expect(store.fddChecksByProject?.project_element?.[0]?.checkedAt).not.toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("pauses legacy running FDD materializations until policy-v2 revalidation", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-policy-migration-"));
+    const env = {
+      BUILDING_AGENT_DATA_DIR: dataDir,
+      DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+    };
+    const store = createSeedStore();
+    ensureStoreFddLibrary(store);
+    const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_low_cop_detection");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+
+    const candidates = algorithm.requiredPoints.filter((point) => point.required).map((point): FddPointCandidate => ({
+      slot: point.slot,
+      pointName: `CHILLER_01_${point.slot}`,
+      entityKey: "CHILLER_01",
+      unitCompatibility: "match",
+      dimensionReason: "Legacy fixture dimension match.",
+      confidence: 0.95,
+      historyDays: 30,
+      reason: "Legacy fixture"
+    }));
+    const check = evaluateFddDeployability({
+      algorithm,
+      projectId: "project_element",
+      source: "auto",
+      projectDataSignature: "legacy-signature",
+      pointCandidates: candidates,
+      exampleEntityKey: "CHILLER_01",
+      deployableEntities: [{
+        entityKey: "CHILLER_01",
+        status: "can_deploy",
+        selectedMappings: candidates.map((candidate) => ({ slot: candidate.slot, pointName: candidate.pointName })),
+        ambiguousInputs: [],
+        missingPoints: [],
+        historyIssues: [],
+        confidence: 0.95
+      }]
+    });
+    delete check.checkPolicyVersion;
+    const task: ProjectFddTask = {
+      id: "fddtask_legacy_running",
+      projectId: "project_element",
+      source: "global_library",
+      sharingScope: "global_community",
+      globalAlgorithmId: algorithm.id,
+      algorithmSnapshot: { ...algorithm },
+      status: "running",
+      deployabilityCheck: check,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    store.fddTasksByProject ??= {};
+    store.fddTasksByProject.project_element = [task];
+
+    const metrics = new DerivedMetricStore(dataDir);
+    const instance = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: algorithm.algorithmKey,
+      entityId: "CHILLER_01",
+      displayName: "Legacy running FDD",
+      metricType: "fdd",
+      formulaVersion: algorithm.version,
+      formula: algorithm.formula,
+      metadata: { fddTaskId: task.id, fddAlgorithmId: algorithm.id },
+      dependencies: [{ role: "chiller_status", sourceId: "CHILLER_01_STATUS", pointName: "CHILLER_01_STATUS" }]
+    }).instance;
+    metrics.configureMaterialization({
+      instanceId: instance.instanceId,
+      enabled: true,
+      formulaKind: "fdd_rule",
+      status: "active"
+    });
+
+    const app = buildServer({ store, env });
+    expect(store.fddTasksByProject.project_element?.[0]?.status).toBe("checking");
+    const migratedMetrics = new DerivedMetricStore(dataDir);
+    expect(migratedMetrics.readMaterialization(instance.instanceId)).toMatchObject({
+      enabled: false,
+      status: "authorization_required",
+      lastError: "fdd_deployability_policy_revalidation_required"
+    });
+    await app.close();
+  });
+
+  it("keeps a current policy-v2 FDD authorization across source reconstruction", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-policy-restart-"));
+    const env = {
+      BUILDING_AGENT_DATA_DIR: dataDir,
+      DERIVED_METRIC_MATERIALIZER_DISABLED: "1",
+      BMS_DATABASE_API_URL: "http://collector.test"
+    };
+    const store = createSeedStore();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ total: 0, items: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    const firstApp = buildServer({ store, env, fetch: fetchMock as typeof fetch });
+    await firstApp.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer() });
+    const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_low_cop_detection");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+    await firstApp.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers: bearer()
+    });
+    const check = store.fddChecksByProject?.project_element?.[0];
+    expect(check?.checkPolicyVersion).toBe("v2-observed-history");
+    if (!check) return;
+    check.status = "can_deploy";
+    check.missingPoints = [];
+    check.historyIssues = [];
+    check.deployableEntities = [{
+      entityKey: "CHILLER_01",
+      status: "can_deploy",
+      selectedMappings: [],
+      ambiguousInputs: [],
+      missingPoints: [],
+      historyIssues: [],
+      confidence: 1
+    }];
+    const task: ProjectFddTask = {
+      id: "fddtask_policy_v2_restart",
+      projectId: "project_element",
+      source: "global_library",
+      sharingScope: "global_community",
+      globalAlgorithmId: algorithm.id,
+      algorithmSnapshot: { ...algorithm },
+      status: "running",
+      deployabilityCheck: check,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    store.fddTasksByProject ??= {};
+    store.fddTasksByProject.project_element = [task];
+    const metrics = new DerivedMetricStore(dataDir);
+    const instance = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: algorithm.algorithmKey,
+      entityId: "CHILLER_01",
+      metricType: "fdd",
+      formula: algorithm.formula,
+      metadata: { fddTaskId: task.id, fddAlgorithmId: algorithm.id },
+      dependencies: [{ role: "chiller_status", sourceId: "CHILLER_01_STATUS" }]
+    }).instance;
+    metrics.configureMaterialization({ instanceId: instance.instanceId, enabled: true, formulaKind: "fdd_rule" });
+    await firstApp.close();
+
+    const restartedApp = buildServer({ store, env, fetch: fetchMock as typeof fetch });
+    expect(store.fddTasksByProject.project_element?.[0]?.status).toBe("running");
+    expect(new DerivedMetricStore(dataDir).readMaterialization(instance.instanceId)?.enabled).toBe(true);
+    await restartedApp.close();
+  });
+
+  it("defers source-signature invalidation while a post-start source is absent", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-policy-bootstrap-"));
+    const env = {
+      BUILDING_AGENT_DATA_DIR: dataDir,
+      DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+    };
+    const store = createSeedStore();
+    ensureStoreFddLibrary(store);
+    const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_low_cop_detection");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+    const check = evaluateFddDeployability({
+      algorithm,
+      projectId: "project_alpha",
+      source: "auto",
+      projectDataSignature: "signature-from-restored-source",
+      pointCandidates: [],
+      deployableEntities: []
+    });
+    check.status = "can_deploy";
+    check.missingPoints = [];
+    check.historyIssues = [];
+    const task: ProjectFddTask = {
+      id: "fddtask_source_bootstrap",
+      projectId: "project_alpha",
+      source: "global_library",
+      sharingScope: "global_community",
+      globalAlgorithmId: algorithm.id,
+      algorithmSnapshot: { ...algorithm },
+      status: "running",
+      deployabilityCheck: check,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    store.fddTasksByProject ??= {};
+    store.fddTasksByProject.project_alpha = [task];
+    const metrics = new DerivedMetricStore(dataDir);
+    const instance = metrics.registerMetric({
+      projectId: "project_alpha",
+      metricKey: algorithm.algorithmKey,
+      entityId: "CHILLER_01",
+      metricType: "fdd",
+      formula: algorithm.formula,
+      metadata: { fddTaskId: task.id, fddAlgorithmId: algorithm.id },
+      dependencies: [{ role: "chiller_status", sourceId: "CHILLER_01_STATUS" }]
+    }).instance;
+    metrics.configureMaterialization({ instanceId: instance.instanceId, enabled: true, formulaKind: "fdd_rule" });
+
+    const app = buildServer({ store, env });
+    expect(store.fddTasksByProject.project_alpha?.[0]?.status).toBe("running");
+    expect(new DerivedMetricStore(dataDir).readMaterialization(instance.instanceId)?.enabled).toBe(true);
+    await app.close();
   });
 
   it("rejects dashboard history batches over 32 queries", async () => {
