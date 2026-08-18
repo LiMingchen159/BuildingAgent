@@ -4141,7 +4141,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   function fddCheckHasEntityCoverage(check: FddDeployabilityCheck, algorithm: FddAlgorithm): boolean {
-    if (!check.applicability || !check.equipmentAvailability || !check.equipmentInventorySignature) return false;
+    if (!fddCheckHasEquipmentEvidence(check)) return false;
     if (check.applicability !== "applicable" || check.equipmentAvailability.status !== "available") return false;
     if (!Array.isArray(check.deployableEntities)) return false;
     const requiredSlots = algorithm.requiredPoints
@@ -4172,7 +4172,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return check.algorithmId === algorithm.id && check.algorithmVersion === algorithm.version;
   }
 
-  function latestUsableFddCheck(
+  function fddCheckHasEquipmentEvidence(
+    check: FddDeployabilityCheck
+  ): check is FddDeployabilityCheck & Required<Pick<FddDeployabilityCheck, "applicability" | "equipmentAvailability" | "equipmentInventorySignature">> {
+    return Boolean(check.applicability && check.equipmentAvailability && check.equipmentInventorySignature);
+  }
+
+  function latestCurrentFddCheck(
     projectId: string,
     checks: FddDeployabilityCheck[],
     algorithm: FddAlgorithm,
@@ -4183,8 +4189,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       && fddCheckMatchesCurrentProjectSignature(projectId, latest)
       && fddCheckMatchesCurrentPolicy(latest)
       && fddCheckIsFresh(latest)
-      && fddCheckHasEntityCoverage(latest, algorithm)
+      && fddCheckMatchesAlgorithm(latest, algorithm)
+      && fddCheckHasEquipmentEvidence(latest)
       && latest.equipmentInventorySignature === equipmentInventorySignature
+      ? latest
+      : null;
+  }
+
+  function latestUsableFddCheck(
+    projectId: string,
+    checks: FddDeployabilityCheck[],
+    algorithm: FddAlgorithm,
+    equipmentInventorySignature: string
+  ): FddDeployabilityCheck | null {
+    const latest = latestCurrentFddCheck(projectId, checks, algorithm, equipmentInventorySignature);
+    return latest && fddCheckHasEntityCoverage(latest, algorithm)
       ? latest
       : null;
   }
@@ -4284,7 +4303,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       // point-catalog queries synchronously on every library open would block
       // the page without making those algorithms executable.
       .filter(isExecutableFddAlgorithm)
-      .filter((algorithm) => !latestUsableFddCheck(projectId, checks, algorithm, equipmentInventorySignature));
+      // A current no-equipment/unknown/cannot-deploy result is still a
+      // completed automatic check. Deployment uses latestUsableFddCheck and
+      // therefore remains fail-closed; this only prevents endless reruns.
+      .filter((algorithm) => !latestCurrentFddCheck(projectId, checks, algorithm, equipmentInventorySignature));
   }
 
   async function ensureAutomaticFddLibraryChecks(

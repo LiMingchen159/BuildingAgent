@@ -315,8 +315,9 @@ describe("BMS API contract", () => {
         headers: { "content-type": "application/json" }
       })
     );
+    const store = createSeedStore();
     const app = buildServer({
-      store: createSeedStore(),
+      store,
       env: { BMS_DATABASE_API_URL: "http://collector.test" },
       fetch: fetchMock as typeof fetch
     });
@@ -335,6 +336,16 @@ describe("BMS API contract", () => {
     expect(response.json().checks.some((check: { historyIssues?: string[] }) =>
       check.historyIssues?.includes("No BMS source is configured for this project.")
     )).toBe(true);
+    const firstRunCount = store.fddLibraryCheckRunsByProject?.project_mortar?.length ?? 0;
+    const repeated = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_mortar/fdd-library",
+      headers: mortarHeaders
+    });
+    expect(repeated.statusCode).toBe(200);
+    expect(repeated.json().checksPending).toBe(false);
+    expect(store.fddLibraryCheckRunsByProject?.project_mortar?.length ?? 0).toBe(firstRunCount);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("uses Brick equipment facts before algorithm matching for WKGO and Element", async () => {
@@ -362,7 +373,11 @@ describe("BMS API contract", () => {
     const app = buildServer({
       store,
       fetch: fetchMock as typeof fetch,
-      env: { BUILDING_AGENT_DATA_DIR: dataDir, DERIVED_METRIC_MATERIALIZER_DISABLED: "1" }
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
     });
 
     await app.inject({ method: "POST", url: `/api/projects/${wkgoProjectId}/select`, headers: bearer() });
@@ -399,6 +414,15 @@ describe("BMS API contract", () => {
       expect.objectContaining({ equipmentType: "chiller", status: "available", entityCount: 8 }),
       expect.objectContaining({ equipmentType: "pump", status: "available", entityCount: 15 })
     ]));
+    expect(elementLibrary.json().checksPending).toBe(true);
+    await vi.waitFor(() => {
+      expect(store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0).toBeGreaterThan(0);
+    }, { timeout: 5_000 });
+    const elementRunCount = store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0;
+    const repeatedElementLibrary = await app.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers: bearer() });
+    expect(repeatedElementLibrary.statusCode).toBe(200);
+    expect(repeatedElementLibrary.json().checksPending).toBe(false);
+    expect(store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0).toBe(elementRunCount);
 
     await app.inject({ method: "POST", url: "/api/projects/project_incomplete_inventory/select", headers: bearer() });
     const incompleteLibrary = await app.inject({ method: "GET", url: "/api/projects/project_incomplete_inventory/fdd-library", headers: bearer() });
