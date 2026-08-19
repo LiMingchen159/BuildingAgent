@@ -205,6 +205,7 @@ describe("equipment naming contracts", () => {
       ok: true,
       value: {
         equipmentId: "CH-01",
+        shortIdentifier: "CH-01",
         equipmentType: "chiller",
         fullName: "Main Plant Chiller No. 1",
         displayName: "CH-01 — Main Plant Chiller No. 1",
@@ -214,7 +215,62 @@ describe("equipment naming contracts", () => {
     });
     expect(pump).toMatchObject({
       ok: true,
-      value: { displayName: "CHWP-01 — Chilled Water Pump 01" }
+      value: {
+        shortIdentifier: "CHWP-01",
+        displayName: "CHWP-01 — Chilled Water Pump 01"
+      }
+    });
+  });
+
+  it("keeps a semantic join key separate from the human-facing short identifier", () => {
+    const result = createEquipmentIdentity({
+      equipmentId: "WCC_01",
+      shortIdentifier: "WCC-01",
+      equipmentType: "chiller",
+      nameSource: "deterministic_fallback"
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        equipmentId: "WCC_01",
+        shortIdentifier: "WCC-01",
+        fullName: "Chiller 01",
+        displayName: "WCC-01 — Chiller 01",
+        nameSourceRef: "fallback:chiller:WCC_01:short=WCC-01"
+      }
+    });
+  });
+
+  it("rejects identifier-only metadata names while retaining descriptive Unicode names", () => {
+    const codeOnly = createEquipmentIdentity({
+      equipmentId: "CH_01",
+      shortIdentifier: "CH-01",
+      equipmentType: "chiller",
+      fullName: "CH-01",
+      nameSource: "semantic_model",
+      nameSourceRef: "urn:site#CH_01"
+    });
+    const chinese = createEquipmentIdentity({
+      equipmentId: "CH_01",
+      shortIdentifier: "冷机-01",
+      equipmentType: "chiller",
+      fullName: "西翼冷水机 01",
+      nameSource: "project_metadata",
+      nameSourceRef: "assets.json#CH_01"
+    });
+
+    expect(codeOnly).toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ path: "fullName", code: "identifier_only_name" })]
+    });
+    expect(chinese).toMatchObject({
+      ok: true,
+      value: {
+        shortIdentifier: "冷机-01",
+        fullName: "西翼冷水机 01",
+        displayName: "冷机-01 — 西翼冷水机 01"
+      }
     });
   });
 
