@@ -147,6 +147,8 @@ export interface DerivedMetricConfigureMaterializationInput {
   lastRunAt?: string;
   nextRunAt?: string;
   watermarkTs?: string;
+  /** Clear a durable watermark after the executable plan changes. */
+  resetWatermark?: boolean;
   status?: string;
   lastError?: string | null;
 }
@@ -270,6 +272,10 @@ export class DerivedMetricStore {
     this.db = new Database(path.join(dataDir, "derived_metrics.db"));
     this.db.pragma("journal_mode = WAL");
     this.initSchema();
+  }
+
+  runInTransaction<T>(operation: () => T): T {
+    return this.db.transaction(operation)();
   }
 
   private initSchema(): void {
@@ -773,6 +779,15 @@ export class DerivedMetricStore {
     return instance;
   }
 
+  clearHistory(instanceId: string): void {
+    const normalizedInstanceId = trimRequired(instanceId, "instanceId");
+    if (!this.getInstance(normalizedInstanceId)) {
+      throw new Error("derived_metric_instance_not_found");
+    }
+    this.db.prepare("DELETE FROM metric_latest WHERE instance_id = ?").run(normalizedInstanceId);
+    this.db.prepare("DELETE FROM metric_samples WHERE instance_id = ?").run(normalizedInstanceId);
+  }
+
   recordSample(input: DerivedMetricRecordSampleInput): DerivedMetricSample {
     const instanceId = trimRequired(input.instanceId, "instanceId");
     const ts = trimRequired(input.ts, "ts");
@@ -932,7 +947,10 @@ export class DerivedMetricStore {
         alignment_tolerance_seconds = COALESCE(excluded.alignment_tolerance_seconds, metric_materialization.alignment_tolerance_seconds),
         last_run_at = COALESCE(excluded.last_run_at, metric_materialization.last_run_at),
         next_run_at = excluded.next_run_at,
-        watermark_ts = COALESCE(excluded.watermark_ts, metric_materialization.watermark_ts),
+        watermark_ts = CASE
+          WHEN @reset_watermark = 1 THEN NULL
+          ELSE COALESCE(excluded.watermark_ts, metric_materialization.watermark_ts)
+        END,
         status = excluded.status,
         last_error = excluded.last_error,
         updated_at = excluded.updated_at
@@ -951,6 +969,7 @@ export class DerivedMetricStore {
       last_run_at: optional(input.lastRunAt) ?? existing?.lastRunAt ?? null,
       next_run_at: nextRunAt ?? null,
       watermark_ts: optional(input.watermarkTs) ?? existing?.watermarkTs ?? null,
+      reset_watermark: input.resetWatermark ? 1 : 0,
       status,
       last_error: input.lastError === undefined ? existing?.lastError ?? null : optional(input.lastError ?? undefined),
       updated_at: now

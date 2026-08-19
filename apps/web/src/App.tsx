@@ -53,7 +53,6 @@ import {
   deployFddTask,
   testFddAlgorithm,
   testFddTask,
-  type DashboardPointBinding,
   type DashboardRecord,
   type DerivedMetricAsset,
   type DashboardVisibility,
@@ -2844,68 +2843,6 @@ function isVisibleDerivedMetricAsset(asset: DerivedMetricAsset): boolean {
   return derivedAssetKindLabel(asset) !== "FDD" || isCuratedFddMetricAsset(asset);
 }
 
-function dashboardBindingReferencesFdd(binding: DashboardPointBinding, metricByInstanceId: Map<string, DerivedMetricAsset>, metricsByKey: Map<string, DerivedMetricAsset[]>): boolean {
-  if (binding.metricInstanceId) {
-    const metric = metricByInstanceId.get(binding.metricInstanceId);
-    if (metric) return derivedAssetKindLabel(metric) === "FDD";
-  }
-  if (binding.metricKey) {
-    const normalizedKey = binding.metricKey.toLowerCase();
-    if (CHILLER_DOC_RULE_KEY_PATTERN.test(normalizedKey) || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(normalizedKey)) return true;
-    if (/\b(fdd|fd|fault|detection|diagnostic)\b/u.test(normalizedKey)) return true;
-    return (metricsByKey.get(normalizedKey) ?? []).some((metric) => derivedAssetKindLabel(metric) === "FDD");
-  }
-  return false;
-}
-
-function dashboardBindingReferencesVisibleCuratedFdd(binding: DashboardPointBinding, metricByInstanceId: Map<string, DerivedMetricAsset>, metricsByKey: Map<string, DerivedMetricAsset[]>): boolean {
-  if (binding.metricInstanceId) {
-    const metric = metricByInstanceId.get(binding.metricInstanceId);
-    if (metric) return isCuratedFddMetricAsset(metric);
-  }
-  if (binding.metricKey) {
-    const normalizedKey = binding.metricKey.toLowerCase();
-    return CHILLER_DOC_RULE_KEY_PATTERN.test(normalizedKey)
-      || IMPORTED_EQUIPMENT_RULE_KEY_PATTERN.test(normalizedKey)
-      || (metricsByKey.get(normalizedKey) ?? []).some(isCuratedFddMetricAsset);
-  }
-  return false;
-}
-
-function isDashboardVisibleForCurrentFddScope(dashboard: DashboardRecord, metrics: DerivedMetricAsset[]): boolean {
-  const metricByInstanceId = new Map(metrics.map((metric) => [metric.instance.instanceId, metric]));
-  const metricsByKey = new Map<string, DerivedMetricAsset[]>();
-  for (const metric of metrics) {
-    const key = metric.instance.metricKey.toLowerCase();
-    metricsByKey.set(key, [...(metricsByKey.get(key) ?? []), metric]);
-  }
-
-  const searchableText = [
-    dashboard.title,
-    dashboard.description,
-    ...dashboard.widgets.map((widget) => widget.title)
-  ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
-  const dashboardTitleText = [
-    dashboard.title,
-    ...dashboard.widgets.map((widget) => widget.title)
-  ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase();
-  const dashboardLooksFdd = /\b(fdd|fault|detection|diagnostic)\b/u.test(searchableText);
-  const dashboardLooksLegacyChillerDiagnostic = /\b(chw|cop|delta[-\s]?t)\b/u.test(dashboardTitleText);
-  let hasVisibleChRuleFdd = false;
-  let hasHiddenFdd = false;
-  for (const widget of dashboard.widgets) {
-    const isFddWidget = widget.kind === "fdd_attribution_analysis" || widget.kind === "fdd_fault_rate_comparison";
-    const bindingHasFdd = widget.pointBindings.some((binding) => dashboardBindingReferencesFdd(binding, metricByInstanceId, metricsByKey));
-    const bindingHasVisibleChRule = widget.pointBindings.some((binding) => dashboardBindingReferencesVisibleCuratedFdd(binding, metricByInstanceId, metricsByKey));
-    hasVisibleChRuleFdd = hasVisibleChRuleFdd || bindingHasVisibleChRule;
-
-    if ((isFddWidget || bindingHasFdd) && !bindingHasVisibleChRule) {
-      hasHiddenFdd = true;
-    }
-  }
-  return !hasHiddenFdd && (!(dashboardLooksFdd || dashboardLooksLegacyChillerDiagnostic) || hasVisibleChRuleFdd);
-}
-
 function fddMetricGroupForTask(task: ProjectFddTask | null, metrics: DerivedMetricAsset[]): KpiMetricGroup | null {
   if (!task) return null;
   const exactTaskMetrics = metrics.filter((metric) => metricMetadataString(metric, "fddTaskId") === task.id);
@@ -2933,6 +2870,7 @@ interface FddDeploymentProgress {
   taskId?: string | undefined;
   task?: ProjectFddTask | undefined;
   entityCount?: number | undefined;
+  expectedEntityKeys?: string[] | undefined;
   requestId?: string | undefined;
 }
 
@@ -2962,7 +2900,7 @@ function latestFddCheckForAlgorithm(checks: FddDeployabilityCheck[], algorithm: 
     .sort((left, right) => Date.parse(right.checkedAt) - Date.parse(left.checkedAt))[0];
 }
 
-const FDD_EQUIPMENT_FIRST_POLICY_VERSION = "v3-equipment-first";
+const FDD_EQUIPMENT_FIRST_POLICY_VERSION = "v4-homogeneous-fleet";
 
 function fddTargetEquipmentType(
   algorithm: Pick<FddAlgorithm, "equipmentType" | "requiredPoints">
@@ -3061,6 +2999,143 @@ function currentEquipmentFirstFddTaskCheck(
     library.equipmentInventorySignature,
     targetAvailability
   ) ? task.deployabilityCheck : undefined;
+}
+
+export interface FddFleetCoverageSummary {
+  inventoryEntityKeys: string[];
+  deployableEntityKeys: string[];
+  deployedEntityKeys: string[];
+  blockedEntityKeys: string[];
+  skippedEntityKeys: string[];
+  inventoryCount: number;
+  deployableCount: number;
+  deployedCount: number;
+  blockedCount: number;
+  skippedCount: number;
+  hasFullDeployableCoverage: boolean;
+}
+
+function uniqueSortedEntityKeys(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim()))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function fddRequiredRuntimeSlots(
+  check: FddDeployabilityCheck | undefined,
+  algorithm: Pick<FddAlgorithm, "requiredPoints">
+): string[] {
+  const checkedRuntimeSlots = check?.requiredRuntimeSlots?.filter((slot) => Boolean(slot.trim())) ?? [];
+  return [...new Set(checkedRuntimeSlots.length > 0
+    ? checkedRuntimeSlots
+    : algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot))];
+}
+
+function fddEntityRuntimeMappingIssues(
+  entity: NonNullable<FddDeployabilityCheck["deployableEntities"]>[number],
+  requiredSlots: string[]
+): string[] {
+  if (requiredSlots.length === 0) return ["No runtime input roles were recorded."];
+  const requiredSlotSet = new Set(requiredSlots);
+  const runtimeMappings = entity.selectedMappings.filter((mapping) => requiredSlotSet.has(mapping.slot));
+  const slotCounts = new Map<string, number>();
+  for (const mapping of runtimeMappings) {
+    slotCounts.set(mapping.slot, (slotCounts.get(mapping.slot) ?? 0) + 1);
+  }
+  const missingSlots = requiredSlots.filter((slot) => !slotCounts.has(slot));
+  const duplicatedSlots = requiredSlots.filter((slot) => (slotCounts.get(slot) ?? 0) > 1);
+  const normalizedPointNames = runtimeMappings.map((mapping) => mapping.pointName.trim().toLowerCase());
+  const normalizedObjectRefs = runtimeMappings
+    .map((mapping) => mapping.objectRef?.trim().toLowerCase())
+    .filter((objectRef): objectRef is string => Boolean(objectRef));
+  const issues = [
+    ...(missingSlots.length > 0 ? [`Missing runtime roles: ${missingSlots.join(", ")}`] : []),
+    ...(duplicatedSlots.length > 0 ? [`Multiple mappings for roles: ${duplicatedSlots.join(", ")}`] : []),
+    ...(normalizedPointNames.some((pointName) => !pointName) ? ["A runtime mapping has no physical point name."] : []),
+    ...(new Set(normalizedPointNames).size !== normalizedPointNames.length
+      ? ["The same physical point name is assigned to multiple runtime roles."]
+      : []),
+    ...(new Set(normalizedObjectRefs).size !== normalizedObjectRefs.length
+      ? ["The same physical object reference is assigned to multiple runtime roles."]
+      : [])
+  ];
+  return issues;
+}
+
+export function summarizeFddFleetCoverage(
+  check: FddDeployabilityCheck | undefined,
+  requiredSlots: string[],
+  deployedEntityIds: string[] = [],
+  deploymentStarted = false
+): FddFleetCoverageSummary {
+  const checkedEntities = check?.deployableEntities ?? [];
+  const inventoryEntityKeys = uniqueSortedEntityKeys([
+    ...(check?.equipmentAvailability?.entityKeys ?? []),
+    ...checkedEntities.map((entity) => entity.entityKey)
+  ]);
+  const deployableEntityKeys = uniqueSortedEntityKeys(checkedEntities
+    .filter((entity) => {
+      if (entity.status !== "can_deploy"
+        || entity.missingPoints.length > 0
+        || entity.historyIssues.length > 0
+        || entity.ambiguousInputs.length > 0) {
+        return false;
+      }
+      return fddEntityRuntimeMappingIssues(entity, requiredSlots).length === 0;
+    })
+    .map((entity) => entity.entityKey));
+  const deployedEntityKeys = uniqueSortedEntityKeys(deployedEntityIds);
+  const deployableSet = new Set(deployableEntityKeys);
+  const deployedSet = new Set(deployedEntityKeys);
+  const blockedEntityKeys = inventoryEntityKeys.filter((entityKey) => !deployableSet.has(entityKey));
+  const skippedEntityKeys = deploymentStarted
+    ? inventoryEntityKeys.filter((entityKey) => !deployedSet.has(entityKey))
+    : [];
+  const declaredInventoryCounts = [
+    check?.equipmentAvailability?.entityCount,
+    check?.expectedEntityCount
+  ].filter((count): count is number => typeof count === "number");
+  const inventoryCount = Math.max(0, inventoryEntityKeys.length, ...declaredInventoryCounts);
+  const declaredInventoryIsConsistent = new Set(declaredInventoryCounts).size <= 1;
+  const knownInventoryIsComplete = declaredInventoryIsConsistent && inventoryEntityKeys.length === inventoryCount;
+  const deployableCount = deployableEntityKeys.length;
+  const deployedCount = deployedEntityKeys.length;
+  const blockedCount = Math.max(blockedEntityKeys.length, inventoryCount - deployableCount);
+  const skippedCount = deploymentStarted
+    ? Math.max(skippedEntityKeys.length, inventoryCount - deployedCount)
+    : 0;
+  const hasFullDeployableCoverage = inventoryCount > 0
+    && knownInventoryIsComplete
+    && deployableCount === inventoryCount
+    && inventoryEntityKeys.every((entityKey) => deployableSet.has(entityKey));
+  return {
+    inventoryEntityKeys,
+    deployableEntityKeys,
+    deployedEntityKeys,
+    blockedEntityKeys,
+    skippedEntityKeys,
+    inventoryCount,
+    deployableCount,
+    deployedCount,
+    blockedCount,
+    skippedCount,
+    hasFullDeployableCoverage
+  };
+}
+
+function fddEntityBlockerText(
+  entity: NonNullable<FddDeployabilityCheck["deployableEntities"]>[number] | undefined,
+  requiredSlots: string[]
+): string[] {
+  if (!entity) return ["No entity-level deployment check was recorded."];
+  const blockers = [
+    ...(entity.missingPoints.length > 0 ? [`Missing: ${entity.missingPoints.join(", ")}`] : []),
+    ...(entity.historyIssues.length > 0 ? [`History: ${entity.historyIssues.join(", ")}`] : []),
+    ...(entity.ambiguousInputs.length > 0
+      ? [`Ambiguous: ${entity.ambiguousInputs.map((input) => input.label || input.slot).join(", ")}`]
+      : []),
+    ...fddEntityRuntimeMappingIssues(entity, requiredSlots)
+  ];
+  return blockers.length > 0 ? blockers : entity.status === "can_deploy" ? [] : [fddDeployabilityLabel(entity.status)];
 }
 
 function fddDeployabilitySortRank(status: FddDeployabilityCheck["status"] | undefined): number {
@@ -3681,16 +3756,28 @@ function FddTaskDetailPanel({
   const check = task.deployabilityCheck;
   const currentCheck = currentEquipmentFirstFddTaskCheck(task, library);
   const requiredPointBySlot = new Map(algorithm.requiredPoints.map((point) => [point.slot, point]));
-  const requiredSlots = new Set(algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot));
+  const requiredSlotKeys = fddRequiredRuntimeSlots(check, algorithm);
+  const requiredSlots = new Set(requiredSlotKeys);
+  const currentRequiredSlotKeys = fddRequiredRuntimeSlots(currentCheck, algorithm);
   const selectedMappings = (check?.selectedMappings ?? []).filter((mapping) => requiredSlots.has(mapping.slot));
   const instanceIds = metricGroup?.metrics.map((metric) => metric.instance.instanceId) ?? [];
   const enabledCount = metricGroup?.metrics.filter(materializationEnabled).length ?? 0;
   const groupBackgroundStatus = metricGroup ? groupMaterializationStatus(metricGroup) : "Not deployed";
   const linkedDashboardIds = metricGroup ? linkedDashboardIdsForGroup(metricGroup) : new Set<string>();
   const linkedDashboards = dashboards.filter((dashboard) => linkedDashboardIds.has(dashboard.id));
-  const canDeploy = task.algorithmSnapshot.deployableRuntime && currentCheck?.status === "can_deploy";
   const editedCount = (task.parameterValues ?? []).filter((parameter) => parameter.source === "user_override").length;
   const isDeployed = Boolean(metricGroup?.metrics.length);
+  const deploymentStarted = isDeployed || task.status === "running";
+  const coverage = summarizeFddFleetCoverage(
+    check,
+    requiredSlotKeys,
+    metricGroup?.metrics.map((metric) => metric.instance.entityId) ?? [],
+    deploymentStarted
+  );
+  const currentCoverage = summarizeFddFleetCoverage(currentCheck, currentRequiredSlotKeys);
+  const canDeploy = task.algorithmSnapshot.deployableRuntime
+    && currentCheck?.status === "can_deploy"
+    && currentCoverage.hasFullDeployableCoverage;
   const taskDeploymentProgress = deploymentProgress?.taskId === task.id ? deploymentProgress : null;
   const checkedEntities = check?.deployableEntities?.length
     ? check.deployableEntities.map((entity) => ({
@@ -3708,7 +3795,13 @@ function FddTaskDetailPanel({
           confidence: check.status === "can_deploy" ? 1 : 0.7
         }]
       : [];
-  const deployableEntityCount = checkedEntities.filter((entity) => entity.status !== "cannot_deploy" && entity.selectedMappings.length > 0).length;
+  const checkedEntityByKey = new Map(checkedEntities.map((entity) => [entity.entityKey, entity] as const));
+  const metricByEntityKey = new Map((metricGroup?.metrics ?? []).map((metric) => [metric.instance.entityId, metric] as const));
+  const coverageEntityKeys = uniqueSortedEntityKeys([
+    ...coverage.inventoryEntityKeys,
+    ...checkedEntities.map((entity) => entity.entityKey),
+    ...(metricGroup?.metrics.map((metric) => metric.instance.entityId) ?? [])
+  ]);
   const runtimeOutputs = (() => {
     const faultOutputs = algorithm.outputs.filter((output) => output.key === "fault_status");
     return faultOutputs.length > 0 ? faultOutputs : [{ key: "fault_status", label: "Fault status", type: "boolean" as const }];
@@ -3732,6 +3825,26 @@ function FddTaskDetailPanel({
           </div>
         </div>
         <p>{fddRuntimeLogicSummary(algorithm)}</p>
+        <div className="fdd-fleet-coverage" aria-label="FDD deployment coverage">
+          {[
+            ["Inventory", coverage.inventoryCount],
+            ["Deployable", coverage.deployableCount],
+            ["Deployed", coverage.deployedCount],
+            ["Skipped", coverage.skippedCount]
+          ].map(([label, value]) => (
+            <div className="fdd-fleet-coverage-item" key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          ))}
+        </div>
+        <div className="fdd-mapping-strategy">
+          <strong>Mapping strategy</strong>
+          <span>{check?.mappingStrategy === "homogeneous_template"
+            ? `Homogeneous fleet template${check.templateEntityKey ? ` (${check.templateEntityKey})` : ""} → validate the same distinct runtime roles independently on every inventory entity.`
+            : "Equipment-first inventory → same-entity point matching → every required role → one runtime instance per deployable entity."}</span>
+          <small>{check?.checkPolicyVersion ?? "No current mapping policy recorded"} · Runtime roles: {requiredSlotKeys.join(", ") || "not recorded"}</small>
+        </div>
         <div className="kpi-formula-panel">
           <div className="kpi-formula-panel-label">Detection Logic</div>
           <FddDetectionLogicPanel algorithm={algorithm} />
@@ -3769,15 +3882,18 @@ function FddTaskDetailPanel({
                       </span>
                     </div>
                   );
-                }) : algorithm.requiredPoints.filter((point) => point.required).map((point) => (
-                  <div key={point.slot} className="kpi-io-card">
-                    <span className="kpi-io-icon"><Icon name="activity" /></span>
-                    <span className="kpi-io-card-copy">
-                      <strong>{point.label}</strong>
-                      <small>{point.semantic}</small>
-                    </span>
-                  </div>
-                ))}
+                }) : requiredSlotKeys.map((slot) => {
+                  const point = requiredPointBySlot.get(slot);
+                  return (
+                    <div key={slot} className="kpi-io-card">
+                      <span className="kpi-io-icon"><Icon name="activity" /></span>
+                      <span className="kpi-io-card-copy">
+                        <strong>{point?.label ?? slot}</strong>
+                        <small>{point?.semantic ?? "Supplemental runtime validation input"}</small>
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -3800,14 +3916,15 @@ function FddTaskDetailPanel({
               <Icon name="activity" />
               Test with data
             </Button>
-            <Button type="button" loading={Boolean(taskDeploymentProgress)} disabled={!canDeploy} title={task.algorithmSnapshot.deployableRuntime ? canDeploy ? "Deploy" : "Run a current equipment and data check before deployment" : "Spec only: executable evaluator not implemented"} onClick={() => onDeployTask(task.id)}>
+            <Button type="button" loading={Boolean(taskDeploymentProgress)} disabled={!canDeploy} title={task.algorithmSnapshot.deployableRuntime ? canDeploy ? "Deploy all inventory entities" : `${currentCoverage.deployableCount}/${currentCoverage.inventoryCount} inventory entities have complete can-deploy mappings` : "Spec only: executable evaluator not implemented"} onClick={() => onDeployTask(task.id)}>
               {taskDeploymentProgress ? <span className="spinner" aria-hidden="true" /> : <Icon name="zap" />}
               {taskDeploymentProgress ? fddDeploymentPhaseLabel(taskDeploymentProgress.phase) : task.algorithmSnapshot.deployableRuntime ? "Deploy all" : "Evaluator required"}
             </Button>
           </div>
           <div className="fdd-task-check-card">
             <strong>{fddDeployabilityLabel(check?.status)}</strong>
-            <span>{check ? `${deployableEntityCount} deployable entities${check.exampleEntityKey ? ` · example ${check.exampleEntityKey}` : ""}` : "No deployability check result yet."}</span>
+            <span>{check ? `${coverage.deployableCount}/${coverage.inventoryCount} inventory entities are strictly deployable${check.exampleEntityKey ? ` · example ${check.exampleEntityKey}` : ""}` : "No deployability check result yet."}</span>
+            {coverage.blockedCount > 0 ? <span>{coverage.blockedCount} blocked or uncertain; Deploy all remains disabled until every inventory entity passes.</span> : null}
             {check?.missingPoints.length ? <span>Missing: {check.missingPoints.join(", ")}</span> : null}
             {check?.historyIssues.length ? <span>History: {check.historyIssues.join(", ")}</span> : null}
           </div>
@@ -3866,35 +3983,42 @@ function FddTaskDetailPanel({
 
         <section className="kpi-detail-section">
           <h3>Covered / Test Entities</h3>
-          {metricGroup ? (
+          {coverageEntityKeys.length > 0 ? (
             <div className="kpi-entity-card-grid fdd-task-entity-grid">
-              {metricGroup.metrics.map((metric) => (
-                <article key={metric.instance.instanceId} className="kpi-entity-card">
-                  <strong>{formatEntityLabel(metric)}</strong>
-                  <span className={metric.latest?.valueNum === undefined ? "is-muted" : ""}>{formatDerivedMetricValue(metric)}</span>
-                  <div className="kpi-entity-background">
-                    <small><span aria-hidden="true" />{metricBackgroundCalculationStatus(metric)}</small>
-                    <MetricToggle
-                      checked={materializationEnabled(metric)}
-                      onChange={(enabled) => onToggleMetricMaterialization([metric.instance.instanceId], enabled)}
-                      title={`Background Calculation: ${metricBackgroundCalculationStatus(metric)}`}
-                    />
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : checkedEntities.length > 0 ? (
-            <div className="kpi-entity-card-grid fdd-task-entity-grid">
-              {checkedEntities.map((entity) => (
-                <article key={entity.entityKey} className="kpi-entity-card">
-                  <strong>{formatEntityId(entity.entityKey)}</strong>
-                  <span>{fddDeployabilityLabel(entity.status)}</span>
-                  <div className="kpi-entity-background">
-                    <small><span aria-hidden="true" />{entity.selectedMappings.length} inputs · {Math.round(entity.confidence * 100)}%</small>
-                    <Button type="button" size="sm" variant="secondary" onClick={() => onTestTask(task.id)}>Retest</Button>
-                  </div>
-                </article>
-              ))}
+              {coverageEntityKeys.map((entityKey) => {
+                const metric = metricByEntityKey.get(entityKey);
+                const entity = checkedEntityByKey.get(entityKey);
+                const blockers = fddEntityBlockerText(entity, requiredSlotKeys);
+                const entityWasSkipped = deploymentStarted && !metric;
+                return (
+                  <article key={entityKey} className={`kpi-entity-card${blockers.length > 0 || entityWasSkipped ? " is-blocked" : ""}`}>
+                    <strong>{metric ? formatEntityLabel(metric) : formatEntityId(entityKey)}</strong>
+                    {metric ? (
+                      <span className={metric.latest?.valueNum === undefined ? "is-muted" : ""}>Deployed · {formatDerivedMetricValue(metric)}</span>
+                    ) : (
+                      <span>{entityWasSkipped ? "Skipped" : entity ? fddDeployabilityLabel(entity.status) : "Not checked"}</span>
+                    )}
+                    {blockers.map((blocker) => <small className="fdd-entity-blocker" key={blocker}>{blocker}</small>)}
+                    <div className="kpi-entity-background">
+                      {metric ? (
+                        <>
+                          <small><span aria-hidden="true" />{metricBackgroundCalculationStatus(metric)}</small>
+                          <MetricToggle
+                            checked={materializationEnabled(metric)}
+                            onChange={(enabled) => onToggleMetricMaterialization([metric.instance.instanceId], enabled)}
+                            title={`Background Calculation: ${metricBackgroundCalculationStatus(metric)}`}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <small><span aria-hidden="true" />{entity ? `${entity.selectedMappings.length}/${requiredSlots.size} inputs · ${Math.round(entity.confidence * 100)}%` : "No mapping result"}</small>
+                          <Button type="button" size="sm" variant="secondary" onClick={() => onTestTask(task.id)}>Retest</Button>
+                        </>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           ) : (
             <p className="kpi-muted">Run Test with data to find all entities that can host this class-level algorithm.</p>
@@ -3948,7 +4072,11 @@ function WorkspaceFddTaskList({
       {tasks.map((task) => {
         const check = task.deployabilityCheck;
         const currentCheck = currentEquipmentFirstFddTaskCheck(task, library);
-        const canDeploy = task.algorithmSnapshot.deployableRuntime && currentCheck?.status === "can_deploy";
+        const requiredSlots = fddRequiredRuntimeSlots(currentCheck, task.algorithmSnapshot);
+        const coverage = summarizeFddFleetCoverage(currentCheck, requiredSlots);
+        const canDeploy = task.algorithmSnapshot.deployableRuntime
+          && currentCheck?.status === "can_deploy"
+          && coverage.hasFullDeployableCoverage;
         const isActive = activeTaskId === task.id;
         return (
           <li key={task.id} className={`workspace-right-fdd-task-row${isActive ? " is-active" : ""}`}>
@@ -3963,7 +4091,7 @@ function WorkspaceFddTaskList({
               <Badge tone={fddTaskStatusTone(task.status)}>{fddTaskStatusLabel(task.status)}</Badge>
             </button>
             <div className="workspace-right-fdd-task-footer">
-              <span>{fddDeployabilityLabel(check?.status)}</span>
+              <span>{currentCheck ? `${coverage.deployableCount}/${coverage.inventoryCount} deployable` : fddDeployabilityLabel(check?.status)}</span>
               <span>{fddTaskSourceLabel(task.source)}</span>
             </div>
             <div className="workspace-right-fdd-task-actions" aria-label={`${task.algorithmSnapshot.name} actions`}>
@@ -3985,6 +4113,7 @@ function WorkspaceFddTaskList({
 
 function FddLibraryPanel({
   library,
+  derivedMetrics,
   loading,
   deploymentProgress,
   onCreateProjectFdd,
@@ -3993,6 +4122,7 @@ function FddLibraryPanel({
   onOpenTask
 }: {
   library: FddLibraryResponse | null;
+  derivedMetrics: DerivedMetricAsset[];
   loading: boolean;
   deploymentProgress: FddDeploymentProgress | null;
   onCreateProjectFdd: () => void;
@@ -4082,13 +4212,16 @@ function FddLibraryPanel({
   const deployableNowCount = curatedAlgorithms.filter((algorithm) => {
     if (!algorithm.deployableRuntime) return false;
     const targetAvailability = equipmentAvailability.get(algorithm.equipmentType);
-    return currentEquipmentFirstFddCheck(
+    const check = currentEquipmentFirstFddCheck(
       checks,
       algorithm,
       library?.projectId,
       library?.equipmentInventorySignature,
       targetAvailability
-    )?.status === "can_deploy";
+    );
+    const requiredSlots = fddRequiredRuntimeSlots(check, algorithm);
+    return check?.status === "can_deploy"
+      && summarizeFddFleetCoverage(check, requiredSlots).hasFullDeployableCoverage;
   }).length;
   const selectedAlgorithm = curatedAlgorithms.find((algorithm) => algorithm.id === selectedAlgorithmId) ?? null;
   const selectedEquipmentAvailability = selectedAlgorithm ? equipmentAvailability.get(selectedAlgorithm.equipmentType) : undefined;
@@ -4104,11 +4237,27 @@ function FddLibraryPanel({
         selectedEquipmentAvailability
       )
     : undefined;
-  const selectedRequiredSlots = new Set(selectedAlgorithm?.requiredPoints.filter((point) => point.required).map((point) => point.slot) ?? []);
-  const selectedRequiredMappings = (selectedCheck?.selectedMappings ?? []).filter((mapping) => selectedRequiredSlots.has(mapping.slot));
-  const selectedAmbiguousSlots = selectedCheck?.ambiguousInputs ?? [];
   const selectedDeploymentProgress = selectedAlgorithm && deploymentProgress?.algorithmId === selectedAlgorithm.id ? deploymentProgress : null;
   const selectedDeployedTask = selectedAlgorithm ? deployedFddTaskForAlgorithm(tasks, selectedAlgorithm) : undefined;
+  const selectedMetricGroup = fddMetricGroupForTask(selectedDeployedTask ?? null, derivedMetrics);
+  const selectedCoverageCheck = selectedCheck ?? selectedDeployedTask?.deployabilityCheck;
+  const selectedRuntimeSlotKeys = selectedAlgorithm ? fddRequiredRuntimeSlots(selectedCoverageCheck, selectedAlgorithm) : [];
+  const selectedRequiredSlots = new Set(selectedRuntimeSlotKeys);
+  const selectedRequiredMappings = (selectedCheck?.selectedMappings ?? []).filter((mapping) => selectedRequiredSlots.has(mapping.slot));
+  const selectedAmbiguousSlots = selectedCheck?.ambiguousInputs ?? [];
+  const selectedCoverage = summarizeFddFleetCoverage(
+    selectedCoverageCheck,
+    selectedRuntimeSlotKeys,
+    selectedMetricGroup?.metrics.map((metric) => metric.instance.entityId) ?? [],
+    Boolean(selectedDeployedTask || selectedMetricGroup)
+  );
+  const selectedCheckedEntityByKey = new Map(
+    (selectedCoverageCheck?.deployableEntities ?? []).map((entity) => [entity.entityKey, entity] as const)
+  );
+  const selectedBlockedEntityReasons = selectedCoverage.blockedEntityKeys.map((entityKey) => {
+    const reasons = fddEntityBlockerText(selectedCheckedEntityByKey.get(entityKey), selectedRuntimeSlotKeys);
+    return `${entityKey}: ${reasons.join("; ")}`;
+  });
 
   useEffect(() => {
     if (!library?.projectId || panelProjectRef.current === library.projectId) return;
@@ -4385,6 +4534,16 @@ function FddLibraryPanel({
                             activeEquipmentSection.availability
                           );
                           const deployedTask = deployedFddTaskForAlgorithm(tasks, algorithm);
+                          const coverageCheck = check ?? deployedTask?.deployabilityCheck;
+                          const requiredSlots = fddRequiredRuntimeSlots(coverageCheck, algorithm);
+                          const deployedMetricGroup = fddMetricGroupForTask(deployedTask ?? null, derivedMetrics);
+                          const rowCoverage = summarizeFddFleetCoverage(
+                            coverageCheck,
+                            requiredSlots,
+                            deployedMetricGroup?.metrics.map((metric) => metric.instance.entityId) ?? [],
+                            Boolean(deployedTask || deployedMetricGroup)
+                          );
+                          const fullFleetDeployable = check?.status === "can_deploy" && rowCoverage.hasFullDeployableCoverage;
                           const algorithmProgress = deploymentProgress?.algorithmId === algorithm.id ? deploymentProgress : null;
                           const rowClassName = activeEquipmentUnavailable || activeEquipmentUnknown
                             ? "is-not-applicable"
@@ -4407,11 +4566,11 @@ function FddLibraryPanel({
                               </td>
                               <td>{algorithm.faultType}</td>
                               <td>{fddMethodLabel(algorithm.method)}</td>
-                              <td>{algorithm.requiredPoints.filter((point) => point.required).length}</td>
+                              <td>{requiredSlots.length}</td>
                               <td><Badge tone={fddDefinitionTone(algorithm)}>{fddDefinitionLabel(algorithm)}</Badge></td>
                               <td>
-                                <Badge tone={activeEquipmentUnavailable ? "neutral" : activeEquipmentUnknown ? "warning" : fddDeployabilityTone(check?.status)}>
-                                  {activeEquipmentUnavailable ? "Not applicable" : activeEquipmentUnknown ? "Equipment availability unknown" : fddDeployabilityLabel(check?.status)}
+                                <Badge tone={activeEquipmentUnavailable ? "neutral" : activeEquipmentUnknown ? "warning" : fullFleetDeployable ? "success" : check ? "warning" : "neutral"}>
+                                  {activeEquipmentUnavailable ? "Not applicable" : activeEquipmentUnknown ? "Equipment availability unknown" : check ? `${rowCoverage.deployableCount}/${rowCoverage.inventoryCount} deployable` : "Not checked"}
                                 </Badge>
                               </td>
                               <td><Badge tone={algorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(algorithm)}</Badge></td>
@@ -4423,7 +4582,7 @@ function FddLibraryPanel({
                                 ) : algorithmProgress ? (
                                   <Badge tone="info">{fddDeploymentPhaseLabel(algorithmProgress.phase)}</Badge>
                                 ) : deployedTask ? (
-                                  <Badge tone="success">Deployed</Badge>
+                                  <Badge tone={rowCoverage.skippedCount > 0 ? "warning" : "success"}>{rowCoverage.deployedCount}/{rowCoverage.inventoryCount} deployed</Badge>
                                 ) : (
                                   <Badge tone="neutral">Not deployed</Badge>
                                 )}
@@ -4452,9 +4611,9 @@ function FddLibraryPanel({
                                   ) : (
                                     <button
                                       type="button"
-                                      title={equipmentActionTitle ?? (algorithm.deployableRuntime ? "Deploy" : "Spec only: executable evaluator not implemented")}
+                                      title={equipmentActionTitle ?? (algorithm.deployableRuntime ? fullFleetDeployable ? "Deploy all inventory entities" : `${rowCoverage.deployableCount}/${rowCoverage.inventoryCount} inventory entities have complete can-deploy mappings` : "Spec only: executable evaluator not implemented")}
                                       aria-label={`Deploy ${algorithm.name}`}
-                                      disabled={!activeEquipmentAvailable || !algorithm.deployableRuntime || Boolean(deploymentProgress && !algorithmProgress) || check?.status !== "can_deploy"}
+                                      disabled={!activeEquipmentAvailable || !algorithm.deployableRuntime || Boolean(deploymentProgress && !algorithmProgress) || !fullFleetDeployable}
                                       onClick={() => onDeployAlgorithm(algorithm.id)}
                                     >
                                       <Icon name="zap" />
@@ -4490,14 +4649,16 @@ function FddLibraryPanel({
                 ) : selectedEquipmentUnknown ? (
                   <Badge tone="warning">Equipment availability unknown</Badge>
                 ) : (
-                  <Badge tone={fddDeployabilityTone(selectedCheck?.status)}>{fddDeployabilityLabel(selectedCheck?.status)}</Badge>
+                  <Badge tone={selectedCoverage.hasFullDeployableCoverage ? "success" : selectedCheck ? "warning" : "neutral"}>
+                    {selectedCheck ? `${selectedCoverage.deployableCount}/${selectedCoverage.inventoryCount} deployable` : "Not checked"}
+                  </Badge>
                 )}
                 <Badge tone={selectedAlgorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(selectedAlgorithm)}</Badge>
                 <Badge tone={fddDefinitionTone(selectedAlgorithm)}>{fddDefinitionLabel(selectedAlgorithm)}</Badge>
                 {selectedEquipmentAvailable && selectedDeploymentProgress ? (
                   <Badge tone="info">{fddDeploymentPhaseLabel(selectedDeploymentProgress.phase)}</Badge>
                 ) : selectedEquipmentAvailable && selectedDeployedTask ? (
-                  <Badge tone="success">Deployed</Badge>
+                  <Badge tone={selectedCoverage.skippedCount > 0 ? "warning" : "success"}>{selectedCoverage.deployedCount}/{selectedCoverage.inventoryCount} deployed</Badge>
                 ) : null}
               </div>
             </div>
@@ -4505,11 +4666,15 @@ function FddLibraryPanel({
               <div><dt>Category</dt><dd>{selectedAlgorithm.categoryLabel}</dd></div>
               <div><dt>Fault</dt><dd>{selectedAlgorithm.faultType}</dd></div>
               <div><dt>Method</dt><dd>{fddMethodLabel(selectedAlgorithm.method)}</dd></div>
-              <div><dt>Inputs</dt><dd>{selectedAlgorithm.requiredPoints.filter((point) => point.required).length}</dd></div>
+              <div><dt>Inputs</dt><dd>{selectedRuntimeSlotKeys.length}</dd></div>
               <div><dt>Version</dt><dd>{selectedAlgorithm.version}</dd></div>
               <div><dt>Runtime</dt><dd>{fddRuntimeLabel(selectedAlgorithm)}</dd></div>
               <div><dt>Definition</dt><dd>{fddDefinitionLabel(selectedAlgorithm)}</dd></div>
               <div><dt>Project</dt><dd>{selectedEquipmentUnavailable ? "Not applicable" : selectedEquipmentUnknown ? "Equipment availability unknown" : selectedDeployedTask ? "Deployed" : selectedDeploymentProgress ? fddDeploymentPhaseLabel(selectedDeploymentProgress.phase) : "Not deployed"}</dd></div>
+              <div><dt>Inventory</dt><dd>{selectedCoverage.inventoryCount}</dd></div>
+              <div><dt>Deployable</dt><dd>{selectedCoverage.deployableCount}</dd></div>
+              <div><dt>Deployed</dt><dd>{selectedCoverage.deployedCount}</dd></div>
+              <div><dt>Skipped</dt><dd>{selectedCoverage.skippedCount}</dd></div>
             </dl>
             {selectedEquipmentUnavailable ? (
               <section className="fdd-detail-section fdd-detail-not-applicable" role="status">
@@ -4596,6 +4761,32 @@ function FddLibraryPanel({
                   <h4>Project Point Check</h4>
                   <span>{formatFriendlyDateTime(selectedCheck.checkedAt)} · {fddCheckWorkflowLabel(selectedCheck)}{selectedCheck.exampleEntityKey ? ` · Entity ${selectedCheck.exampleEntityKey}` : ""}</span>
                 </div>
+                <div className="fdd-fleet-coverage is-compact" aria-label="Selected algorithm deployment coverage">
+                  {[
+                    ["Inventory", selectedCoverage.inventoryCount],
+                    ["Deployable", selectedCoverage.deployableCount],
+                    ["Deployed", selectedCoverage.deployedCount],
+                    ["Skipped", selectedCoverage.skippedCount]
+                  ].map(([label, value]) => (
+                    <div className="fdd-fleet-coverage-item" key={label}>
+                      <span>{label}</span>
+                      <strong>{value}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="fdd-mapping-strategy">
+                  <strong>Mapping strategy</strong>
+                  <span>{selectedCheck.mappingStrategy === "homogeneous_template"
+                    ? `Homogeneous fleet template${selectedCheck.templateEntityKey ? ` (${selectedCheck.templateEntityKey})` : ""}; every inventory entity must independently match all distinct runtime roles.`
+                    : "Entity-independent same-equipment matching; every inventory entity must independently match all distinct runtime roles."}</span>
+                  <small>{selectedCheck.checkPolicyVersion ?? "No policy recorded"} · Runtime roles: {selectedRuntimeSlotKeys.join(", ") || "not recorded"}</small>
+                </div>
+                {selectedCoverage.blockedCount > 0 ? (
+                  <div className="fdd-rejected-list">
+                    <strong>Blocked entities</strong>
+                    <span>{selectedBlockedEntityReasons.join(" · ") || `${selectedCoverage.blockedCount} inventory entities lack complete mappings.`}</span>
+                  </div>
+                ) : null}
                 <p className="kpi-muted">Point matching includes an observed first-to-latest history-span check. It does not prove sample continuity, engineering-unit conversion, or evaluator execution.</p>
                 {selectedCheck.missingPoints.length > 0 || selectedCheck.historyIssues.length > 0 ? (
                   <div className="fdd-issue-chip-list">
@@ -4662,7 +4853,7 @@ function FddLibraryPanel({
               <Button
                 type="button"
                 loading={Boolean(selectedDeploymentProgress)}
-                disabled={!selectedDeployedTask && (!selectedEquipmentAvailable || !selectedAlgorithm.deployableRuntime || Boolean(deploymentProgress && !selectedDeploymentProgress) || selectedCheck?.status !== "can_deploy")}
+                disabled={!selectedDeployedTask && (!selectedEquipmentAvailable || !selectedAlgorithm.deployableRuntime || Boolean(deploymentProgress && !selectedDeploymentProgress) || selectedCheck?.status !== "can_deploy" || !selectedCoverage.hasFullDeployableCoverage)}
                 onClick={() => {
                   if (selectedDeployedTask) {
                     onOpenTask(selectedDeployedTask.id);
@@ -5352,6 +5543,7 @@ function Workspace({
         {activeTab === "fdd-library" ? (
           <FddLibraryPanel
             library={fddLibrary}
+            derivedMetrics={derivedMetrics}
             loading={fddLibraryLoading}
             deploymentProgress={fddDeploymentProgress}
             onCreateProjectFdd={onCreateProjectFdd}
@@ -5567,6 +5759,24 @@ export default function App() {
     const progress = fddDeploymentProgressRef.current;
     if (!progress?.task) return false;
     const group = fddMetricGroupForTask(progress.task, metrics);
+    if (group?.metrics.length) {
+      const actualEntityKeys = new Set(group.metrics.map((metric) => metric.instance.entityId));
+      const missingEntityKeys = (progress.expectedEntityKeys ?? []).filter((entityKey) => !actualEntityKeys.has(entityKey));
+      const unexpectedEntityKeys = progress.expectedEntityKeys?.length
+        ? [...actualEntityKeys].filter((entityKey) => !progress.expectedEntityKeys!.includes(entityKey))
+        : [];
+      const countMismatch = typeof progress.entityCount === "number" && progress.entityCount !== group.metrics.length;
+      if (missingEntityKeys.length > 0 || unexpectedEntityKeys.length > 0 || countMismatch) {
+        updateFddDeploymentProgress(null);
+        setBanner({
+          tone: "error",
+          title: "FDD deployment coverage mismatch",
+          message: `${progress.label}: deployed ${group.metrics.length}/${progress.entityCount ?? progress.expectedEntityKeys?.length ?? "expected"} entities.${missingEntityKeys.length ? ` Missing ${missingEntityKeys.join(", ")}.` : ""}${unexpectedEntityKeys.length ? ` Unexpected ${unexpectedEntityKeys.join(", ")}.` : ""}`,
+          requestId: progress.requestId
+        });
+        return true;
+      }
+    }
     const backfillError = fddBackfillErrorForTask(progress.task, metrics);
     if (backfillError) {
       updateFddDeploymentProgress(null);
@@ -5579,9 +5789,6 @@ export default function App() {
       return true;
     }
     if (!fddBackfillCompleteForTask(progress.task, metrics)) {
-      if (group?.metrics.length && progress.entityCount !== group.metrics.length) {
-        updateFddDeploymentProgress({ ...progress, entityCount: group.metrics.length });
-      }
       return false;
     }
     updateFddDeploymentProgress(null);
@@ -5679,13 +5886,9 @@ export default function App() {
     () => derivedMetrics.filter(isVisibleDerivedMetricAsset),
     [derivedMetrics]
   );
-  const visibleDashboards = useMemo(
-    () => dashboards.filter((dashboard) => isDashboardVisibleForCurrentFddScope(dashboard, derivedMetrics)),
-    [dashboards, derivedMetrics]
-  );
   const activeDashboard = useMemo(
-    () => visibleDashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
-    [visibleDashboards, activeDashboardId]
+    () => dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? null,
+    [dashboards, activeDashboardId]
   );
   const activeMetricAsset = useMemo(
     () => activeMetricId ? derivedMetrics.find((metric) => metric.instance.instanceId === activeMetricId) ?? null : null,
@@ -5712,13 +5915,6 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedProject) return;
-    if (activeTab === "dashboards" && activeDashboardId) {
-      const dashboardKnown = dashboards.some((dashboard) => dashboard.id === activeDashboardId);
-      const dashboardVisible = visibleDashboards.some((dashboard) => dashboard.id === activeDashboardId);
-      if (dashboardKnown && !dashboardVisible) {
-        applyWorkspacePath(selectedProject.id, "dashboards");
-      }
-    }
     if (activeTab === "kpis" && activeMetricId && activeMetricAsset && !isVisibleDerivedMetricAsset(activeMetricAsset)) {
       applyWorkspacePath(selectedProject.id, "kpis");
     }
@@ -5730,15 +5926,12 @@ export default function App() {
       }
     }
   }, [
-    activeDashboardId,
     activeFddTaskId,
     activeMetricAsset,
     activeMetricId,
     activeTab,
-    dashboards,
     fddTasks,
     selectedProject?.id ?? null,
-    visibleDashboards,
     visibleFddTasks
   ]);
   const visibleStreamingActivity = visibleStreamState?.activities ?? [];
@@ -6500,7 +6693,6 @@ export default function App() {
   async function handleOpenDashboard(dashboardId: string) {
     if (!token || !selectedProject) return;
     const cachedDashboard = dashboards.find((dashboard) => dashboard.id === dashboardId);
-    if (cachedDashboard && !isDashboardVisibleForCurrentFddScope(cachedDashboard, derivedMetrics)) return;
     setDashboardLiveValues({});
     setDashboardRealtimeAt(null);
     applyWorkspacePath(selectedProject.id, "dashboards", dashboardId);
@@ -7473,14 +7665,19 @@ export default function App() {
     setBusy(true);
     try {
       const response = await deployFddAlgorithm(token, selectedProject.id, algorithmId);
-      const entityCount = response.task.deployabilityCheck?.deployableEntities?.filter((entity) => entity.status !== "cannot_deploy").length;
+      const deploymentCheck = response.task.deployabilityCheck;
+      const deploymentCoverage = summarizeFddFleetCoverage(
+        deploymentCheck,
+        fddRequiredRuntimeSlots(deploymentCheck, response.task.algorithmSnapshot)
+      );
       updateFddDeploymentProgress({
         phase: "backfilling",
         algorithmId,
         taskId: response.task.id,
         task: response.task,
         label: response.task.algorithmSnapshot.name,
-        entityCount,
+        entityCount: response.deployment?.expectedEntityCount ?? deploymentCoverage.inventoryCount,
+        expectedEntityKeys: deploymentCoverage.inventoryEntityKeys,
         requestId: response.requestId
       });
       setFddTasks((current) => upsertProjectFddTask(current, response.task));
@@ -7612,14 +7809,19 @@ export default function App() {
     setBusy(true);
     try {
       const response = await deployFddTask(token, selectedProject.id, taskId);
-      const entityCount = response.task.deployabilityCheck?.deployableEntities?.filter((entity) => entity.status !== "cannot_deploy").length;
+      const deploymentCheck = response.task.deployabilityCheck;
+      const deploymentCoverage = summarizeFddFleetCoverage(
+        deploymentCheck,
+        fddRequiredRuntimeSlots(deploymentCheck, response.task.algorithmSnapshot)
+      );
       updateFddDeploymentProgress({
         phase: "backfilling",
         algorithmId: response.task.globalAlgorithmId,
         taskId: response.task.id,
         task: response.task,
         label: response.task.algorithmSnapshot.name,
-        entityCount,
+        entityCount: response.deployment?.expectedEntityCount ?? deploymentCoverage.inventoryCount,
+        expectedEntityKeys: deploymentCoverage.inventoryEntityKeys,
         requestId: response.requestId
       });
       setFddTasks((current) => upsertProjectFddTask(current, response.task));
@@ -7828,7 +8030,7 @@ export default function App() {
           activeConversationId={activeConversationId}
           kbDocuments={knowledgeBaseDocuments}
           repoItems={repositoryItems}
-          dashboards={visibleDashboards}
+          dashboards={dashboards}
           activeDashboard={activeDashboard}
           derivedMetrics={visibleDerivedMetricsForWorkspace}
           fddLibrary={fddLibrary}

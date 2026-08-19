@@ -5,14 +5,70 @@ import {
   ensureStoreFddLibrary,
   evaluateFddDeployability,
   FDD_DEPLOYABILITY_POLICY_VERSION,
+  fddAmbiguousAlternativesForPoint,
+  fddPointMappingsAreDistinct,
   normalizeFddCreateInput,
   seedFddAlgorithms,
+  sortFddPointCandidatesForRequiredPoint,
   type FddPointCandidate,
   type ProjectFddTask
 } from "./fddLibrary.js";
 import { executableFddAlgorithmKeys } from "./fdd/runtimeRegistry.js";
 
 describe("FDD library", () => {
+  it("uses verified unit evidence to resolve only semantically equivalent candidates", () => {
+    const algorithm = seedFddAlgorithms().find((entry) => entry.algorithmKey === "chiller_ch_01_commanded_fails_to_start");
+    const point = algorithm?.requiredPoints.find((entry) => entry.slot === "chiller_power");
+    expect(point).toBeTruthy();
+    if (!point) return;
+
+    const unknownEquivalent: FddPointCandidate = {
+      slot: point.slot,
+      pointName: "WCC_1_TLKW_RAW",
+      entityKey: "WCC_01",
+      unitCompatibility: "unknown",
+      dimensionReason: "Instantaneous power semantics are known, but the engineering unit is unknown.",
+      confidence: 0.96,
+      historyDays: 30,
+      reason: "Verified exact Brick power point."
+    };
+    const verifiedEquivalent: FddPointCandidate = {
+      ...unknownEquivalent,
+      pointName: "WCC_1_TLKW",
+      unit: "kW",
+      unitCompatibility: "match",
+      dimensionReason: "Instantaneous power and kW engineering unit are verified."
+    };
+    const rankedEquivalent = sortFddPointCandidatesForRequiredPoint(point, [unknownEquivalent, verifiedEquivalent]);
+    expect(rankedEquivalent[0]).toBe(verifiedEquivalent);
+    expect(fddAmbiguousAlternativesForPoint(point, rankedEquivalent[0]!, rankedEquivalent.slice(1))).toEqual([]);
+
+    const strongerUnknown: FddPointCandidate = {
+      ...unknownEquivalent,
+      pointName: "WCC_1_TLKW"
+    };
+    const weakVerified: FddPointCandidate = {
+      ...verifiedEquivalent,
+      pointName: "WCC_1_Generic_Sensor"
+    };
+    expect(sortFddPointCandidatesForRequiredPoint(point, [weakVerified, strongerUnknown])[0]).toBe(strongerUnknown);
+  });
+
+  it("rejects reused point names and reused object references independently", () => {
+    expect(fddPointMappingsAreDistinct([
+      { slot: "command", pointName: "WCC_1_SHARED", objectRef: "//Elements/1.AV1" },
+      { slot: "status", pointName: "WCC_1_SHARED", objectRef: "//Elements/1.AV2" }
+    ])).toBe(false);
+    expect(fddPointMappingsAreDistinct([
+      { slot: "command", pointName: "WCC_1_COMMAND", objectRef: "//Elements/1.AV1" },
+      { slot: "status", pointName: "WCC_1_STATUS", objectRef: "//Elements/1.AV1" }
+    ])).toBe(false);
+    expect(fddPointMappingsAreDistinct([
+      { slot: "command", pointName: "WCC_1_COMMAND", objectRef: "//Elements/1.AV1" },
+      { slot: "status", pointName: "WCC_1_STATUS", objectRef: "//Elements/1.AV2" }
+    ])).toBe(true);
+  });
+
   it("seeds AHU DBN cards and the chiller low COP example into the global library", () => {
     const store = createSeedStore();
     ensureStoreFddLibrary(store);
@@ -205,7 +261,7 @@ describe("FDD library", () => {
       projectDataSignature: "sig-1",
       pointCandidates: [
         ...requiredCandidates,
-        { ...requiredCandidates[0]!, pointName: "semantic_neighbor", confidence: 0.93, reason: "semantic neighbor" }
+        { ...requiredCandidates[0]!, pointName: `${requiredCandidates[0]!.pointName}_backup`, confidence: 0.93, reason: "semantic neighbor" }
       ],
       exampleEntityKey: "CHILLER-01"
     });

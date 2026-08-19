@@ -10466,6 +10466,71 @@ p {
   line-height: 1.4;
 }
 
+.fdd-fleet-coverage {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fdd-fleet-coverage.is-compact {
+  gap: 0.5rem;
+}
+
+.fdd-fleet-coverage-item {
+  background: #f8fafc;
+  border: 1px solid rgba(203, 213, 225, 0.8);
+  border-radius: 0.7rem;
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+}
+
+.fdd-fleet-coverage-item span {
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fdd-fleet-coverage-item strong {
+  color: var(--color-text-primary);
+  font-size: 1.15rem;
+}
+
+.fdd-mapping-strategy {
+  background: rgba(239, 246, 255, 0.72);
+  border: 1px solid rgba(147, 197, 253, 0.72);
+  border-radius: 0.75rem;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.75rem 0.85rem;
+}
+
+.fdd-mapping-strategy strong {
+  color: #1e3a8a;
+  font-size: 0.8rem;
+}
+
+.fdd-mapping-strategy span,
+.fdd-mapping-strategy small {
+  color: var(--color-text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.kpi-entity-card.is-blocked {
+  background: #fffaf5;
+  border-color: rgba(251, 146, 60, 0.48);
+}
+
+.kpi-entity-card > .fdd-entity-blocker {
+  color: #b45309;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
 .fdd-task-parameter-grid {
   display: grid;
   gap: 0.7rem;
@@ -10565,6 +10630,10 @@ p {
   .fdd-task-runtime-grid,
   .fdd-task-action-panel {
     grid-template-columns: 1fr;
+  }
+
+  .fdd-fleet-coverage {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .kpi-dashboard-links-compact button {

@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App, { isCurrentEquipmentFirstFddCheck } from "./App";
+import App, { isCurrentEquipmentFirstFddCheck, summarizeFddFleetCoverage } from "./App";
 import type { DashboardRecord, FddAlgorithm, FddDeployabilityCheck, FddEquipmentAvailability } from "./api";
 import { DashboardView } from "./ui/DashboardView";
 
@@ -355,7 +355,7 @@ describe("equipment-first FDD check guard", () => {
   const currentCheck = (overrides: Partial<FddDeployabilityCheck> = {}): FddDeployabilityCheck => ({
     algorithmId: algorithm.id,
     algorithmVersion: algorithm.version,
-    checkPolicyVersion: "v3-equipment-first",
+    checkPolicyVersion: "v4-homogeneous-fleet",
     projectId: "project_alpha",
     status: "can_deploy",
     applicability: "applicable",
@@ -384,8 +384,9 @@ describe("equipment-first FDD check guard", () => {
     nowMs
   );
 
-  it("accepts only a fresh v3 check for the current authoritative inventory", () => {
+  it("accepts only a fresh v4 homogeneous-fleet check for the current authoritative inventory", () => {
     expect(accepted(currentCheck())).toBe(true);
+    expect(accepted(currentCheck({ checkPolicyVersion: "v3-equipment-first" }))).toBe(false);
     expect(accepted(currentCheck({ checkPolicyVersion: "v2-observed-history" }))).toBe(false);
     expect(accepted(currentCheck({ checkedAt: "2026-08-17T07:59:59.999Z" }))).toBe(false);
     expect(accepted(currentCheck(), "inventory-replaced")).toBe(false);
@@ -439,6 +440,121 @@ describe("equipment-first FDD check guard", () => {
     expect(isCurrentEquipmentFirstFddCheck(sensorCheck(chillerSensorAlgorithm, available), chillerSensorAlgorithm, "project_alpha", "inventory-current", available, nowMs)).toBe(true);
     expect(isCurrentEquipmentFirstFddCheck(sensorCheck(pumpSensorAlgorithm, pumpAvailability), pumpSensorAlgorithm, "project_alpha", "inventory-current", pumpAvailability, nowMs)).toBe(true);
     expect(isCurrentEquipmentFirstFddCheck(sensorCheck(chillerSensorAlgorithm, available), { ...chillerSensorAlgorithm, requiredPoints: [requiredPoint("temperature", "Temperature", "Generic sensor")] }, "project_alpha", "inventory-current", available, nowMs)).toBe(false);
+  });
+});
+
+describe("FDD fleet deployment coverage", () => {
+  const requiredSlots = ["chiller_command", "chiller_status", "chiller_alarm", "chiller_running_power"];
+  const inventoryEntityKeys = Array.from({ length: 8 }, (_, index) => `WCC_${index + 1}`);
+  const entityCheck = (
+    entityKey: string,
+    status: "can_deploy" | "uncertain" = "can_deploy"
+  ): NonNullable<FddDeployabilityCheck["deployableEntities"]>[number] => ({
+    entityKey,
+    status,
+    selectedMappings: requiredSlots.map((slot) => ({ slot, pointName: `${entityKey}_${slot}` })),
+    ambiguousInputs: status === "uncertain"
+      ? [{ slot: "run_status", label: "Run status", candidates: [] }]
+      : [],
+    missingPoints: [],
+    historyIssues: [],
+    confidence: status === "can_deploy" ? 1 : 0.5
+  });
+  const fleetCheck = (
+    deployableEntities: NonNullable<FddDeployabilityCheck["deployableEntities"]>
+  ): FddDeployabilityCheck => ({
+    algorithmId: "fddalg_chiller_ch_03",
+    algorithmVersion: "3.0.0",
+    checkPolicyVersion: "v4-homogeneous-fleet",
+    mappingStrategy: "homogeneous_template",
+    templateEntityKey: "WCC_1",
+    expectedEntityCount: 8,
+    requiredRuntimeSlots: requiredSlots,
+    projectId: "project_element",
+    status: "can_deploy",
+    applicability: "applicable",
+    equipmentAvailability: {
+      equipmentType: "chiller",
+      status: "available",
+      entityCount: 8,
+      entityKeys: inventoryEntityKeys
+    },
+    equipmentInventorySignature: "inventory-eight-chillers",
+    pointCandidates: [],
+    deployableEntities,
+    ambiguousInputs: [],
+    rejectedCandidates: [],
+    missingPoints: [],
+    historyIssues: [],
+    checkedAt: "2026-08-19T01:00:00.000Z",
+    source: "auto",
+    projectDataSignature: "element-current"
+  });
+
+  it("reports exact 8/8 fleet coverage when every entity is deployable and deployed", () => {
+    const summary = summarizeFddFleetCoverage(
+      fleetCheck(inventoryEntityKeys.map((entityKey) => entityCheck(entityKey))),
+      requiredSlots,
+      inventoryEntityKeys,
+      true
+    );
+
+    expect(summary).toMatchObject({
+      inventoryCount: 8,
+      deployableCount: 8,
+      deployedCount: 8,
+      skippedCount: 0,
+      blockedCount: 0,
+      hasFullDeployableCoverage: true
+    });
+  });
+
+  it("keeps one uncertain entity blocked and skipped instead of counting it as deployable", () => {
+    const checkedEntities = inventoryEntityKeys.map((entityKey) => entityCheck(
+      entityKey,
+      entityKey === "WCC_8" ? "uncertain" : "can_deploy"
+    ));
+    const summary = summarizeFddFleetCoverage(
+      fleetCheck(checkedEntities),
+      requiredSlots,
+      inventoryEntityKeys.slice(0, 7),
+      true
+    );
+
+    expect(summary).toMatchObject({
+      inventoryCount: 8,
+      deployableCount: 7,
+      deployedCount: 7,
+      skippedCount: 1,
+      blockedCount: 1,
+      hasFullDeployableCoverage: false
+    });
+    expect(summary.blockedEntityKeys).toEqual(["WCC_8"]);
+    expect(summary.skippedEntityKeys).toEqual(["WCC_8"]);
+  });
+
+  it("blocks an entity when either a physical point name or object reference is reused", () => {
+    for (const duplicatedIdentity of ["pointName", "objectRef"] as const) {
+      const checkedEntities = inventoryEntityKeys.map((entityKey) => entityCheck(entityKey));
+      checkedEntities[7] = {
+        ...checkedEntities[7]!,
+        selectedMappings: requiredSlots.map((slot) => ({
+          slot,
+          pointName: duplicatedIdentity === "pointName" && slot === "chiller_alarm"
+            ? "WCC_8_chiller_status"
+            : `WCC_8_${slot}`,
+          objectRef: duplicatedIdentity === "objectRef" && (slot === "chiller_alarm" || slot === "chiller_status")
+            ? "TL500/WCC8-RUN"
+            : `TL500/WCC8-${slot}`
+        }))
+      };
+
+      const summary = summarizeFddFleetCoverage(fleetCheck(checkedEntities), requiredSlots);
+
+      expect(summary.deployableCount, duplicatedIdentity).toBe(7);
+      expect(summary.blockedEntityKeys, duplicatedIdentity).toEqual(["WCC_8"]);
+      expect(summary.hasFullDeployableCoverage, duplicatedIdentity).toBe(false);
+    }
   });
 });
 
@@ -1615,6 +1731,124 @@ describe("BuildingGPT Web flow", () => {
     expect(screen.getByRole("button", { name: /other conversation dashboard/i })).toBeInTheDocument();
   });
 
+  it("keeps all API-authorized dashboards visible in the workspace, Auto Report, and legacy deep links", async () => {
+    const legacyFddDashboard = dashboardRecord({
+      id: "dashboard_legacy_fdd",
+      title: "Chiller Low COP Detection Dashboard",
+      description: "Runtime FDD dashboard for the legacy low-COP evaluator.",
+      layout: [{ widgetId: "legacy_fdd_status", x: 0, y: 0, w: 4, h: 2 }],
+      widgets: [{
+        id: "legacy_fdd_status",
+        kind: "status_grid",
+        title: "Legacy FDD status",
+        pointBindings: [{
+          source: "derived_metric",
+          metricInstanceId: "minst_legacy_fdd",
+          metricKey: "chiller_low_cop_detection",
+          entityId: "WCC_1",
+          label: "Fault status"
+        }]
+      }],
+      updatedAt: "2026-08-19T09:00:00.000Z"
+    }) as DashboardRecord;
+    const dashboards = [
+      dashboardRecord({ id: "dashboard_chw", title: "CHW Plant Overview", updatedAt: "2026-08-19T08:00:00.000Z" }),
+      dashboardRecord({ id: "dashboard_cop", title: "COP Performance Overview", updatedAt: "2026-08-19T08:01:00.000Z" }),
+      dashboardRecord({ id: "dashboard_delta_t", title: "Plant Delta-T Overview", updatedAt: "2026-08-19T08:02:00.000Z" }),
+      legacyFddDashboard,
+      dashboardRecord({
+        id: "dashboard_ch01",
+        title: "CH-01 Commanded Chiller Fails to Start",
+        layout: [{ widgetId: "ch01_status", x: 0, y: 0, w: 4, h: 2 }],
+        widgets: [{
+          id: "ch01_status",
+          kind: "status_grid",
+          title: "CH-01 status",
+          pointBindings: [{
+            source: "derived_metric",
+            metricInstanceId: "minst_ch01",
+            metricKey: "chiller_ch_01_commanded_chiller_fails_to_start",
+            entityId: "WCC_1",
+            label: "Fault status"
+          }]
+        }],
+        updatedAt: "2026-08-19T09:01:00.000Z"
+      }),
+      dashboardRecord({ id: "dashboard_energy", title: "Energy Summary", updatedAt: "2026-08-19T08:03:00.000Z" }),
+      dashboardRecord({ id: "dashboard_temperatures", title: "Temperature Summary", updatedAt: "2026-08-19T08:04:00.000Z" }),
+      dashboardRecord({ id: "dashboard_runtime", title: "Runtime Summary", updatedAt: "2026-08-19T08:05:00.000Z" }),
+      dashboardRecord({ id: "dashboard_operations", title: "Operations Summary", updatedAt: "2026-08-19T08:06:00.000Z" })
+    ] as DashboardRecord[];
+
+    window.localStorage.setItem("building-agent.session.v1", JSON.stringify({
+      token: "seed-token-ada",
+      user: { id: "user_ada", name: "Ada Lovelace" },
+      projectId: alphaProject.id
+    }));
+    window.history.replaceState({}, "", `/projects/${alphaProject.id}/dashboards/${legacyFddDashboard.id}`);
+
+    installFetch((url, init) => {
+      if (url === "/api/session") {
+        return jsonResponse({ session: { userId: "user_ada", projectId: alphaProject.id, permissions: alphaProject.permissions }, requestId: "req_session" });
+      }
+      if (url === "/api/projects") return jsonResponse({ projects: [alphaProject], limit: 50, requestId: "req_projects" });
+      if (url === `/api/projects/${alphaProject.id}/chat` && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === `/api/projects/${alphaProject.id}/chat/active-streams`) return jsonResponse({ projectId: alphaProject.id, streams: [], requestId: "req_active_streams" });
+      if (url === `/api/projects/${alphaProject.id}/conversations`) return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === `/api/projects/${alphaProject.id}/management`) return jsonResponse(managementBody());
+      if (url === `/api/projects/${alphaProject.id}/knowledge-base`) return jsonResponse({ documents: [], totalCount: 0, requestId: "req_kb" });
+      if (url === `/api/projects/${alphaProject.id}/repository`) return jsonResponse({ artifacts: [], totalCount: 0, requestId: "req_repo" });
+      if (url === `/api/projects/${alphaProject.id}/dashboards`) {
+        return jsonResponse({ projectId: alphaProject.id, dashboards, totalCount: dashboards.length, requestId: "req_dashboards" });
+      }
+      if (url === `/api/projects/${alphaProject.id}/dashboards/${legacyFddDashboard.id}`) {
+        return jsonResponse({ projectId: alphaProject.id, dashboard: legacyFddDashboard, requestId: "req_dashboard" });
+      }
+      if (url === `/api/projects/${alphaProject.id}/derived-metrics`) return jsonResponse({ metrics: [], totalCount: 0, requestId: "req_metrics" });
+      if (url === `/api/projects/${alphaProject.id}/fdd-tasks`) return jsonResponse({ projectId: alphaProject.id, tasks: [], totalCount: 0, requestId: "req_fdd_tasks" });
+      if (url === "/api/bms/dashboard/latest-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string }> };
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({ key: query.key, ok: true, point: { name: query.key, last_value: "0", last_polled_at: "2026-08-19T09:00:00.000Z" } })),
+          requestId: "req_latest"
+        });
+      }
+      if (url === "/api/bms/dashboard/history-batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as { queries?: Array<{ key: string }> };
+        return jsonResponse({
+          results: (body.queries ?? []).map((query) => ({ key: query.key, ok: true, total: 1, items: [{ ts: "2026-08-19T09:00:00.000Z", value_num: 0, name: query.key }] })),
+          requestId: "req_history"
+        });
+      }
+      return apiError("not_found", `Unexpected test URL: ${url}`, 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: legacyFddDashboard.title })).toBeInTheDocument();
+    expect(window.location.pathname).toBe(`/projects/${alphaProject.id}/dashboards/${legacyFddDashboard.id}`);
+
+    const projectDashboardList = screen.getByRole("list", { name: "Project dashboards" });
+    expect(projectDashboardList.querySelectorAll(".workspace-right-dashboard-item")).toHaveLength(9);
+    const dashboardSection = projectDashboardList.closest("details");
+    expect(dashboardSection?.querySelector(".right-section-meta")).toHaveTextContent("9");
+    for (const dashboard of dashboards) {
+      expect(within(projectDashboardList).getByRole("button", { name: new RegExp(dashboard.title, "i") })).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole("button", { name: /Auto Report/i }));
+    const reportDashboardList = await screen.findByRole("list", { name: "Dashboards for report" });
+    expect(reportDashboardList.querySelectorAll("li")).toHaveLength(9);
+    expect(within(reportDashboardList).getByText("CHW Plant Overview")).toBeInTheDocument();
+    expect(within(reportDashboardList).getByText("COP Performance Overview")).toBeInTheDocument();
+    expect(within(reportDashboardList).getByText("Plant Delta-T Overview")).toBeInTheDocument();
+    expect(within(reportDashboardList).getByText("Chiller Low COP Detection Dashboard")).toBeInTheDocument();
+    expect(within(reportDashboardList).getByText("CH-01 Commanded Chiller Fails to Start")).toBeInTheDocument();
+    expect(screen.getByText("9/9")).toBeInTheDocument();
+  });
+
   it("shows curated FDD rules across six equipment types and blocks spec-only deployment", async () => {
     const project = alphaProject;
     const now = "2026-08-11T00:00:00.000Z";
@@ -1805,7 +2039,7 @@ describe("BuildingGPT Web flow", () => {
     expect(screen.getByText("FDD Algorithm Library")).toBeInTheDocument();
     expect(screen.queryByText("Chiller Low COP Detection")).not.toBeInTheDocument();
     expect(screen.queryByText("AHU Supply Air Flow Sensor Fault")).not.toBeInTheDocument();
-    expect(screen.queryByText("Chiller Low COP Detection Dashboard")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Chiller Low COP Detection Dashboard/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add algorithm/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add fdd/i })).not.toBeInTheDocument();
   });

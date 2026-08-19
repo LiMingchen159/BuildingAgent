@@ -19,6 +19,12 @@ export interface FddRuleEvaluation {
   derivedValues?: Record<string, number>;
 }
 
+export interface FddRuleEvaluationState {
+  sampleMs: number;
+  status: string;
+  derivedValues?: Record<string, number>;
+}
+
 interface FddWindowPredicateResult {
   calculable: boolean;
   fault: boolean;
@@ -103,21 +109,31 @@ function fddChillerRunningEvidence(
   const runStatus = fddInput(inputs, "chiller_status");
   const runStatusBoolean = fddInputBoolean(inputs, "chiller_status");
   const power = fddInput(inputs, "chiller_running_power") ?? fddInput(inputs, "chiller_power");
-  const minPower = numericFddParameter(instance, "running_power_min_kw", 10);
+  const minPower = numericFddParameter(
+    instance,
+    "running_power_min_kw",
+    numericFddParameter(instance, "power_on_threshold_kw", 10)
+  );
   const derivedValues: Record<string, number> = {
     ...(typeof runStatus === "number" ? { runStatus } : {}),
     ...(typeof power === "number" ? { runningPowerKw: power, runningPowerMinKw: minPower } : {})
   };
   if (typeof power === "number") {
+    const running = power > minPower;
+    if (runStatusBoolean !== undefined) {
+      derivedValues.statusPowerConflict = runStatusBoolean === running ? 0 : 1;
+    }
+    derivedValues.runningEvidenceSourcePower = 1;
     return {
-      running: power > minPower,
-      reason: power > minPower
+      running,
+      reason: running
         ? "Chiller running state follows project grounding: grounded running-power evidence is meaningfully positive."
         : "Chiller is treated as not running by project grounding because grounded running-power evidence is not meaningfully positive.",
       derivedValues
     };
   }
   if (runStatusBoolean !== undefined) {
+    derivedValues.runningEvidenceSourcePower = 0;
     return {
       running: runStatusBoolean,
       reason: "Chiller running state fell back to status-only evidence because grounded running-power evidence was unavailable.",
@@ -271,7 +287,8 @@ function fddWindowedFaultSample({
   toleranceMs,
   windowMinutes,
   preferredAnchorRole,
-  predicate
+  predicate,
+  previousState
 }: {
   ruleLabel: string;
   currentFault: boolean;
@@ -283,6 +300,7 @@ function fddWindowedFaultSample({
   windowMinutes: number;
   preferredAnchorRole?: string;
   predicate: (inputs: Record<string, number>, sampleMs: number) => FddWindowPredicateResult;
+  previousState?: FddRuleEvaluationState;
 }): FddRuleEvaluation {
   const baseDerivedValues = {
     ...(derivedValues ?? {}),
@@ -292,7 +310,14 @@ function fddWindowedFaultSample({
     return fddFaultSample(
       false,
       `${ruleLabel} condition is not present at the current sample; the configured ${windowMinutes} min persistence window is not faulted.`,
-      baseDerivedValues
+      {
+        ...baseDerivedValues,
+        conditionPersistencePending: 0,
+        conditionPersistenceLatched: 0,
+        conditionPersistenceFaultSampleCount: 0,
+        conditionPersistenceElapsedMinutes: 0,
+        conditionPersistenceLastSampleMs: targetMs
+      }
     );
   }
 
@@ -316,13 +341,58 @@ function fddWindowedFaultSample({
     return fddFaultSample(
       true,
       `${ruleLabel} condition persisted across the configured ${windowMinutes} min FDD window.`,
-      persistenceDerivedValues
+      {
+        ...persistenceDerivedValues,
+        conditionPersistenceStartedAtMs: targetMs - persistence.faultSpanMinutes * 60_000,
+        conditionPersistenceLastSampleMs: targetMs,
+        conditionPersistenceFaultSampleCount: persistence.faultCount,
+        conditionPersistenceElapsedMinutes: persistence.faultSpanMinutes,
+        conditionPersistencePending: 0,
+        conditionPersistenceLatched: 1
+      }
+    );
+  }
+  const previousDerived = previousState?.derivedValues;
+  const previousStartMs = previousDerived?.conditionPersistenceStartedAtMs;
+  const previousLastSampleMs = previousDerived?.conditionPersistenceLastSampleMs ?? previousState?.sampleMs;
+  const previousFaultSampleCount = previousDerived?.conditionPersistenceFaultSampleCount ?? 0;
+  const previousPending = previousDerived?.conditionPersistencePending === 1;
+  const previousLatched = previousDerived?.conditionPersistenceLatched === 1;
+  const maximumContinuationGapMs = Math.max(windowMinutes * 60_000, toleranceMs * 2);
+  const canContinuePrevious = Boolean(
+    (previousPending || previousLatched)
+    && typeof previousStartMs === "number"
+    && Number.isFinite(previousStartMs)
+    && typeof previousLastSampleMs === "number"
+    && previousLastSampleMs < targetMs
+    && targetMs - previousLastSampleMs <= maximumContinuationGapMs
+  );
+  const conditionStartMs = canContinuePrevious ? previousStartMs! : targetMs;
+  const conditionFaultSampleCount = canContinuePrevious ? previousFaultSampleCount + 1 : 1;
+  const conditionElapsedMinutes = Math.max(0, (targetMs - conditionStartMs) / 60_000);
+  const cadencePersisted = (previousLatched && canContinuePrevious)
+    || (conditionFaultSampleCount >= 2 && conditionElapsedMinutes >= Math.max(0, windowMinutes));
+  const cadenceDerivedValues = {
+    ...persistenceDerivedValues,
+    conditionPersistenceStartedAtMs: conditionStartMs,
+    conditionPersistenceLastSampleMs: targetMs,
+    conditionPersistenceFaultSampleCount: conditionFaultSampleCount,
+    conditionPersistenceElapsedMinutes: Number(conditionElapsedMinutes.toFixed(2)),
+    conditionPersistencePending: cadencePersisted ? 0 : 1,
+    conditionPersistenceLatched: cadencePersisted ? 1 : 0,
+    cadenceAwareConditionPersistence: 1
+  };
+  if (cadencePersisted) {
+    return fddFaultSample(
+      true,
+      `${ruleLabel} condition remained active for at least ${windowMinutes} min across ${conditionFaultSampleCount} distinct aligned polls.`,
+      cadenceDerivedValues
     );
   }
   return fddFaultSample(
     false,
     `${ruleLabel} condition is present at the current sample, but it is not confirmed across the configured ${windowMinutes} min FDD window (${persistence.faultCount}/${persistence.validCount} valid samples faulted, ${persistence.faultSpanMinutes} min fault span).`,
-    persistenceDerivedValues
+    cadenceDerivedValues
   );
 }
 
@@ -358,7 +428,8 @@ function chillerDocWindowedRule({
   toleranceMs,
   windowMinutes,
   preferredAnchorRole,
-  evaluate
+  evaluate,
+  previousState
 }: {
   ruleLabel: string;
   roles: string[];
@@ -370,6 +441,7 @@ function chillerDocWindowedRule({
   windowMinutes: number;
   preferredAnchorRole?: string;
   evaluate: (inputs: Record<string, number>, sampleMs: number) => ChillerDocRuleResult;
+  previousState?: FddRuleEvaluationState;
 }): FddRuleEvaluation {
   const current = evaluate(inputs, targetMs);
   if (!current.calculable) return fddInvalidSample(current.reason ?? `Missing required FDD input(s): ${roles.join(", ")}.`);
@@ -383,6 +455,7 @@ function chillerDocWindowedRule({
     toleranceMs,
     windowMinutes,
     ...(preferredAnchorRole ? { preferredAnchorRole } : {}),
+    ...(previousState ? { previousState } : {}),
     predicate: (sampleInputs, sampleMs) => {
       const result = evaluate(sampleInputs, sampleMs);
       return { calculable: result.calculable, fault: result.fault };
@@ -407,13 +480,156 @@ function fddSeriesDelta(points: MaterializerNumericPoint[], targetMs: number, wi
   };
 }
 
-function fddBooleanFall(points: MaterializerNumericPoint[], targetMs: number, windowMinutes: number): boolean | null {
+function fddThresholdFall(points: MaterializerNumericPoint[], targetMs: number, windowMinutes: number, threshold: number): boolean | null {
   const window = fddSeriesWindow(points, targetMs, windowMinutes);
   if (window.length < 2) return null;
   for (let index = 1; index < window.length; index += 1) {
-    if (window[index - 1]!.value > 0.5 && window[index]!.value <= 0.5) return true;
+    if (window[index - 1]!.value > threshold && window[index]!.value <= threshold) return true;
   }
   return false;
+}
+
+function fddLatestThresholdFallMs(
+  points: MaterializerNumericPoint[],
+  targetMs: number,
+  lookbackMinutes: number,
+  threshold: number
+): number | null {
+  const window = fddSeriesWindow(points, targetMs, lookbackMinutes);
+  let latest: number | null = null;
+  for (let index = 1; index < window.length; index += 1) {
+    if (window[index - 1]!.value > threshold && window[index]!.value <= threshold) {
+      latest = window[index]!.ms;
+    }
+  }
+  return latest;
+}
+
+function fddChillerShutdownEdgeSample({
+  ruleLabel,
+  currentFaultCondition,
+  derivedValues,
+  seriesByRole,
+  targetMs,
+  toleranceMs,
+  windowMinutes,
+  runningPowerMinKw,
+  transitionLookbackMinutes,
+  previousState
+}: {
+  ruleLabel: string;
+  currentFaultCondition: boolean;
+  derivedValues: Record<string, number>;
+  seriesByRole: Map<string, MaterializerNumericPoint[]>;
+  targetMs: number;
+  toleranceMs: number;
+  windowMinutes: number;
+  runningPowerMinKw: number;
+  transitionLookbackMinutes: number;
+  previousState?: FddRuleEvaluationState;
+}): FddRuleEvaluation {
+  const powerSeries = seriesByRole.get("chiller_running_power") ?? [];
+  const commandSeries = seriesByRole.get("chiller_command") ?? [];
+  const baseDerivedValues = {
+    ...derivedValues,
+    persistenceWindowMinutes: windowMinutes,
+    cadenceAwareEdgePersistence: 1
+  };
+  if (!currentFaultCondition) {
+    return fddFaultSample(
+      false,
+      `${ruleLabel} edge state is reset because command or grounded running-power evidence no longer indicates an abnormal stopped condition.`,
+      {
+        ...baseDerivedValues,
+        edgeEventPending: 0,
+        edgeEventLatched: 0,
+        edgeEventLowSampleCount: 0,
+        edgeEventElapsedMinutes: 0,
+        edgeEventLastSampleMs: targetMs
+      }
+    );
+  }
+
+  const latestRawFallMs = fddLatestThresholdFallMs(
+    powerSeries,
+    targetMs,
+    transitionLookbackMinutes,
+    runningPowerMinKw
+  );
+  const previousDerived = previousState?.derivedValues;
+  const previousEventStartMs = previousDerived?.edgeEventStartedAtMs;
+  const previousLastSampleMs = previousDerived?.edgeEventLastSampleMs ?? previousState?.sampleMs;
+  const previousLatched = previousDerived?.edgeEventLatched === 1;
+  const previousPending = previousDerived?.edgeEventPending === 1;
+  const previousStateUsable = (previousLatched || previousPending)
+    && typeof previousEventStartMs === "number"
+    && Number.isFinite(previousEventStartMs)
+    && typeof previousLastSampleMs === "number"
+    && previousLastSampleMs < targetMs;
+
+  // A command-off or power recovery acknowledges/resets the prior edge. A
+  // later, newly observed high-to-low transition starts a new event instead.
+  const resetAfterPrevious = previousStateUsable && [
+    ...commandSeries.filter((point) => point.ms > previousLastSampleMs! && point.ms <= targetMs && point.value <= 0.5),
+    ...powerSeries.filter((point) => point.ms > previousLastSampleMs! && point.ms <= targetMs && point.value > runningPowerMinKw)
+  ].some((point) => !latestRawFallMs || point.ms >= latestRawFallMs);
+  const carryPrevious = previousStateUsable && !resetAfterPrevious
+    ? previousEventStartMs
+    : undefined;
+  const eventStartMs = latestRawFallMs ?? carryPrevious;
+  if (typeof eventStartMs !== "number") {
+    return fddFaultSample(
+      false,
+      `${ruleLabel} stopped condition is present, but no grounded running-power fall edge is available to distinguish shutdown from a failed start.`,
+      {
+        ...baseDerivedValues,
+        edgeEventPending: 0,
+        edgeEventLatched: 0,
+        edgeEventLowSampleCount: 0,
+        edgeEventElapsedMinutes: 0,
+        edgeEventLastSampleMs: targetMs
+      }
+    );
+  }
+
+  const lowConfirmationTimes = new Set<number>();
+  for (const point of powerSeries) {
+    if (point.ms < eventStartMs || point.ms > targetMs || point.value > runningPowerMinKw) continue;
+    const command = materializerNearestNumericPoint(commandSeries, point.ms, toleranceMs);
+    if (command && command.value > 0.5) lowConfirmationTimes.add(point.ms);
+  }
+  const sameCarriedEvent = carryPrevious === eventStartMs;
+  const previousLowSampleCount = sameCarriedEvent
+    ? Math.max(0, previousDerived?.edgeEventLowSampleCount ?? 0)
+    : 0;
+  const rawNewConfirmations = [...lowConfirmationTimes]
+    .filter((sampleMs) => !sameCarriedEvent || sampleMs > (previousLastSampleMs ?? Number.NEGATIVE_INFINITY))
+    .length;
+  const lowSampleCount = Math.max(lowConfirmationTimes.size, previousLowSampleCount + rawNewConfirmations);
+  const elapsedMinutes = Math.max(0, (targetMs - eventStartMs) / 60_000);
+  const persisted = (previousLatched && sameCarriedEvent)
+    || (lowSampleCount >= 2 && elapsedMinutes >= Math.max(0, windowMinutes));
+  const edgeDerivedValues = {
+    ...baseDerivedValues,
+    edgeEventStartedAtMs: eventStartMs,
+    edgeEventLastSampleMs: targetMs,
+    edgeEventLowSampleCount: lowSampleCount,
+    edgeEventElapsedMinutes: Number(elapsedMinutes.toFixed(2)),
+    edgeEventPending: persisted ? 0 : 1,
+    edgeEventLatched: persisted ? 1 : 0
+  };
+  if (persisted) {
+    return fddFaultSample(
+      true,
+      `${ruleLabel} running-power fall remained commanded and below threshold for at least ${windowMinutes} min across ${lowSampleCount} distinct polls; the edge event is latched until command-off or power recovery.`,
+      edgeDerivedValues
+    );
+  }
+  return fddFaultSample(
+    false,
+    `${ruleLabel} running-power fall is pending confirmation (${lowSampleCount} distinct low poll${lowSampleCount === 1 ? "" : "s"}, ${Number(elapsedMinutes.toFixed(2))}/${windowMinutes} min).`,
+    edgeDerivedValues
+  );
 }
 
 function fddStuckEvidence(
@@ -496,7 +712,8 @@ function evaluateImportedChillerDocRule(
   seriesByRole: Map<string, MaterializerNumericPoint[]>,
   targetMs: number,
   toleranceMs: number,
-  windowMinutes: number
+  windowMinutes: number,
+  previousState?: FddRuleEvaluationState
 ): FddRuleEvaluation | null {
   const key = instance.metricKey;
 
@@ -515,6 +732,7 @@ function evaluateImportedChillerDocRule(
     toleranceMs,
     windowMinutes,
     ...(preferredAnchorRole ? { preferredAnchorRole } : {}),
+    ...(previousState ? { previousState } : {}),
     evaluate
   });
 
@@ -523,14 +741,13 @@ function evaluateImportedChillerDocRule(
       return windowed("CH-01 Commanded chiller fails to start", ["chiller_command", "chiller_status", "chiller_power"], (sample) => {
         const values = requiredValues(sample, ["chiller_command", "chiller_status", "chiller_power"]);
         if (!values) return missingInputResult(["chiller_command", "chiller_status", "chiller_power"]);
-        const powerOnThresholdKw = numericFddParameter(instance, "power_on_threshold_kw", 10);
         const commandOn = valueFor(values, "chiller_command") > 0.5;
-        const statusOn = valueFor(values, "chiller_status") > 0.5;
-        const chillerPower = valueFor(values, "chiller_power");
+        const runningEvidence = fddChillerRunningEvidence(instance, values);
+        if (runningEvidence.running === undefined) return { calculable: false, fault: false, reason: "No grounded chiller running evidence is available." };
         return {
           calculable: true,
-          fault: commandOn && !statusOn && chillerPower < powerOnThresholdKw,
-          derivedValues: { commandOn: commandOn ? 1 : 0, statusOn: statusOn ? 1 : 0, chillerPower, powerOnThresholdKw }
+          fault: commandOn && !runningEvidence.running,
+          derivedValues: { commandOn: commandOn ? 1 : 0, running: runningEvidence.running ? 1 : 0, ...runningEvidence.derivedValues }
         };
       }, "chiller_power");
 
@@ -538,32 +755,62 @@ function evaluateImportedChillerDocRule(
       return windowed("CH-02 Uncommanded chiller operation", ["chiller_command", "chiller_status", "chiller_power"], (sample) => {
         const values = requiredValues(sample, ["chiller_command", "chiller_status", "chiller_power"]);
         if (!values) return missingInputResult(["chiller_command", "chiller_status", "chiller_power"]);
-        const powerOnThresholdKw = numericFddParameter(instance, "power_on_threshold_kw", 10);
         const commandOn = valueFor(values, "chiller_command") > 0.5;
-        const statusOn = valueFor(values, "chiller_status") > 0.5;
-        const chillerPower = valueFor(values, "chiller_power");
+        const runningEvidence = fddChillerRunningEvidence(instance, values);
+        if (runningEvidence.running === undefined) return { calculable: false, fault: false, reason: "No grounded chiller running evidence is available." };
         return {
           calculable: true,
-          fault: !commandOn && (statusOn || chillerPower > powerOnThresholdKw),
-          derivedValues: { commandOn: commandOn ? 1 : 0, statusOn: statusOn ? 1 : 0, chillerPower, powerOnThresholdKw }
+          fault: !commandOn && runningEvidence.running,
+          derivedValues: { commandOn: commandOn ? 1 : 0, running: runningEvidence.running ? 1 : 0, ...runningEvidence.derivedValues }
         };
       }, "chiller_power");
 
     case "chiller_ch_03_abnormal_shutdown":
-      return windowed("CH-03 Abnormal chiller shutdown", ["chiller_command", "chiller_status", "chiller_alarm"], (sample, sampleMs) => {
-        const values = requiredValues(sample, ["chiller_command", "chiller_status", "chiller_alarm"]);
-        if (!values) return missingInputResult(["chiller_command", "chiller_status", "chiller_alarm"]);
+      {
+        const roles = ["chiller_command", "chiller_status", "chiller_alarm", "chiller_running_power"];
+        const values = requiredValues(inputs, roles);
+        if (!values) return fddInvalidSample(`Missing required FDD input(s): ${roles.join(", ")}.`);
         const commandOn = valueFor(values, "chiller_command") > 0.5;
-        const statusOn = valueFor(values, "chiller_status") > 0.5;
         const alarmOn = valueFor(values, "chiller_alarm") > 0.5;
-        const fell = fddBooleanFall(seriesByRole.get("chiller_status") ?? [], sampleMs, windowMinutes);
-        if (fell === null) return { calculable: false, fault: false, reason: "Not enough chiller status history to detect shutdown." };
-        return {
-          calculable: true,
-          fault: commandOn && !statusOn && fell,
-          derivedValues: { commandOn: commandOn ? 1 : 0, statusOn: statusOn ? 1 : 0, alarmOn: alarmOn ? 1 : 0, statusFell: fell ? 1 : 0 }
-        };
-      }, "chiller_status");
+        const runningEvidence = fddChillerRunningEvidence(instance, values);
+        if (runningEvidence.running === undefined) {
+          return fddInvalidSample("No grounded chiller running-power evidence is available.");
+        }
+        const runningPowerMinKw = numericFddParameter(instance, "running_power_min_kw", 10);
+        // Element is commonly polled every ~15 minutes while CH-03's source
+        // persistence window is 5 minutes. The high-to-low edge can inspect
+        // the previous aligned poll. Confirmation still requires two distinct
+        // low polls and at least the configured wall-clock persistence time.
+        const transitionLookbackMinutes = Math.max(windowMinutes, toleranceMs * 2 / 60_000);
+        const fell = fddThresholdFall(
+          seriesByRole.get("chiller_running_power") ?? [],
+          targetMs,
+          transitionLookbackMinutes,
+          runningPowerMinKw
+        );
+        if (fell === null && !previousState?.derivedValues?.edgeEventPending && !previousState?.derivedValues?.edgeEventLatched) {
+          return fddInvalidSample("Not enough grounded running-power history to detect shutdown.");
+        }
+        return fddChillerShutdownEdgeSample({
+          ruleLabel: "CH-03 Abnormal chiller shutdown",
+          currentFaultCondition: commandOn && !runningEvidence.running,
+          derivedValues: {
+            commandOn: commandOn ? 1 : 0,
+            running: runningEvidence.running ? 1 : 0,
+            alarmOn: alarmOn ? 1 : 0,
+            runningPowerFell: fell ? 1 : 0,
+            transitionLookbackMinutes,
+            ...runningEvidence.derivedValues
+          },
+          seriesByRole,
+          targetMs,
+          toleranceMs,
+          windowMinutes,
+          runningPowerMinKw,
+          transitionLookbackMinutes,
+          ...(previousState ? { previousState } : {})
+        });
+      }
 
     case "chiller_ch_04_running_no_cooling_output":
       return windowed("CH-04 Chiller running with no cooling output", ["chiller_status", "chiller_power", "chw_supply_temp", "chw_return_temp"], (sample) => {
@@ -1099,12 +1346,13 @@ export function evaluateFddRuleSample(
   inputs: Record<string, number>,
   seriesByRole: Map<string, MaterializerNumericPoint[]>,
   targetMs: number,
-  alignmentToleranceSeconds = FDD_DEFAULT_ALIGNMENT_TOLERANCE_SECONDS
+  alignmentToleranceSeconds = FDD_DEFAULT_ALIGNMENT_TOLERANCE_SECONDS,
+  previousState?: FddRuleEvaluationState
 ): FddRuleEvaluation {
   const key = instance.metricKey;
   const windowMinutes = numericFddParameter(instance, "window_minutes", 30);
   const toleranceMs = alignmentToleranceSeconds * 1000;
-  const importedChillerRule = evaluateImportedChillerDocRule(instance, inputs, seriesByRole, targetMs, toleranceMs, windowMinutes);
+  const importedChillerRule = evaluateImportedChillerDocRule(instance, inputs, seriesByRole, targetMs, toleranceMs, windowMinutes, previousState);
   if (importedChillerRule) return importedChillerRule;
 
   if (key === "chiller_low_cop_detection") {

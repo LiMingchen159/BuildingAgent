@@ -23,7 +23,7 @@ export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended"
 // Cached deployability checks are persisted in the project store. Bump this
 // contract whenever the evidence required for `can_deploy` changes so a check
 // produced by older, weaker validation cannot authorize a deployment.
-export const FDD_DEPLOYABILITY_POLICY_VERSION = "v3-equipment-first";
+export const FDD_DEPLOYABILITY_POLICY_VERSION = "v4-homogeneous-fleet";
 
 export interface FddEquipmentAvailability {
   equipmentType: FddEquipmentType;
@@ -144,6 +144,15 @@ export interface FddPointMapping {
   unit?: string;
 }
 
+export function fddPointMappingsAreDistinct(mappings: FddPointMapping[]): boolean {
+  const pointNames = mappings.map((mapping) => mapping.pointName.trim().toLowerCase());
+  if (pointNames.some((pointName) => !pointName) || new Set(pointNames).size !== pointNames.length) return false;
+  const objectRefs = mappings
+    .map((mapping) => mapping.objectRef?.trim().toLowerCase())
+    .filter((objectRef): objectRef is string => Boolean(objectRef));
+  return new Set(objectRefs).size === objectRefs.length;
+}
+
 export interface FddCheckAgentWorkflow {
   agentId: "buildinggpt";
   skillId: string;
@@ -194,6 +203,10 @@ export interface FddDeployabilityCheck {
   exampleEntityKey?: string;
   selectedMappings?: FddPointMapping[];
   deployableEntities?: FddEntityDeployability[];
+  mappingStrategy?: "entity_independent" | "homogeneous_template";
+  templateEntityKey?: string;
+  expectedEntityCount?: number;
+  requiredRuntimeSlots?: string[];
   ambiguousInputs: FddAmbiguousInput[];
   rejectedCandidates: FddPointCandidate[];
   missingPoints: string[];
@@ -1114,10 +1127,38 @@ function fddCandidateRoleScore(point: FddRequiredPoint, candidate: FddPointCandi
   ].filter(Boolean).join(" "));
   let score = 0;
 
+  // Prefer the vocabulary supplied by the algorithm definition over a broad
+  // quantity-kind match. This is intentionally evaluated against the point
+  // name (not a generic Brick class in `reason`) so, for example, COMPSALM
+  // wins over another Alarm and Run_Status wins over a mislabeled PWR point.
+  const keywordRoleScore = (point.keywords ?? []).reduce((best, keyword, index) => {
+    const normalizedKeyword = normalizedFddCandidateText(keyword);
+    const keywordTokens = normalizedKeyword.split(" ").filter((token) => token.length >= 3);
+    if (keywordTokens.length === 0) return best;
+    const pointNameTokens = pointNameText.split(" ").filter(Boolean);
+    const phraseMatch = ` ${pointNameText} `.includes(` ${normalizedKeyword} `);
+    const tokenMatch = keywordTokens.every((token) => pointNameTokens.includes(token));
+    const compactKeyword = normalizedKeyword.replace(/\s+/gu, "");
+    const compactName = pointNameText.replace(/\s+/gu, "");
+    // Compact aliases such as WCC1CHWST are useful, but a prefix match would
+    // incorrectly treat accumulated TLKWH as instantaneous TLKW power.
+    const compactMatch = compactKeyword.length >= 4 && compactName.endsWith(compactKeyword);
+    if (!phraseMatch && !tokenMatch && !compactMatch) return best;
+    return Math.max(best, Math.max(2, 18 - index * 2));
+  }, 0);
+  score += keywordRoleScore;
+
   if (point.quantityKind === "status") {
+    const expectsCommand = /\bcommand\b|\bstart stop\b|\benable command\b/u.test(pointText);
+    const expectsAlarm = /\balarm\b|\btrip\b|\bfault status\b/u.test(pointText);
     const expectsRunning = /\b(chiller on|run|running|operating|proof)\b/u.test(pointText);
+    if (expectsCommand && /\bstart stop command\b|\bcommand\b/u.test(candidateText)) score += 8;
+    if (expectsCommand && /\brun status\b|\balarm\b|\btrip\b|\bmode status\b/u.test(candidateText)) score -= 10;
+    if (expectsAlarm && /\balarm\b|\btrip\b|\bfault\b/u.test(candidateText)) score += 8;
+    if (expectsAlarm && /\bcommand\b|\brun status\b|\bmode status\b/u.test(candidateText)) score -= 10;
     if (/\brun status\b|\brunning status\b|\boperating status\b/u.test(candidateText)) score += 5;
     if (expectsRunning && /\brun\b|\brunning\b|\boperating\b/u.test(candidateText)) score += 2;
+    if (expectsRunning && /\bcommand\b|\balarm\b|\btrip\b|\bmode status\b/u.test(candidateText)) score -= 10;
     if (/\bon off status\b|\bonoff status\b/u.test(candidateText)) score += 1;
     if (/\bflow status\b|\bflow proof\b|\bflow switch\b/u.test(candidateText)) {
       score += /\bflow\b/u.test(pointText) ? 5 : -2;
@@ -1144,10 +1185,25 @@ function fddCandidateRoleScore(point: FddRequiredPoint, candidate: FddPointCandi
     if (expectsSupply && /\bsupply\b|\bchwst\b/u.test(candidateText)) score += 2;
     if (expectsReturn && /\breturn\b|\bchwrt\b/u.test(candidateText)) score += 2;
   }
-  if (point.quantityKind === "power" && /\btlkw\b|\bmotor kilowatts\b|\belectric power\b|\bpower\b/u.test(candidateText)) score += 4;
+  if (point.quantityKind === "power") {
+    if (/\btlkw\b|\bmotor kilowatts\b|\belectric power\b|\bpower\b/u.test(candidateText)) score += 4;
+    // These are related electrical quantities, not interchangeable evidence
+    // for real instantaneous power. Keep this semantic penalty ahead of unit
+    // tie-breaking so a weak role cannot win merely because it has a unit.
+    if (/\bpercent\b|\bpercentage\b|\bdemand limit\b/u.test(pointNameText)) score -= 10;
+    if (/\btlkwh\b|\bkwh\b|\bkilowatt hours?\b|\benergy\b/u.test(pointNameText)) score -= 12;
+    if (/\bkva\b|\bapparent power\b/u.test(pointNameText)) score -= 6;
+  }
   if (point.quantityKind === "energy" && /\bkwh\b|\benergy\b/u.test(candidateText)) score += 4;
 
   return score;
+}
+
+function fddCandidateUnitEvidenceRank(candidate: FddPointCandidate): number {
+  if (candidate.unitCompatibility === "match") return 3;
+  if (candidate.unitCompatibility === "convertible") return 2;
+  if (candidate.unitCompatibility === "unknown") return 1;
+  return 0;
 }
 
 export function sortFddPointCandidatesForRequiredPoint(
@@ -1161,6 +1217,11 @@ export function sortFddPointCandidatesForRequiredPoint(
     if (Math.abs(scoreRank) > 0.0001) return scoreRank;
     const confidenceRank = right.confidence - left.confidence;
     if (confidenceRank !== 0) return confidenceRank;
+    // Engineering-unit evidence is deliberately the final evidence tie-break
+    // before a lexical name. A verified unit cannot promote a weaker semantic
+    // role or lower-confidence candidate.
+    const unitRank = fddCandidateUnitEvidenceRank(right) - fddCandidateUnitEvidenceRank(left);
+    if (unitRank !== 0) return unitRank;
     return left.pointName.localeCompare(right.pointName);
   });
 }
@@ -1173,7 +1234,15 @@ export function fddAmbiguousAlternativesForPoint(
   const bestRoleScore = fddCandidateRoleScore(point, best);
   return alternatives.filter((candidate) => {
     if (best.confidence - candidate.confidence > 0.04) return false;
-    return bestRoleScore - fddCandidateRoleScore(point, candidate) < 2;
+    const candidateRoleScore = fddCandidateRoleScore(point, candidate);
+    if (bestRoleScore - candidateRoleScore >= 2) return false;
+    // A verified compatible unit resolves an otherwise equivalent unknown-unit
+    // alternative; keeping it as ambiguous would negate the evidence ordering.
+    if (bestRoleScore >= candidateRoleScore
+      && fddCandidateUnitEvidenceRank(best) > fddCandidateUnitEvidenceRank(candidate)) {
+      return false;
+    }
+    return true;
   });
 }
 
@@ -1199,6 +1268,7 @@ export function evaluateFddDeployability(input: {
   const selectedMappings: FddPointMapping[] = [];
   const ambiguousInputs: FddAmbiguousInput[] = [];
   let uncertain = false;
+  const usedPointKeys = new Set<string>();
 
   if (input.applicability === "no_equipment" || input.applicability === "unknown") {
     return {
@@ -1226,7 +1296,11 @@ export function evaluateFddDeployability(input: {
   for (const point of required) {
     const candidates = sortFddPointCandidatesForRequiredPoint(
       point,
-      input.pointCandidates.filter((candidate) => candidate.slot === point.slot)
+      input.pointCandidates.filter((candidate) => {
+        if (candidate.slot !== point.slot) return false;
+        const pointKey = (candidate.objectRef ?? candidate.pointName).trim().toLowerCase();
+        return !usedPointKeys.has(pointKey);
+      })
     );
     const best = candidates[0];
     if (!best) {
@@ -1254,6 +1328,7 @@ export function evaluateFddDeployability(input: {
       ...(best.objectRef ? { objectRef: best.objectRef } : {}),
       ...(best.unit ? { unit: best.unit } : {})
     });
+    usedPointKeys.add((best.objectRef ?? best.pointName).trim().toLowerCase());
   }
 
   const status: FddDeployabilityStatus = missingPoints.length > 0 || historyIssues.length > 0

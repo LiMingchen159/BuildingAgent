@@ -449,6 +449,10 @@ export interface FddDeployabilityCheck {
   exampleEntityKey?: string;
   selectedMappings?: FddPointMapping[];
   deployableEntities?: FddEntityDeployability[];
+  mappingStrategy?: "entity_independent" | "homogeneous_template";
+  templateEntityKey?: string;
+  expectedEntityCount?: number;
+  requiredRuntimeSlots?: string[];
   ambiguousInputs: FddAmbiguousInput[];
   rejectedCandidates: FddPointCandidate[];
   missingPoints: string[];
@@ -457,6 +461,12 @@ export interface FddDeployabilityCheck {
   source: "auto" | "manual";
   projectDataSignature: string;
   agentWorkflow?: FddCheckAgentWorkflow;
+}
+
+export interface FddDeploymentSummary {
+  expectedEntityCount: number;
+  deployedEntityCount: number;
+  entityKeys: string[];
 }
 
 export interface ProjectFddTask {
@@ -2364,6 +2374,9 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
   const deployableEntities = Array.isArray(value.deployableEntities)
     ? value.deployableEntities.map((entry) => parseFddEntityDeployability(entry)).filter((entry): entry is FddEntityDeployability => entry !== null)
     : undefined;
+  const requiredRuntimeSlots = Array.isArray(value.requiredRuntimeSlots)
+    ? value.requiredRuntimeSlots.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
   const equipmentAvailability = value.equipmentAvailability === undefined
     ? undefined
     : parseFddEquipmentAvailability(value.equipmentAvailability);
@@ -2373,7 +2386,15 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
   if (Array.isArray(value.ambiguousInputs) && ambiguousInputs.length !== value.ambiguousInputs.length) return null;
   if (Array.isArray(value.rejectedCandidates) && rejectedCandidates.length !== value.rejectedCandidates.length) return null;
   if (Array.isArray(value.deployableEntities) && deployableEntities?.length !== value.deployableEntities.length) return null;
+  if (Array.isArray(value.requiredRuntimeSlots) && requiredRuntimeSlots?.length !== value.requiredRuntimeSlots.length) return null;
   if (value.equipmentAvailability !== undefined && !equipmentAvailability) return null;
+  if (value.mappingStrategy !== undefined
+    && value.mappingStrategy !== "entity_independent"
+    && value.mappingStrategy !== "homogeneous_template") return null;
+  if (value.expectedEntityCount !== undefined
+    && (typeof value.expectedEntityCount !== "number"
+      || !Number.isInteger(value.expectedEntityCount)
+      || value.expectedEntityCount < 0)) return null;
   if (value.applicability !== undefined
     && value.applicability !== "applicable"
     && value.applicability !== "no_equipment"
@@ -2395,6 +2416,12 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
     ...(typeof value.exampleEntityKey === "string" ? { exampleEntityKey: value.exampleEntityKey } : typeof value.selectedEntityKey === "string" ? { exampleEntityKey: value.selectedEntityKey } : {}),
     ...(selectedMappings ? { selectedMappings } : {}),
     ...(deployableEntities ? { deployableEntities } : {}),
+    ...(value.mappingStrategy === "entity_independent" || value.mappingStrategy === "homogeneous_template"
+      ? { mappingStrategy: value.mappingStrategy }
+      : {}),
+    ...(typeof value.templateEntityKey === "string" ? { templateEntityKey: value.templateEntityKey } : {}),
+    ...(typeof value.expectedEntityCount === "number" ? { expectedEntityCount: value.expectedEntityCount } : {}),
+    ...(requiredRuntimeSlots ? { requiredRuntimeSlots } : {}),
     ambiguousInputs,
     rejectedCandidates,
     missingPoints: value.missingPoints.filter((entry): entry is string => typeof entry === "string"),
@@ -2403,6 +2430,29 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
     source: value.source,
     projectDataSignature: value.projectDataSignature,
     ...(agentWorkflow ? { agentWorkflow } : {})
+  };
+}
+
+function parseFddDeploymentSummary(value: unknown): FddDeploymentSummary | null {
+  if (!isRecord(value)
+    || typeof value.expectedEntityCount !== "number"
+    || !Number.isInteger(value.expectedEntityCount)
+    || value.expectedEntityCount < 0
+    || typeof value.deployedEntityCount !== "number"
+    || !Number.isInteger(value.deployedEntityCount)
+    || value.deployedEntityCount < 0
+    || !Array.isArray(value.entityKeys)) {
+    return null;
+  }
+  const entityKeys = value.entityKeys.filter((entry): entry is string => typeof entry === "string");
+  if (entityKeys.length !== value.entityKeys.length
+    || new Set(entityKeys).size !== entityKeys.length
+    || entityKeys.length !== value.deployedEntityCount
+    || value.deployedEntityCount !== value.expectedEntityCount) return null;
+  return {
+    expectedEntityCount: value.expectedEntityCount,
+    deployedEntityCount: value.deployedEntityCount,
+    entityKeys
   };
 }
 
@@ -2736,7 +2786,7 @@ export async function testFddAlgorithm(token: string, projectId: string, algorit
   return { algorithm, check, requestId: payload.requestId };
 }
 
-export async function deployFddAlgorithm(token: string, projectId: string, algorithmId: string): Promise<{ task: ProjectFddTask; requestId: string }> {
+export async function deployFddAlgorithm(token: string, projectId: string, algorithmId: string): Promise<{ task: ProjectFddTask; deployment?: FddDeploymentSummary; requestId: string }> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-library/${encodeURIComponent(algorithmId)}/deploy`, {
     method: "POST",
     headers: authHeaders(token)
@@ -2745,10 +2795,11 @@ export async function deployFddAlgorithm(token: string, projectId: string, algor
     throw malformed("FDD algorithm deploy returned an unexpected response.");
   }
   const task = parseProjectFddTask(payload.task);
-  if (!task) {
+  const deployment = payload.deployment === undefined ? undefined : parseFddDeploymentSummary(payload.deployment);
+  if (!task || (payload.deployment !== undefined && !deployment)) {
     throw malformed("FDD algorithm deploy returned an unexpected task.");
   }
-  return { task, requestId: payload.requestId };
+  return { task, ...(deployment ? { deployment } : {}), requestId: payload.requestId };
 }
 
 export async function getFddTasks(token: string, projectId: string): Promise<{ tasks: ProjectFddTask[]; totalCount: number; requestId: string }> {
@@ -2799,7 +2850,7 @@ export async function testFddTask(token: string, projectId: string, taskId: stri
   return { task, requestId: payload.requestId };
 }
 
-export async function deployFddTask(token: string, projectId: string, taskId: string): Promise<{ task: ProjectFddTask; requestId: string }> {
+export async function deployFddTask(token: string, projectId: string, taskId: string): Promise<{ task: ProjectFddTask; deployment?: FddDeploymentSummary; requestId: string }> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks/${encodeURIComponent(taskId)}/deploy`, {
     method: "POST",
     headers: authHeaders(token)
@@ -2808,10 +2859,11 @@ export async function deployFddTask(token: string, projectId: string, taskId: st
     throw malformed("FDD task deploy returned an unexpected response.");
   }
   const task = parseProjectFddTask(payload.task);
-  if (!task) {
+  const deployment = payload.deployment === undefined ? undefined : parseFddDeploymentSummary(payload.deployment);
+  if (!task || (payload.deployment !== undefined && !deployment)) {
     throw malformed("FDD task deploy returned an unexpected task.");
   }
-  return { task, requestId: payload.requestId };
+  return { task, ...(deployment ? { deployment } : {}), requestId: payload.requestId };
 }
 
 export async function deleteFddTask(

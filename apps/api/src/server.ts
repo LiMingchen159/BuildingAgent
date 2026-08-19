@@ -126,6 +126,7 @@ import {
   evaluateFddDeployability,
   FDD_DEPLOYABILITY_POLICY_VERSION,
   fddAmbiguousAlternativesForPoint,
+  fddPointMappingsAreDistinct,
   latestFddCheck,
   normalizeFddCreateInput,
   sortFddPointCandidatesForRequiredPoint,
@@ -146,7 +147,8 @@ import {
 import {
   evaluateFddRuleSample,
   materializerNearestNumericPoint,
-  materializerSortedSeries
+  materializerSortedSeries,
+  type FddRuleEvaluationState
 } from "./fdd/evaluator.js";
 import {
   fddEngineeringUnitIsAccepted,
@@ -222,6 +224,12 @@ interface BuildServerOptions {
   fetch?: FetchLike;
   allowProviderFallback?: boolean;
   persist?: boolean;
+  fddTestHooks?: {
+    beforeRegisterMetric?: (input: { projectId: string; algorithmKey: string; entityId: string }) => void;
+    onAuthorizationRefresh?: (input: { projectId: string; taskId: string }) => void;
+    onFddMaterialized?: (input: { projectId: string; instanceId: string }) => void;
+    onMaterializerReady?: (run: () => Promise<void>) => void;
+  };
 }
 
 interface BmsSourceState {
@@ -1475,11 +1483,66 @@ function materializerFallbackValue(policy: DerivedMetricInvalidValuePolicy): { v
 const FDD_DEFAULT_BACKFILL_SECONDS = 30 * 24 * 60 * 60;
 const FDD_DEFAULT_INTERVAL_SECONDS = 5 * 60;
 const FDD_DEFAULT_ALIGNMENT_TOLERANCE_SECONDS = 15 * 60;
+const FDD_MATERIALIZER_MIN_QUERY_LIMIT = 240;
+const FDD_MATERIALIZER_MAX_QUERY_LIMIT = 20_000;
+const FDD_MATERIALIZER_LIMIT_SAMPLE_PERIOD_SECONDS = 30;
+const FDD_MATERIALIZER_MAX_QUERY_PAGES = 10_000;
+const FDD_STATE_LOOKBACK_PAGE_SIZE = 200;
+const FDD_STATE_LOOKBACK_MAX_PAGES = 1_000;
 const BMS_DASHBOARD_HISTORY_BATCH_CONCURRENCY = 8;
 const BMS_DASHBOARD_POINT_CACHE_TTL_MS = 10 * 60_000;
 const BMS_DASHBOARD_POINT_CACHE_MAX_ENTRIES = 2048;
 
 const bmsDashboardPointIdCache = new Map<string, { savedAt: number; pointId: string }>();
+
+function fddMaterializerWindowSeconds(instance: DerivedMetricInstance): number {
+  const parameters = Array.isArray(instance.metadata?.fddParameters)
+    ? instance.metadata.fddParameters.filter(isRecordValue)
+    : [];
+  const windowParameter = parameters.find((parameter) => parameter.key === "window_minutes");
+  const rawWindowMinutes = windowParameter?.value;
+  const windowMinutes = typeof rawWindowMinutes === "number" && Number.isFinite(rawWindowMinutes)
+    ? Math.max(0, rawWindowMinutes)
+    : 30;
+  return Math.ceil(windowMinutes * 60);
+}
+
+function fddMaterializerReadWindow(
+  instance: DerivedMetricInstance,
+  materialization: DerivedMetricMaterialization,
+  toMs: number
+): { from: string; to: string; limit: number; incremental: boolean; watermarkMs?: number } {
+  const alignmentToleranceSeconds = materialization.alignmentToleranceSeconds ?? FDD_DEFAULT_ALIGNMENT_TOLERANCE_SECONDS;
+  const replaySeconds = Math.max(
+    materialization.intervalSeconds * 2,
+    alignmentToleranceSeconds * 2,
+    fddMaterializerWindowSeconds(instance) + alignmentToleranceSeconds * 2
+  );
+  const parsedWatermarkMs = materialization.watermarkTs ? Date.parse(materialization.watermarkTs) : NaN;
+  const hasUsableWatermark = Number.isFinite(parsedWatermarkMs) && parsedWatermarkMs <= toMs;
+  // Replaying before the watermark makes an inclusive/exclusive `from`
+  // boundary harmless and reconstructs persistence/edge state deterministically.
+  // When the service was stopped, the interval from the old watermark through
+  // `toMs` is retained, so the downtime gap is caught up rather than skipped.
+  const fromMs = hasUsableWatermark
+    ? Math.max(0, parsedWatermarkMs - replaySeconds * 1000)
+    : Math.max(0, toMs - materialization.lookbackSeconds * 1000);
+  const effectiveWindowSeconds = Math.max(1, Math.ceil((toMs - fromMs) / 1000));
+  const limit = Math.min(
+    FDD_MATERIALIZER_MAX_QUERY_LIMIT,
+    Math.max(
+      FDD_MATERIALIZER_MIN_QUERY_LIMIT,
+      Math.ceil(effectiveWindowSeconds / FDD_MATERIALIZER_LIMIT_SAMPLE_PERIOD_SECONDS) + 1
+    )
+  );
+  return {
+    from: new Date(fromMs).toISOString(),
+    to: new Date(toMs).toISOString(),
+    limit,
+    incremental: hasUsableWatermark,
+    ...(hasUsableWatermark ? { watermarkMs: parsedWatermarkMs } : {})
+  };
+}
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -2261,6 +2324,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const fddHistoryProbeCache = new Map<string, { expiresAt: number; promise: Promise<number | undefined> }>();
   const fddCatalogQueryCache = new Map<string, { expiresAt: number; promise: Promise<Record<string, unknown>[]> }>();
   const automaticFddCheckRuns = new Map<string, Promise<void>>();
+  const fddTaskAuthorizationRefreshRuns = new Map<string, Promise<boolean>>();
+  const derivedMetricMaterializationRuns = new Map<string, Promise<void>>();
   const memory = new AgentMemoryStore(dataRoot(env));
   memory.start();
   const sessionIndex = new SessionSearchIndex(dataRoot(env));
@@ -3517,6 +3582,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const pointText = `${point.slot} ${point.label} ${point.semantic}`.replace(/[-_]/gu, " ").toLowerCase();
     const actualKind = inferFddCandidateQuantityKind({ semantic_class: fact.brickClass, ...(fact.unit ? { unit: fact.unit } : {}) }, fact.pointName);
     if (point.quantityKind !== "unknown" && actualKind !== point.quantityKind) return false;
+    // Status is a dimension, not a formula role. Keep command, operating
+    // status, alarm, flow proof, and power proof in separate candidate pools
+    // so a single Run_Status can never satisfy all CH-03 dependencies.
+    if (point.slot === "chiller_command" && !/\bcommand\b/u.test(factText)) return false;
+    if (point.slot === "chiller_alarm" && !/\balarm\b|\btrip\b|\bfault\b/u.test(factText)) return false;
+    if (point.slot === "chiller_status") {
+      if (/\bcommand\b|\balarm\b|\btrip\b|\bfault\b|\bmode status\b/u.test(factText)) return false;
+      if (!/\brun status\b|\brunning status\b|\boperating status\b|\bon off status\b|\bstatus\b/u.test(factText)) return false;
+    }
+    if (/\bflow status\b|\bflow proof\b/u.test(pointText) && !/\bflow\b/u.test(factText)) return false;
+    if (/\bpower status\b|\bpower proof\b/u.test(pointText) && !/\bpower\b|\bpwr\b/u.test(factText)) return false;
     const expectsChilledWater = /\b(chw|chilled water)\b/u.test(pointText);
     const expectsCondenserWater = /\b(cw|condenser water)\b/u.test(pointText);
     if (expectsChilledWater && /\bcondenser water\b/u.test(factText)) return false;
@@ -3528,6 +3604,27 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (/\bsupply\b/u.test(pointText) && point.quantityKind === "temperature" && !/\bleaving\b/u.test(factText)) return false;
     if (/\breturn\b/u.test(pointText) && point.quantityKind === "temperature" && !/\bentering\b/u.test(factText)) return false;
     return true;
+  }
+
+  function fddExplicitPowerUnitEvidence(
+    point: FddAlgorithm["requiredPoints"][number],
+    fact: FddBrickPointFact,
+    item: Record<string, unknown>
+  ): { unit: string; reason: string } | null {
+    if (point.quantityKind !== "power" || fact.unit || fddPointUnit(item)) return null;
+    if (!/(?:^|_)Power_Sensor$/u.test(fact.brickClass)) return null;
+    const text = [
+      fact.pointName,
+      item.description,
+      item.semantic_class,
+      item.brick_class
+    ].filter((value): value is string => typeof value === "string").join(" ");
+    if (/kwh|kilowatt[\s_-]*hour|percent|percentage|%/iu.test(text)) return null;
+    if (!/(?:^|[_-])TLKW(?:$|[_-])|\bmotor\s+kilowatts?\b|\bkilowatts?\b/iu.test(text)) return null;
+    return {
+      unit: "kW",
+      reason: "Engineering unit inferred as kW only from explicit TLKW/Motor Kilowatts catalog wording and Brick Power_Sensor semantics."
+    };
   }
 
   async function addFddBrickPointCandidates(input: {
@@ -3549,13 +3646,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const exactItem = items.find((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(fact.pointName));
       if (!exactItem) return;
       verified = true;
+      const explicitPowerUnit = fddExplicitPowerUnitEvidence(input.point, fact, exactItem);
       const semanticItem = {
         ...exactItem,
         name: fact.pointName,
         equipment_name: fact.entityKey,
         semantic_class: fact.brickClass,
         brick_class: fact.brickClass,
-        ...(fact.unit ? { unit: fact.unit } : {})
+        ...(fact.unit ? { unit: fact.unit } : explicitPowerUnit ? { unit: explicitPowerUnit.unit } : {})
       };
       addFddPointCandidateFromItem({
         algorithm: input.algorithm,
@@ -3565,7 +3663,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         context: input.context,
         candidates: input.candidates,
         seen: input.seen,
-        reason: `Verified exact BMS point from Brick class ${fact.brickClass}.`,
+        reason: `Verified exact BMS point from Brick class ${fact.brickClass}.${explicitPowerUnit ? ` ${explicitPowerUnit.reason}` : ""}`,
         minConfidence: 0.5,
         confidenceOverride: 0.96,
         entityKeyOverride: fact.entityKey
@@ -3668,6 +3766,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return pointName.replace(pattern, targetAlias);
   }
 
+  function fddPointFamilySignature(pointName: string, context: FddEntityContext): string | null {
+    const sourceMatch = fddPointAliasMatch(pointName, context);
+    if (!sourceMatch) return null;
+    const suffix = fddReplaceLeadingAlias(pointName, sourceMatch.alias, "");
+    if (suffix === null) return null;
+    const normalized = suffix.replace(/^[-_]+/u, "").replace(/[^a-z0-9]+/giu, "_").toLowerCase();
+    return normalized || null;
+  }
+
   function fddTargetEntityKeysForAlgorithm(algorithm: FddAlgorithm, context: FddEntityContext): string[] {
     const targetType = fddTargetEntityType(algorithm);
     return [...context.hintsByCanonical.values()]
@@ -3688,13 +3795,6 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const templateCandidates = [...input.candidates]
       .filter((candidate) => candidate.entityKey && candidate.unitCompatibility !== "mismatch" && candidate.confidence >= 0.64)
       .sort((left, right) => right.confidence - left.confidence);
-    const hasCandidate = (entityKey: string, slot: string): boolean => input.candidates.some((candidate) =>
-      candidate.slot === slot
-      && candidate.unitCompatibility !== "mismatch"
-      && candidate.confidence >= 0.68
-      && candidate.entityKey
-      && normalizeFddEntityAlias(canonicalFddEntityKey(candidate.entityKey, input.context)) === normalizeFddEntityAlias(entityKey)
-    );
     for (const candidate of templateCandidates) {
       const point = input.algorithm.requiredPoints.find((entry) => entry.slot === candidate.slot);
       if (!point) continue;
@@ -3702,10 +3802,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       if (!sourceMatch) continue;
       for (const targetEntity of targetEntities) {
         if (normalizeFddEntityAlias(targetEntity) === normalizeFddEntityAlias(sourceMatch.canonical)) continue;
-        if (hasCandidate(targetEntity, candidate.slot)) continue;
         const targetAlias = fddPreferredAliasForEntity(targetEntity, sourceMatch.alias, input.context);
         const targetPointName = fddReplaceLeadingAlias(candidate.pointName, sourceMatch.alias, targetAlias);
         if (!targetPointName || targetPointName === candidate.pointName) continue;
+        const alreadyHasExactFamilyPoint = input.candidates.some((existing) =>
+          existing.slot === candidate.slot
+          && existing.entityKey
+          && normalizeFddEntityAlias(canonicalFddEntityKey(existing.entityKey, input.context)) === normalizeFddEntityAlias(targetEntity)
+          && normalizeFddEntityAlias(existing.pointName) === normalizeFddEntityAlias(targetPointName)
+        );
+        // An unrelated but superficially high-confidence point in this slot
+        // must not suppress exact family completion (for example LCW setpoint
+        // versus the WCC CHWST family). Only an already verified counterpart
+        // from the same template family can short-circuit this lookup.
+        if (alreadyHasExactFamilyPoint) continue;
         const items = await fetchFddCatalogItems(input.base, targetPointName, 8);
         const exactItem = items.find((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(targetPointName));
         if (!exactItem) continue;
@@ -3741,7 +3851,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   function fddAlgorithmUsesRunningGate(algorithm: FddAlgorithm): boolean {
     const text = `${algorithm.formula} ${algorithm.logicSummary}`.toLowerCase();
     return algorithm.requiredPoints.some((point) => point.slot === "chiller_status")
-      && /\b(chiller[_\s-]?on|chiller is running|chiller is operating|when the chiller|operating|运行)\b/u.test(text)
+      && /\b(chiller[_\s-]?(?:on|status)|chiller is running|chiller is operating|when the chiller|operating|运行)\b/u.test(text)
       && !/\bchiller_status\s*!?=\s*power_status\b/u.test(text);
   }
 
@@ -3771,7 +3881,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   function fddSupplementalRequiredPoints(algorithm: FddAlgorithm, skillContext: BuildingGptFddSkillContext): FddAlgorithm["requiredPoints"] {
-    if (!fddAlgorithmUsesRunningGate(algorithm) || !fddGroundingRequiresRunningPowerEvidence(skillContext.groundingRules)) {
+    const runtimeRequiresGroundedPower = algorithm.algorithmKey === "chiller_ch_03_abnormal_shutdown";
+    if (!runtimeRequiresGroundedPower
+      && (!fddAlgorithmUsesRunningGate(algorithm) || !fddGroundingRequiresRunningPowerEvidence(skillContext.groundingRules))) {
       return [];
     }
     if (algorithm.requiredPoints.some((point) => point.required && point.quantityKind === "power")) {
@@ -3781,7 +3893,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       slot: "chiller_running_power",
       label: "Grounded running power evidence",
       semantic: "Electric or motor power used by project grounding to validate whether the chiller is truly running.",
-      required: false,
+      required: true,
       quantityKind: "power",
       unitRoleDescription: "Grounding evidence must be instantaneous electric or motor power, not accumulated energy.",
       acceptableUnits: ["kW", "W"],
@@ -3819,6 +3931,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const candidates: FddPointCandidate[] = [];
     const seen = new Set<string>();
     const supplementalPoints = fddSupplementalRequiredPoints(algorithm, skillContext);
+    const effectiveAlgorithm: FddAlgorithm = supplementalPoints.length > 0
+      ? {
+          ...algorithm,
+          requiredPoints: [...algorithm.requiredPoints, ...supplementalPoints]
+            .filter((point, index, values) => values.findIndex((entry) => entry.slot === point.slot) === index)
+        }
+      : algorithm;
     const access = resolveProjectBmsAccess(projectId);
     if (!access.ok) {
       return {
@@ -3828,9 +3947,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       };
     }
     const base = access.baseUrl;
-    for (const point of [...algorithm.requiredPoints, ...supplementalPoints]) {
+    for (const point of effectiveAlgorithm.requiredPoints) {
       const verifiedFromBrick = await addFddBrickPointCandidates({
-        algorithm,
+        algorithm: effectiveAlgorithm,
         point,
         context,
         base,
@@ -3843,7 +3962,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         const items = await fetchFddCatalogItems(base, query, 50);
         for (const item of items) {
           addFddPointCandidateFromItem({
-            algorithm,
+            algorithm: effectiveAlgorithm,
             point,
             item,
             query,
@@ -3855,7 +3974,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         }
       }
     }
-    await supplementFddCandidatesFromEntityTemplates({ algorithm, context, base, candidates, seen });
+    await supplementFddCandidatesFromEntityTemplates({ algorithm: effectiveAlgorithm, context, base, candidates, seen });
     return {
       candidates: candidates.sort((left, right) => right.confidence - left.confidence).slice(0, 1200),
       supplementalPoints
@@ -3936,10 +4055,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     for (const group of grouped.values()) {
       const point = pointBySlot.get(group[0]!.slot)!;
-      // Only the deterministic winner for each entity/slot can authorize the
-      // check. Probing lower-ranked alternatives would multiply BMS reads
-      // without changing the selected mapping.
-      for (const candidate of sortFddPointCandidatesForRequiredPoint(point, group).slice(0, 1)) {
+      // Probe the deterministic winner plus close alternatives. Homogeneous
+      // family resolution happens after enrichment and may deliberately reject
+      // a noisy winner in favor of its exact template counterpart; leaving that
+      // close counterpart unprobed would incorrectly turn a verified mapping
+      // into "history unknown".
+      const ranked = sortFddPointCandidatesForRequiredPoint(point, group);
+      const candidatesForHistory = ranked.filter((candidate, index) =>
+        index === 0 || (index < 3 && (ranked[0]?.confidence ?? 0) - candidate.confidence <= 0.04)
+      );
+      for (const candidate of candidatesForHistory) {
         const probeKey = candidate.objectRef ? `object_ref:${candidate.objectRef}` : `name:${candidate.pointName}`;
         const requiredDays = point.historyRequirement?.minDays ?? 0;
         const previous = candidatesToProbe.get(probeKey);
@@ -3969,7 +4094,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   function alignFddCandidatesToExampleEntity(
     algorithm: FddAlgorithm,
     candidates: FddPointCandidate[],
-    preferredEntityKey?: string
+    preferredEntityKey?: string,
+    preferredMappings: FddPointMapping[] = []
   ): { candidates: FddPointCandidate[]; exampleEntityKey?: string; alignmentIssue?: string } {
     const requiredSlots = algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot);
     if (requiredSlots.length === 0) return { candidates };
@@ -4007,8 +4133,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           : "No entity-level point candidates were found for the required inputs."
       };
     }
+    const preferredPointBySlot = new Map(preferredMappings.map((mapping) => [mapping.slot, mapping]));
     const aligned = candidates
-      .filter((candidate) => candidate.entityKey === exampleEntityKey)
+      .filter((candidate) => {
+        if (candidate.entityKey !== exampleEntityKey) return false;
+        if (preferredPointBySlot.size === 0) return true;
+        const mapping = preferredPointBySlot.get(candidate.slot);
+        if (!mapping) return true;
+        return mapping.pointName === candidate.pointName
+          && (!mapping.objectRef || mapping.objectRef === candidate.objectRef);
+      })
       .sort((left, right) => right.confidence - left.confidence)
       .slice(0, 120);
     return { candidates: aligned, exampleEntityKey };
@@ -4029,18 +4163,27 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     candidates: FddPointCandidate[],
     supplementalPoints: FddAlgorithm["requiredPoints"] = []
   ): FddEntityDeployability {
-    const required = algorithm.requiredPoints.filter((point) => point.required);
+    const required = [...algorithm.requiredPoints, ...supplementalPoints]
+      .filter((point) => point.required)
+      .filter((point, index, values) => values.findIndex((entry) => entry.slot === point.slot) === index);
     const selectedMappings: FddPointMapping[] = [];
     const ambiguousInputs: FddEntityDeployability["ambiguousInputs"] = [];
     const missingPoints: string[] = [];
     const historyIssues: string[] = [];
     const selectedConfidences: number[] = [];
+    const usedPointNames = new Set<string>();
+    const usedObjectRefs = new Set<string>();
     let uncertain = false;
 
     for (const point of required) {
       const slotCandidates = sortFddPointCandidatesForRequiredPoint(
         point,
-        candidates.filter((candidate) => candidate.slot === point.slot)
+        candidates.filter((candidate) => {
+          if (candidate.slot !== point.slot) return false;
+          const pointName = candidate.pointName.trim().toLowerCase();
+          const objectRef = candidate.objectRef?.trim().toLowerCase();
+          return !usedPointNames.has(pointName) && (!objectRef || !usedObjectRefs.has(objectRef));
+        })
       );
       const best = slotCandidates[0];
       if (!best) {
@@ -4064,16 +4207,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
       selectedConfidences.push(best.confidence);
       selectedMappings.push(fddPointMappingFromCandidate(best));
+      usedPointNames.add(best.pointName.trim().toLowerCase());
+      if (best.objectRef) usedObjectRefs.add(best.objectRef.trim().toLowerCase());
     }
 
-    for (const point of supplementalPoints) {
+    for (const point of supplementalPoints.filter((entry) => !entry.required)) {
       const alreadyMapped = selectedMappings.some((mapping) => mapping.slot === point.slot);
       if (alreadyMapped) continue;
       const best = candidates
-        .filter((candidate) => candidate.slot === point.slot)
+        .filter((candidate) => {
+          if (candidate.slot !== point.slot) return false;
+          const pointName = candidate.pointName.trim().toLowerCase();
+          const objectRef = candidate.objectRef?.trim().toLowerCase();
+          return !usedPointNames.has(pointName) && (!objectRef || !usedObjectRefs.has(objectRef));
+        })
         .sort((left, right) => right.confidence - left.confidence)[0];
       if (!best || best.confidence < 0.56) continue;
       selectedMappings.push(fddPointMappingFromCandidate(best));
+      usedPointNames.add(best.pointName.trim().toLowerCase());
+      if (best.objectRef) usedObjectRefs.add(best.objectRef.trim().toLowerCase());
     }
 
     const status: FddDeployabilityCheck["status"] = missingPoints.length > 0 || historyIssues.length > 0
@@ -4098,59 +4250,106 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   function fddDeployableEntitiesForCandidates(
     algorithm: FddAlgorithm,
     candidates: FddPointCandidate[],
+    context: FddEntityContext,
+    targetEntityKeys: string[],
     supplementalPoints: FddAlgorithm["requiredPoints"] = []
-  ): FddEntityDeployability[] {
+  ): {
+    entities: FddEntityDeployability[];
+    mappingStrategy: "entity_independent" | "homogeneous_template";
+    templateEntityKey?: string;
+  } {
     const byEntity = new Map<string, FddPointCandidate[]>();
     for (const candidate of candidates) {
       if (!candidate.entityKey) continue;
-      byEntity.set(candidate.entityKey, [...(byEntity.get(candidate.entityKey) ?? []), candidate]);
+      const canonical = canonicalFddEntityKey(candidate.entityKey, context);
+      byEntity.set(canonical, [...(byEntity.get(canonical) ?? []), candidate]);
     }
+    const entityKeys = (targetEntityKeys.length > 0 ? targetEntityKeys : [...byEntity.keys()])
+      .map((entityKey) => canonicalFddEntityKey(entityKey, context))
+      .filter((entityKey, index, values) => values.findIndex((value) => normalizeFddEntityAlias(value) === normalizeFddEntityAlias(entityKey)) === index)
+      .sort((left, right) => left.localeCompare(right));
+    const provisional = entityKeys.map((entityKey) =>
+      fddEntityDeployabilityFromCandidates(algorithm, entityKey, byEntity.get(entityKey) ?? [], supplementalPoints)
+    );
+    const template = provisional.find((entity) => entity.status === "can_deploy");
+    const requiredSlots = algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot);
+    const familyBySlot = new Map<string, string>();
+    if (template) {
+      for (const mapping of template.selectedMappings) {
+        const signature = fddPointFamilySignature(mapping.pointName, context);
+        if (signature) familyBySlot.set(mapping.slot, signature);
+      }
+    }
+    const hasCompleteTemplate = fddTargetEntityType(algorithm) === "chiller"
+      && entityKeys.length > 1
+      && Boolean(template)
+      && requiredSlots.every((slot) => familyBySlot.has(slot));
+    const resolved = hasCompleteTemplate
+      ? entityKeys.map((entityKey) => {
+          const familyCandidates = (byEntity.get(entityKey) ?? []).filter((candidate) => {
+            const expectedFamily = familyBySlot.get(candidate.slot);
+            return expectedFamily ? fddPointFamilySignature(candidate.pointName, context) === expectedFamily : true;
+          });
+          return fddEntityDeployabilityFromCandidates(algorithm, entityKey, familyCandidates, supplementalPoints);
+        })
+      : provisional;
     const statusRank: Record<FddDeployabilityCheck["status"], number> = {
       can_deploy: 0,
       uncertain: 1,
       cannot_deploy: 2
     };
-    return [...byEntity.entries()]
-      .map(([entityKey, entityCandidates]) => fddEntityDeployabilityFromCandidates(algorithm, entityKey, entityCandidates, supplementalPoints))
-      .filter((entity) => entity.selectedMappings.length > 0 || entity.missingPoints.length > 0)
-      .sort((left, right) => {
+    const entities = resolved.sort((left, right) => {
         const rank = statusRank[left.status] - statusRank[right.status];
         if (rank !== 0) return rank;
         const confidenceRank = right.confidence - left.confidence;
         if (confidenceRank !== 0) return confidenceRank;
         return left.entityKey.localeCompare(right.entityKey);
       });
+    return {
+      entities,
+      mappingStrategy: hasCompleteTemplate ? "homogeneous_template" : "entity_independent",
+      ...(hasCompleteTemplate && template ? { templateEntityKey: template.entityKey } : {})
+    };
   }
 
   function fddRuntimeEntitiesForCheck(check: FddDeployabilityCheck): FddEntityDeployability[] {
-    const deployable = (check.deployableEntities ?? [])
+    return (check.deployableEntities ?? [])
       .filter((entity) => entity.status === "can_deploy" && entity.selectedMappings.length > 0);
-    if (deployable.length > 0) return deployable;
-    if (check.exampleEntityKey && check.selectedMappings?.length) {
-      return [{
-        entityKey: check.exampleEntityKey,
-        status: check.status,
-        selectedMappings: check.selectedMappings,
-        ambiguousInputs: check.ambiguousInputs,
-        missingPoints: check.missingPoints,
-        historyIssues: check.historyIssues,
-        confidence: check.status === "can_deploy" ? 1 : 0.7
-      }];
-    }
-    return [];
   }
 
   function fddCheckHasEntityCoverage(check: FddDeployabilityCheck, algorithm: FddAlgorithm): boolean {
     if (!fddCheckHasEquipmentEvidence(check)) return false;
+    if (check.status !== "can_deploy") return false;
     if (check.applicability !== "applicable" || check.equipmentAvailability.status !== "available") return false;
     if (!Array.isArray(check.deployableEntities)) return false;
-    const requiredSlots = algorithm.requiredPoints
+    const algorithmRequiredSlots = algorithm.requiredPoints
       .filter((point) => point.required)
       .map((point) => point.slot);
-    return check.deployableEntities.some((entity) => {
+    const requiredSlots = check.requiredRuntimeSlots?.length
+      ? [...new Set(check.requiredRuntimeSlots)]
+      : algorithmRequiredSlots;
+    if (!algorithmRequiredSlots.every((slot) => requiredSlots.includes(slot))) return false;
+    const expectedEntityKeys = (check.equipmentAvailability.entityKeys ?? [])
+      .map((entityKey) => normalizeFddEntityAlias(entityKey));
+    const expectedEntityCount = expectedEntityKeys.length > 0
+      ? expectedEntityKeys.length
+      : check.equipmentAvailability.entityCount;
+    if (expectedEntityCount <= 0 || check.deployableEntities.length !== expectedEntityCount) return false;
+    if (typeof check.expectedEntityCount === "number" && check.expectedEntityCount !== expectedEntityCount) return false;
+    const entitiesByKey = new Map(check.deployableEntities.map((entity) => [normalizeFddEntityAlias(entity.entityKey), entity]));
+    if (entitiesByKey.size !== expectedEntityCount) return false;
+    const entities = expectedEntityKeys.length > 0
+      ? expectedEntityKeys.map((entityKey) => entitiesByKey.get(entityKey))
+      : [...entitiesByKey.values()];
+    return entities.every((entity) => {
+      if (!entity) return false;
       if (entity.status !== "can_deploy") return false;
-      const mappedSlots = new Set(entity.selectedMappings.map((mapping) => mapping.slot));
-      return requiredSlots.every((slot) => mappedSlots.has(slot));
+      const requiredMappings = entity.selectedMappings.filter((mapping) => requiredSlots.includes(mapping.slot));
+      if (requiredMappings.length !== requiredSlots.length) return false;
+      const mappedSlots = new Set(requiredMappings.map((mapping) => mapping.slot));
+      return mappedSlots.size === requiredSlots.length
+        && fddPointMappingsAreDistinct(requiredMappings)
+        && requiredSlots.every((slot) => mappedSlots.has(slot));
     });
   }
 
@@ -4259,22 +4458,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     const excludedEntityKeys = new Set(skillContext.excludedEntityKeys.map(normalizeFddEntityAlias));
     const candidateResult = await queryFddPointCandidates(projectId, algorithm, context, skillContext);
+    const effectiveAlgorithm: FddAlgorithm = candidateResult.supplementalPoints.length > 0
+      ? {
+          ...algorithm,
+          requiredPoints: [...algorithm.requiredPoints, ...candidateResult.supplementalPoints]
+            .filter((point, index, values) => values.findIndex((entry) => entry.slot === point.slot) === index)
+        }
+      : algorithm;
     const rawCandidates = candidateResult.candidates
       .filter((candidate) => !candidate.entityKey || !excludedEntityKeys.has(normalizeFddEntityAlias(candidate.entityKey)));
     const unverifiedCandidates = rawCandidates.filter((candidate) => candidate.unitCompatibility !== "mismatch");
     const access = resolveProjectBmsAccess(projectId);
     const usableCandidates = access.ok
-      ? await enrichFddCandidateHistory(access.baseUrl, algorithm, unverifiedCandidates)
+      ? await enrichFddCandidateHistory(access.baseUrl, effectiveAlgorithm, unverifiedCandidates)
       : unverifiedCandidates;
     const rawRejectedCandidates = rawCandidates.filter((candidate) => candidate.unitCompatibility === "mismatch");
-    const deployableEntities = fddDeployableEntitiesForCandidates(algorithm, usableCandidates, candidateResult.supplementalPoints);
-    const preferredExampleEntity = deployableEntities.find((entity) => entity.status === "can_deploy")?.entityKey;
-    const alignedCandidates = alignFddCandidatesToExampleEntity(algorithm, usableCandidates, preferredExampleEntity);
+    const targetEntityKeys = (targetAvailability.entityKeys ?? [])
+      .filter((entityKey) => !excludedEntityKeys.has(normalizeFddEntityAlias(entityKey)));
+    const deployability = fddDeployableEntitiesForCandidates(
+      effectiveAlgorithm,
+      usableCandidates,
+      context,
+      targetEntityKeys,
+      candidateResult.supplementalPoints
+    );
+    const preferredExampleEntity = deployability.templateEntityKey
+      ?? deployability.entities.find((entity) => entity.status === "can_deploy")?.entityKey;
+    const preferredMappings = deployability.entities.find((entity) => entity.entityKey === preferredExampleEntity)?.selectedMappings ?? [];
+    const alignedCandidates = alignFddCandidatesToExampleEntity(effectiveAlgorithm, usableCandidates, preferredExampleEntity, preferredMappings);
     const rejectedCandidates = alignedCandidates.exampleEntityKey
       ? rawRejectedCandidates.filter((candidate) => !candidate.entityKey || candidate.entityKey === alignedCandidates.exampleEntityKey)
       : rawRejectedCandidates;
     const check = evaluateFddDeployability({
-      algorithm,
+      algorithm: effectiveAlgorithm,
       projectId,
       source,
       projectDataSignature: fddProjectDataSignature(projectId),
@@ -4284,12 +4500,24 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       pointCandidates: alignedCandidates.candidates,
       ...(alignedCandidates.exampleEntityKey ? { exampleEntityKey: alignedCandidates.exampleEntityKey } : {}),
       rejectedCandidates: rejectedCandidates.slice(0, 40),
-      deployableEntities: deployableEntities.slice(0, 80),
+      deployableEntities: deployability.entities.slice(0, 80),
       ...(candidateResult.catalogUnavailableReason || alignedCandidates.alignmentIssue
         ? { historyIssues: [candidateResult.catalogUnavailableReason, alignedCandidates.alignmentIssue].filter((issue): issue is string => Boolean(issue)) }
         : {}),
       ...(projectTaskId ? { projectTaskId } : {})
     });
+    check.mappingStrategy = deployability.mappingStrategy;
+    check.expectedEntityCount = targetEntityKeys.length;
+    check.requiredRuntimeSlots = effectiveAlgorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot);
+    if (deployability.templateEntityKey) check.templateEntityKey = deployability.templateEntityKey;
+    const allExpectedEntitiesPresent = deployability.entities.length === targetEntityKeys.length;
+    const hasCannotDeployEntity = deployability.entities.some((entity) => entity.status === "cannot_deploy");
+    const hasUncertainEntity = deployability.entities.some((entity) => entity.status === "uncertain");
+    check.status = !allExpectedEntitiesPresent || hasCannotDeployEntity
+      ? "cannot_deploy"
+      : hasUncertainEntity
+        ? "uncertain"
+        : check.status;
     check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
     persistFddDeployabilityCheck(projectId, check, projectTaskId);
     return check;
@@ -4692,17 +4920,43 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (check.status !== "can_deploy") {
       return { task, instances: [], runtimeEntities: [], error: "This FDD task requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first." };
     }
+    if (!fddCheckHasEntityCoverage(check, task.algorithmSnapshot)) {
+      return { task, instances: [], runtimeEntities: [], error: "Deploy All requires a complete, distinct point mapping for every equipment entity in the current inventory." };
+    }
     const runtimeEntities = fddRuntimeEntitiesForCheck(check);
     if (runtimeEntities.length === 0) {
       return { task, instances: [], runtimeEntities, error: "This FDD task has no complete entity-level mapping to deploy." };
     }
+    const expectedEntityCount = check.equipmentAvailability?.entityCount ?? check.expectedEntityCount ?? runtimeEntities.length;
+    if (runtimeEntities.length !== expectedEntityCount) {
+      return { task, instances: [], runtimeEntities, error: `Deploy All expected ${expectedEntityCount} entities but the validated check contains ${runtimeEntities.length}.` };
+    }
     const parameterValues = recommendFddTaskParameters(task.algorithmSnapshot, check, userId, task.parameterValues ?? []);
-	    const instances = runtimeEntities
-	      .map((entity) => registerFddDerivedMetric(projectId, userId, task.algorithmSnapshot, check, parameterValues, task.id, entity))
-	      .filter((instance): instance is DerivedMetricInstance => Boolean(instance));
-	    if (instances.length === 0) {
-	      return { task, instances: [], runtimeEntities, error: "The FDD evaluator did not create any executable metric instances." };
-	    }
+    let instances: DerivedMetricInstance[];
+    try {
+      instances = derivedMetrics.runInTransaction(() => {
+        const registered = runtimeEntities.map((entity) => {
+          const instance = registerFddDerivedMetric(projectId, userId, task.algorithmSnapshot, check, parameterValues, task.id, entity);
+          if (!instance) throw new Error(`fdd_runtime_registration_failed:${entity.entityKey}`);
+          if (!fddInstanceMatchesEntityPlan(instance, entity)) {
+            throw new Error(`fdd_runtime_dependency_plan_mismatch:${entity.entityKey}`);
+          }
+          return instance;
+        });
+        const deployedEntityKeys = new Set(registered.map((instance) => normalizeFddEntityAlias(instance.entityId)));
+        if (registered.length !== expectedEntityCount || deployedEntityKeys.size !== expectedEntityCount) {
+          throw new Error(`fdd_runtime_entity_coverage_mismatch:${deployedEntityKeys.size}/${expectedEntityCount}`);
+        }
+        return registered;
+      });
+    } catch (error) {
+      return {
+        task,
+        instances: [],
+        runtimeEntities,
+        error: `Deploy All failed before commit; all existing and new runtime instances were left unchanged (${error instanceof Error ? error.message : "registration failed"}).`
+      };
+    }
     task.deployabilityCheck = check;
     task.status = "running";
     task.parameterValues = parameterValues;
@@ -4807,7 +5061,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 	    return dashboard;
 	  }
 
-  function configureFddMetricMaterialization(instance: DerivedMetricInstance, algorithm: FddAlgorithm): DerivedMetricMaterialization | null {
+  function configureFddMetricMaterialization(
+    instance: DerivedMetricInstance,
+    algorithm: FddAlgorithm,
+    resetWatermark = false
+  ): DerivedMetricMaterialization | null {
     if (!isExecutableFddAlgorithm(algorithm)) return null;
     return derivedMetrics.configureMaterialization({
       instanceId: instance.instanceId,
@@ -4818,10 +5076,82 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       invalidValuePolicy: "null",
       alignmentPolicy: DEFAULT_DERIVED_METRIC_ALIGNMENT_POLICY,
       alignmentToleranceSeconds: FDD_DEFAULT_ALIGNMENT_TOLERANCE_SECONDS,
+      resetWatermark,
       status: "active",
       nextRunAt: new Date().toISOString(),
       lastError: null
     });
+  }
+
+  function fddMaterializationPlanFingerprint(
+    algorithm: FddAlgorithm,
+    selectedMappings: FddPointMapping[],
+    parameterValues: FddTaskParameterValue[]
+  ): string {
+    return JSON.stringify({
+      algorithmKey: algorithm.algorithmKey,
+      version: algorithm.version,
+      logicSummary: algorithm.logicSummary,
+      dependencies: selectedMappings
+        .map((mapping) => ({
+          role: mapping.slot,
+          sourceType: "raw_point",
+          sourceId: mapping.pointName,
+          pointName: mapping.pointName,
+          objectRef: mapping.objectRef ?? null,
+          unit: mapping.unit ?? null
+        }))
+        .sort((left, right) => left.role.localeCompare(right.role)),
+      parameters: parameterValues
+        .map((parameter) => ({ key: parameter.key, value: parameter.value }))
+        .sort((left, right) => left.key.localeCompare(right.key))
+    });
+  }
+
+  function fddInstanceMatchesEntityPlan(instance: DerivedMetricInstance, entity: FddEntityDeployability): boolean {
+    if (normalizeFddEntityAlias(instance.entityId) !== normalizeFddEntityAlias(entity.entityKey)) return false;
+    if (instance.dependencies.length !== entity.selectedMappings.length) return false;
+    const dependencyByRole = new Map(instance.dependencies.map((dependency) => [dependency.role, dependency]));
+    if (dependencyByRole.size !== entity.selectedMappings.length) return false;
+    return entity.selectedMappings.every((mapping) => {
+      const dependency = dependencyByRole.get(mapping.slot);
+      return Boolean(
+        dependency
+        && dependency.sourceType === "raw_point"
+        && dependency.sourceId === mapping.pointName
+        && dependency.pointName === mapping.pointName
+        && (dependency.objectRef ?? undefined) === (mapping.objectRef ?? undefined)
+        && (dependency.unit ?? undefined) === (mapping.unit ?? undefined)
+      );
+    });
+  }
+
+  function derivedMetricExecutionPlanSignature(instance: DerivedMetricInstance): string {
+    return JSON.stringify({
+      formulaVersion: instance.formulaVersion,
+      formula: instance.formula,
+      fddMaterializationPlanFingerprint: instance.metadata?.fddMaterializationPlanFingerprint ?? null,
+      dependencies: instance.dependencies
+        .map((dependency) => ({
+          role: dependency.role,
+          sourceType: dependency.sourceType,
+          sourceId: dependency.sourceId,
+          pointName: dependency.pointName ?? null,
+          objectRef: dependency.objectRef ?? null,
+          unit: dependency.unit ?? null
+        }))
+        .sort((left, right) => left.role.localeCompare(right.role))
+    });
+  }
+
+  function derivedMetricExecutionPlanIsCurrent(instanceId: string, expectedSignature: string): boolean {
+    const current = derivedMetrics.getInstance(instanceId);
+    const materialization = derivedMetrics.readMaterialization(instanceId);
+    return Boolean(
+      current
+      && materialization?.enabled
+      && derivedMetricExecutionPlanSignature(current) === expectedSignature
+    );
   }
 
   function isMissingDerivedMetricError(error: unknown): boolean {
@@ -4829,7 +5159,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   function scheduleFddRuntimeMaterialization(projectId: string, instances: DerivedMetricInstance[]): void {
-    if (instances.length === 0) return;
+    if (instances.length === 0 || materializerDisabled) return;
     setTimeout(() => {
       void materializeFddRuntimeInstances(projectId, instances).catch((error) => {
         if (isMissingDerivedMetricError(error)) return;
@@ -4847,7 +5177,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     await mapWithConcurrency(materializations, 2, async (materialization) => {
       if (!derivedMetrics.getInstance(materialization.instanceId)) return;
       try {
-        await materializeDerivedMetricInstance(materialization);
+        await materializeDerivedMetricInstanceSingleflight(materialization.instanceId);
         touched = true;
       } catch (error) {
         if (isMissingDerivedMetricError(error)) return;
@@ -4860,14 +5190,23 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   function registerFddDerivedMetric(projectId: string, userId: string, algorithm: FddAlgorithm, check: FddDeployabilityCheck, parameterValues: FddTaskParameterValue[] = [], projectTaskId?: string, entity?: FddEntityDeployability): DerivedMetricInstance | null {
-    const requiredSlots = new Set(algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot));
+    const requiredSlots = new Set(check.requiredRuntimeSlots?.length
+      ? check.requiredRuntimeSlots
+      : algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot));
     const selectedMappings = (entity?.selectedMappings ?? check.selectedMappings ?? []);
     const requiredMappings = selectedMappings.filter((mapping) => requiredSlots.has(mapping.slot));
     if (!isExecutableFddAlgorithm(algorithm) || selectedMappings.length === 0) return null;
     if (requiredMappings.length === 0) return null;
     const entityId = entity?.entityKey ?? check.exampleEntityKey ?? `${algorithm.equipmentType}_fdd`;
-    try {
-      const result = derivedMetrics.registerMetric({
+    if (requiredMappings.length !== requiredSlots.size) return null;
+    options.fddTestHooks?.beforeRegisterMetric?.({ projectId, algorithmKey: algorithm.algorithmKey, entityId });
+    const planFingerprint = fddMaterializationPlanFingerprint(algorithm, selectedMappings, parameterValues);
+    const existingInstance = derivedMetrics.lookup({ projectId, metricKey: algorithm.algorithmKey, entityId, limit: 1 })[0];
+    const preserveWatermark = Boolean(
+      existingInstance
+      && existingInstance.metadata?.fddMaterializationPlanFingerprint === planFingerprint
+    );
+    const result = derivedMetrics.registerMetric({
         projectId,
         metricKey: algorithm.algorithmKey,
         entityId,
@@ -4894,23 +5233,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           fddEntityDeployabilityStatus: entity?.status ?? check.status,
           fddBuildingGptSkillId: check.agentWorkflow?.skillId,
           fddGroundingRuleIds: (check.agentWorkflow?.groundingRules ?? []).map((rule) => rule.id),
+          fddMaterializationPlanFingerprint: planFingerprint,
           fddParameters: parameterValues.map((parameter) => ({
             key: parameter.key,
             value: parameter.value,
             source: parameter.source
           }))
-        }
-	      });
-	      configureFddMetricMaterialization(result.instance, algorithm);
-	      return result.instance;
-	    } catch {
-	      // Existing project/entity/metricKey records are reused by the derived metric store.
-	      const existing = derivedMetrics.lookup({ projectId, metricKey: algorithm.algorithmKey, entityId, limit: 1 })[0] ?? null;
-	      if (existing) {
-	        configureFddMetricMaterialization(existing, algorithm);
-	      }
-      return existing;
-    }
+	        }
+	    });
+	    const resetRuntimeHistory = Boolean(existingInstance && !preserveWatermark);
+	    if (resetRuntimeHistory) derivedMetrics.clearHistory(result.instance.instanceId);
+	    configureFddMetricMaterialization(result.instance, algorithm, resetRuntimeHistory);
+	    return result.instance;
   }
 
   function materializerDependencyForRole(
@@ -4930,44 +5264,222 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     to: string,
     limit: number
   ): Promise<Map<string, number>> {
+    const pageLimit = Math.min(Math.max(1, limit), FDD_MATERIALIZER_MAX_QUERY_LIMIT);
+    const endMs = Date.parse(to);
+    if (!Number.isFinite(endMs)) throw new Error("fdd_materializer_invalid_read_window");
     if (dependency.sourceType === "metric") {
       const dependencyInstance = derivedMetrics.getInstance(dependency.sourceId);
       if (!dependencyInstance) return new Map();
-      return materializerSeriesFromSamples(derivedMetrics.readHistory(dependencyInstance.instanceId, {
-        from,
-        to,
-        limit,
-        order: "asc"
-      }));
+      const series = new Map<string, number>();
+      let pageFrom = from;
+      for (let page = 0; page < FDD_MATERIALIZER_MAX_QUERY_PAGES; page += 1) {
+        const samples = derivedMetrics.readHistory(dependencyInstance.instanceId, {
+          from: pageFrom,
+          to,
+          limit: pageLimit,
+          order: "asc"
+        });
+        for (const [ts, value] of materializerSeriesFromSamples(samples)) series.set(ts, value);
+        if (samples.length < pageLimit) return series;
+        const lastMs = Date.parse(samples[samples.length - 1]!.ts);
+        const pageFromMs = Date.parse(pageFrom);
+        if (!Number.isFinite(lastMs) || !Number.isFinite(pageFromMs) || lastMs < pageFromMs) {
+          throw new Error("fdd_materializer_pagination_stalled");
+        }
+        if (lastMs >= endMs) return series;
+        pageFrom = new Date(lastMs + 1).toISOString();
+      }
+      throw new Error("fdd_materializer_pagination_limit_exceeded");
     }
 
-    const params: Record<string, string> = {
-      from,
-      to,
-      limit: String(Math.min(Math.max(1, limit), 20_000)),
-      order: "asc"
-    };
-    if (dependency.pointName) {
-      params.name = dependency.pointName;
-    } else if (dependency.objectRef) {
-      params.object_ref = dependency.objectRef;
-    } else {
-      params.name = dependency.sourceId;
-    }
     const access = resolveProjectBmsAccess(projectId);
     if (!access.ok) return new Map();
-    const result = await fetchTimeseries(
-      access.baseUrl,
-      params,
-      fetchProxy as typeof fetch,
-      { preferReadings: true }
+    const series = new Map<string, number>();
+    let pageFrom = from;
+    for (let page = 0; page < FDD_MATERIALIZER_MAX_QUERY_PAGES; page += 1) {
+      const params: Record<string, string> = {
+        from: pageFrom,
+        to,
+        limit: String(pageLimit),
+        order: "asc"
+      };
+      if (dependency.pointName) {
+        params.name = dependency.pointName;
+      } else if (dependency.objectRef) {
+        params.object_ref = dependency.objectRef;
+      } else {
+        params.name = dependency.sourceId;
+      }
+      const result = await fetchTimeseries(
+        access.baseUrl,
+        params,
+        fetchProxy as typeof fetch,
+        { preferReadings: true }
+      );
+      for (const [ts, value] of materializerSeriesFromRows(result.items)) series.set(ts, value);
+      if (result.items.length === 0) return series;
+      const lastMs = Date.parse(result.items[result.items.length - 1]!.ts);
+      const pageFromMs = Date.parse(pageFrom);
+      if (!Number.isFinite(lastMs) || !Number.isFinite(pageFromMs) || lastMs < pageFromMs) {
+        throw new Error("fdd_materializer_pagination_stalled");
+      }
+      const responseIsComplete = result.total <= result.items.length && result.items.length < pageLimit;
+      if (responseIsComplete || lastMs >= endMs) return series;
+      // BMS point histories are unique by point/timestamp. Move one millisecond
+      // past the inclusive boundary so replay pages remain idempotent.
+      pageFrom = new Date(lastMs + 1).toISOString();
+    }
+    throw new Error("fdd_materializer_pagination_limit_exceeded");
+  }
+
+  function fddSampleHasDurableEvaluationState(sample: DerivedMetricSample): boolean {
+    const derived = sample.metadata?.derivedValues;
+    return isRecordValue(derived) && Object.keys(derived).some((key) =>
+      key.startsWith("edgeEvent") || key.startsWith("conditionPersistence")
     );
-    return materializerSeriesFromRows(result.items);
+  }
+
+  function readPreviousFddEvaluationSample(instanceId: string, upperBoundMs: number): DerivedMetricSample | undefined {
+    let pageToMs = upperBoundMs;
+    let latestFallback: DerivedMetricSample | undefined;
+    for (let page = 0; page < FDD_STATE_LOOKBACK_MAX_PAGES; page += 1) {
+      const samples = derivedMetrics.readHistory(instanceId, {
+        to: new Date(pageToMs).toISOString(),
+        limit: FDD_STATE_LOOKBACK_PAGE_SIZE,
+        order: "desc"
+      });
+      latestFallback ??= samples[0];
+      const stateful = samples.find(fddSampleHasDurableEvaluationState);
+      if (stateful) return stateful;
+      if (samples.length < FDD_STATE_LOOKBACK_PAGE_SIZE) return latestFallback;
+      const oldestMs = Date.parse(samples[samples.length - 1]!.ts);
+      if (!Number.isFinite(oldestMs) || oldestMs >= pageToMs || oldestMs <= 0) {
+        return latestFallback;
+      }
+      // History bounds are inclusive; step behind the oldest row to guarantee
+      // progress and avoid replaying a full page forever.
+      pageToMs = oldestMs - 1;
+    }
+    return latestFallback;
+  }
+
+  function fddRuntimeMatchesRefreshedCheck(
+    projectId: string,
+    task: ProjectFddTask,
+    check: FddDeployabilityCheck
+  ): boolean {
+    if (!fddCheckHasEntityCoverage(check, task.algorithmSnapshot)) return false;
+    const plannedByEntity = new Map((check.deployableEntities ?? [])
+      .filter((entity) => entity.status === "can_deploy")
+      .map((entity) => [normalizeFddEntityAlias(entity.entityKey), entity]));
+    const instances = fddRuntimeInstancesForTask(projectId, task);
+    if (instances.length !== plannedByEntity.size || instances.length === 0) return false;
+    return instances.every((instance) => {
+      const plan = plannedByEntity.get(normalizeFddEntityAlias(instance.entityId));
+      return Boolean(plan && fddInstanceMatchesEntityPlan(instance, plan));
+    });
+  }
+
+  function applyFddTaskAuthorizationResult(
+    projectId: string,
+    task: ProjectFddTask,
+    check: FddDeployabilityCheck,
+    authorized: boolean,
+    blocker?: string
+  ): void {
+    const runtimeInstances = fddRuntimeInstancesForTask(projectId, task);
+    derivedMetrics.runInTransaction(() => {
+      for (const runtimeInstance of runtimeInstances) {
+        const materialization = derivedMetrics.readMaterialization(runtimeInstance.instanceId);
+        if (!materialization) continue;
+        derivedMetrics.configureMaterialization({
+          instanceId: runtimeInstance.instanceId,
+          enabled: authorized,
+          status: authorized ? "active" : "authorization_required",
+          lastError: authorized ? null : blocker ?? "fdd_authorization_auto_recheck_failed",
+          ...(authorized ? { nextRunAt: new Date().toISOString() } : {})
+        });
+      }
+    });
+    task.deployabilityCheck = check;
+    task.status = authorized ? (runtimeInstances.length > 0 ? "running" : "ready") : "cannot_deploy";
+    task.updatedAt = new Date().toISOString();
+    upsertFddTask(projectId, task);
+    persistSoon();
+    broadcastToProject(projectId, { type: "fdd_tasks_updated", projectId });
+  }
+
+  function refreshExpiredFddTaskAuthorization(
+    projectId: string,
+    userId: string,
+    task: ProjectFddTask
+  ): Promise<boolean> {
+    const runKey = `${projectId}:${task.id}`;
+    const existingRun = fddTaskAuthorizationRefreshRuns.get(runKey);
+    if (existingRun) return existingRun;
+    const run = (async (): Promise<boolean> => {
+      try {
+        const context = await buildFddEntityContext(projectId);
+        const inventory = fddEquipmentAvailabilityFromContext(context);
+        const refreshedCheck = await runFddDeployabilityCheck(
+          projectId,
+          userId,
+          task.algorithmSnapshot,
+          "auto",
+          task.id,
+          context,
+          inventory
+        );
+        const inventorySignature = fddEquipmentInventorySignature(context, inventory);
+        const authorized = refreshedCheck.status === "can_deploy"
+          && fddCheckMatchesCurrentPolicy(refreshedCheck)
+          && fddCheckIsFresh(refreshedCheck)
+          && fddCheckMatchesAlgorithm(refreshedCheck, task.algorithmSnapshot)
+          && fddCheckMatchesCurrentProjectSignature(projectId, refreshedCheck)
+          && refreshedCheck.equipmentInventorySignature === inventorySignature
+          && fddRuntimeMatchesRefreshedCheck(projectId, task, refreshedCheck);
+        if (authorized) {
+          applyFddTaskAuthorizationResult(projectId, task, refreshedCheck, true);
+          options.fddTestHooks?.onAuthorizationRefresh?.({ projectId, taskId: task.id });
+          return true;
+        }
+        const blocker = "Automatic FDD authorization refresh did not reproduce the complete deployed fleet and exact dependency plan.";
+        const blockedCheck: FddDeployabilityCheck = {
+          ...refreshedCheck,
+          status: "cannot_deploy",
+          historyIssues: [...new Set([...refreshedCheck.historyIssues, blocker])]
+        };
+        persistFddDeployabilityCheck(projectId, blockedCheck, task.id);
+        applyFddTaskAuthorizationResult(projectId, task, blockedCheck, false, "fdd_authorization_refresh_plan_mismatch");
+        options.fddTestHooks?.onAuthorizationRefresh?.({ projectId, taskId: task.id });
+        return false;
+      } catch (error) {
+        const blocker = `Automatic FDD authorization refresh failed: ${error instanceof Error ? error.message : "unknown error"}.`;
+        const previousCheck = task.deployabilityCheck;
+        if (previousCheck) {
+          const blockedCheck: FddDeployabilityCheck = {
+            ...previousCheck,
+            status: "cannot_deploy",
+            checkedAt: new Date().toISOString(),
+            historyIssues: [...new Set([...previousCheck.historyIssues, blocker])]
+          };
+          persistFddDeployabilityCheck(projectId, blockedCheck, task.id);
+          applyFddTaskAuthorizationResult(projectId, task, blockedCheck, false, "fdd_authorization_auto_recheck_failed");
+        }
+        options.fddTestHooks?.onAuthorizationRefresh?.({ projectId, taskId: task.id });
+        return false;
+      }
+    })().finally(() => {
+      fddTaskAuthorizationRefreshRuns.delete(runKey);
+    });
+    fddTaskAuthorizationRefreshRuns.set(runKey, run);
+    return run;
   }
 
   async function materializeFddRuleMetricInstance(
     instance: DerivedMetricInstance,
-    materialization: DerivedMetricMaterialization
+    materialization: DerivedMetricMaterialization,
+    expectedPlanSignature: string
   ): Promise<void> {
     const taskId = typeof instance.metadata?.fddTaskId === "string" ? instance.metadata.fddTaskId : undefined;
     const algorithmId = typeof instance.metadata?.fddAlgorithmId === "string" ? instance.metadata.fddAlgorithmId : undefined;
@@ -4975,7 +5487,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       (taskId ? candidate.id === taskId : false)
       || (!taskId && algorithmId ? candidate.algorithmSnapshot.id === algorithmId || candidate.globalAlgorithmId === algorithmId : false)
     );
-    const check = task?.deployabilityCheck;
+    let check = task?.deployabilityCheck;
+    let automaticRefreshFailed = false;
+    if (task && check && !fddCheckIsFresh(check) && isExecutableFddAlgorithm(task.algorithmSnapshot)) {
+      const refreshed = await refreshExpiredFddTaskAuthorization(
+        instance.projectId,
+        instance.createdBy ?? "buildinggpt-system",
+        task
+      );
+      check = task.deployabilityCheck;
+      automaticRefreshFailed = !refreshed;
+    }
+    if (!derivedMetricExecutionPlanIsCurrent(instance.instanceId, expectedPlanSignature)) return;
     const hasCurrentBmsSource = projectBmsSources(instance.projectId).length > 0;
     const currentlyAuthorized = Boolean(
       task
@@ -4998,7 +5521,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         instanceId: materialization.instanceId,
         enabled: false,
         status: "authorization_required",
-        lastError: "fdd_equipment_inventory_revalidation_required"
+        lastError: automaticRefreshFailed
+          ? "fdd_authorization_auto_recheck_failed"
+          : "fdd_equipment_inventory_revalidation_required"
       });
       persistSoon();
       return;
@@ -5007,16 +5532,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       throw new Error("fdd_materializer_dependencies_not_found");
     }
     const toMs = Date.now();
-    const to = new Date(toMs).toISOString();
-    const from = new Date(toMs - materialization.lookbackSeconds * 1000).toISOString();
-    const limit = Math.min(Math.max(240, Math.ceil(materialization.lookbackSeconds / 30)), 20_000);
     const alignmentToleranceSeconds = materialization.alignmentToleranceSeconds ?? FDD_DEFAULT_ALIGNMENT_TOLERANCE_SECONDS;
+    const readWindow = fddMaterializerReadWindow(instance, materialization, toMs);
+    const { from, to, limit } = readWindow;
     const toleranceMs = alignmentToleranceSeconds * 1000;
     const seriesEntries = await Promise.all(instance.dependencies.map(async (dependency) => ({
       role: dependency.role,
       dependency,
       points: materializerSortedSeries(await readMaterializerDependencySeries(instance.projectId, dependency, from, to, limit))
     })));
+    // A redeploy can replace dependencies/parameters while remote history is
+    // in flight. Never let an obsolete execution plan repopulate samples or a
+    // watermark that the redeploy transaction deliberately cleared.
+    if (!derivedMetricExecutionPlanIsCurrent(instance.instanceId, expectedPlanSignature)) return;
     const seriesByRole = new Map(seriesEntries.map((entry) => [entry.role, entry.points]));
     const anchor = [...seriesEntries].sort((left, right) => right.points.length - left.points.length)[0];
     const calculationRunId = `fdd-materializer:${instance.instanceId}`;
@@ -5035,7 +5563,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           formulaKind: "fdd_rule",
           materialized: true,
           invalidReason: "no_input_timeseries",
-          alignmentToleranceSeconds
+          alignmentToleranceSeconds,
+          incrementalRead: readWindow.incremental,
+          queryLimit: limit
         }
       });
       derivedMetrics.configureMaterialization({
@@ -5047,14 +5577,54 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         alignmentToleranceSeconds,
         lastRunAt: to,
         nextRunAt: new Date(toMs + materialization.intervalSeconds * 1000).toISOString(),
-        watermarkTs: to,
         status: "active",
         lastError: null
       });
+      options.fddTestHooks?.onFddMaterialized?.({ projectId: instance.projectId, instanceId: instance.instanceId });
       return;
     }
 
-    for (const anchorPoint of anchor.points) {
+    const evaluationAnchorPoints = readWindow.incremental && typeof readWindow.watermarkMs === "number"
+      ? anchor.points.filter((point) => point.ms > readWindow.watermarkMs!)
+      : anchor.points;
+    if (evaluationAnchorPoints.length === 0) {
+      // The replay range supplied dependency context, but there is no sample
+      // newer than the durable watermark. Do not double-apply persistence or
+      // advance the watermark to wall-clock time.
+      derivedMetrics.configureMaterialization({
+        instanceId: instance.instanceId,
+        enabled: true,
+        formulaKind: "fdd_rule",
+        invalidValuePolicy: materializerInvalidPolicy(materialization),
+        alignmentPolicy: DEFAULT_DERIVED_METRIC_ALIGNMENT_POLICY,
+        alignmentToleranceSeconds,
+        lastRunAt: to,
+        nextRunAt: new Date(toMs + materialization.intervalSeconds * 1000).toISOString(),
+        status: "active",
+        lastError: null
+      });
+      options.fddTestHooks?.onFddMaterialized?.({ projectId: instance.projectId, instanceId: instance.instanceId });
+      return;
+    }
+
+    const firstAnchorMs = evaluationAnchorPoints[0]!.ms;
+    const previousStateUpperBoundMs = readWindow.incremental && typeof readWindow.watermarkMs === "number"
+      ? readWindow.watermarkMs
+      : firstAnchorMs - 1;
+    const previousSample = readPreviousFddEvaluationSample(instance.instanceId, previousStateUpperBoundMs);
+    const previousDerived = isRecordValue(previousSample?.metadata?.derivedValues)
+      ? Object.fromEntries(Object.entries(previousSample.metadata.derivedValues)
+          .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])))
+      : undefined;
+    let previousEvaluationState: FddRuleEvaluationState | undefined = previousSample
+      ? {
+          sampleMs: Date.parse(previousSample.ts),
+          status: previousSample.status,
+          ...(previousDerived ? { derivedValues: previousDerived } : {})
+        }
+      : undefined;
+
+    for (const anchorPoint of evaluationAnchorPoints) {
       const inputs: Record<string, number> = {};
       const inputTimestamps: Record<string, string> = {};
       const inputLagSeconds: Record<string, number> = {};
@@ -5067,14 +5637,23 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         inputTimestamps[entry.role] = point.ts;
         inputLagSeconds[entry.role] = Math.round((point.ms - anchorPoint.ms) / 1000);
       }
-      const evaluation = evaluateFddRuleSample(instance, inputs, seriesByRole, anchorPoint.ms, alignmentToleranceSeconds);
+      const evaluation = evaluateFddRuleSample(
+        instance,
+        inputs,
+        seriesByRole,
+        anchorPoint.ms,
+        alignmentToleranceSeconds,
+        previousEvaluationState
+      );
       const metadata: Record<string, unknown> = {
         formulaKind: "fdd_rule",
         materialized: true,
         inputs,
         inputTimestamps,
         inputLagSeconds,
-        alignmentToleranceSeconds
+        alignmentToleranceSeconds,
+        incrementalRead: readWindow.incremental,
+        queryLimit: limit
       };
       if (evaluation.reason) metadata.reason = evaluation.reason;
       if (evaluation.derivedValues) metadata.derivedValues = evaluation.derivedValues;
@@ -5090,9 +5669,23 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         sourceWindowEnd: to,
         metadata
       });
+      // Missing inputs must not acknowledge/clear durable edge or level
+      // persistence. Only a subsequent calculable sample may advance/reset it.
+      if (evaluation.quality === "good") {
+        previousEvaluationState = {
+          sampleMs: anchorPoint.ms,
+          status: evaluation.status,
+          ...(evaluation.derivedValues ? { derivedValues: evaluation.derivedValues } : {})
+        };
+      }
     }
 
-    const watermarkTs = anchor.points[anchor.points.length - 1]?.ts ?? to;
+    const evaluatedWatermarkTs = evaluationAnchorPoints[evaluationAnchorPoints.length - 1]?.ts;
+    const evaluatedWatermarkMs = evaluatedWatermarkTs ? Date.parse(evaluatedWatermarkTs) : NaN;
+    const durableWatermarkMs = materialization.watermarkTs ? Date.parse(materialization.watermarkTs) : NaN;
+    const watermarkTs = Number.isFinite(durableWatermarkMs) && Number.isFinite(evaluatedWatermarkMs)
+      ? new Date(Math.max(durableWatermarkMs, evaluatedWatermarkMs)).toISOString()
+      : evaluatedWatermarkTs ?? materialization.watermarkTs ?? to;
     derivedMetrics.configureMaterialization({
       instanceId: instance.instanceId,
       enabled: true,
@@ -5106,11 +5699,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       status: "active",
       lastError: null
     });
+    options.fddTestHooks?.onFddMaterialized?.({ projectId: instance.projectId, instanceId: instance.instanceId });
   }
 
-  async function materializeDerivedMetricInstance(materialization: DerivedMetricMaterialization): Promise<void> {
-    const instance = derivedMetrics.getInstance(materialization.instanceId);
-    if (!instance) return;
+  async function materializeDerivedMetricInstance(
+    instance: DerivedMetricInstance,
+    materialization: DerivedMetricMaterialization,
+    expectedPlanSignature: string
+  ): Promise<void> {
     const kind = inferredMaterializerKind(instance, materialization);
     if (!kind) {
       derivedMetrics.configureMaterialization({
@@ -5122,7 +5718,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return;
     }
     if (kind === "fdd_rule") {
-      await materializeFddRuleMetricInstance(instance, materialization);
+      await materializeFddRuleMetricInstance(instance, materialization, expectedPlanSignature);
       return;
     }
     const leftRole = materialization.leftRole ?? instance.dependencies[0]?.role ?? "left";
@@ -5141,6 +5737,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       readMaterializerDependencySeries(instance.projectId, leftDependency, from, to, limit),
       readMaterializerDependencySeries(instance.projectId, rightDependency, from, to, limit)
     ]);
+    if (!derivedMetricExecutionPlanIsCurrent(instance.instanceId, expectedPlanSignature)) return;
     const policy = materializerInvalidPolicy(materialization);
     const alignmentPolicy = materialization.alignmentPolicy ?? DEFAULT_DERIVED_METRIC_ALIGNMENT_POLICY;
     const alignmentToleranceSeconds = materialization.alignmentToleranceSeconds ?? DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS;
@@ -5226,6 +5823,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
   }
 
+  function materializeDerivedMetricInstanceSingleflight(instanceId: string, requireDue = false): Promise<void> {
+    const existingRun = derivedMetricMaterializationRuns.get(instanceId);
+    if (existingRun) return existingRun;
+    const run = (async (): Promise<void> => {
+      // Read both records only after this instance owns the lock. Callers may
+      // have queued a stale object before a redeploy reset its cursor/plan.
+      const instance = derivedMetrics.getInstance(instanceId);
+      const materialization = derivedMetrics.readMaterialization(instanceId);
+      if (!instance || !materialization || !materialization.enabled) return;
+      if (requireDue && materialization.nextRunAt && Date.parse(materialization.nextRunAt) > Date.now()) return;
+      const expectedPlanSignature = derivedMetricExecutionPlanSignature(instance);
+      await materializeDerivedMetricInstance(instance, materialization, expectedPlanSignature);
+    })().finally(() => {
+      derivedMetricMaterializationRuns.delete(instanceId);
+    });
+    derivedMetricMaterializationRuns.set(instanceId, run);
+    return run;
+  }
+
   let derivedMetricMaterializerRunning = false;
   async function runDerivedMetricMaterializer(): Promise<void> {
     if (derivedMetricMaterializerRunning) return;
@@ -5241,7 +5857,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         .slice(0, 50);
       for (const materialization of due) {
         try {
-          await materializeDerivedMetricInstance(materialization);
+          await materializeDerivedMetricInstanceSingleflight(materialization.instanceId, true);
           touchedProjects.add(materialization.projectId);
         } catch (error) {
           if (isMissingDerivedMetricError(error)) {
@@ -5276,6 +5892,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   const materializerDisabled = env.DERIVED_METRIC_MATERIALIZER_DISABLED === "1";
+  options.fddTestHooks?.onMaterializerReady?.(runDerivedMetricMaterializer);
   const derivedMetricMaterializerInterval = materializerDisabled
     ? null
     : setInterval(() => {
@@ -7068,12 +7685,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     ensureProjectFddCollections(request.params.projectId);
     const entityContext = await buildFddEntityContext(request.params.projectId);
     const equipmentAvailability = fddEquipmentAvailabilityFromContext(entityContext);
-    const check = latestUsableFddCheck(
+    // Deployment is a state-changing boundary. Always re-read inventory,
+    // catalog mappings, and observed history instead of authorizing from a
+    // merely fresh cached library card.
+    const check = await runFddDeployabilityCheck(
       request.params.projectId,
-      store.fddChecksByProject![request.params.projectId] ?? [],
+      session.userId,
       algorithm,
-      fddEquipmentInventorySignature(entityContext, equipmentAvailability)
-    ) ?? await runFddDeployabilityCheck(request.params.projectId, session.userId, algorithm, "auto", undefined, entityContext, equipmentAvailability);
+      "auto",
+      undefined,
+      entityContext,
+      equipmentAvailability
+    );
     if (check.status !== "can_deploy") {
       return sendError(request, reply, 422, "fdd_cannot_deploy", "This FDD algorithm requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first.");
     }
@@ -7101,6 +7724,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return {
       projectId: request.params.projectId,
       task: deployment.task,
+      deployment: {
+        expectedEntityCount: check.equipmentAvailability?.entityCount ?? deployment.runtimeEntities.length,
+        deployedEntityCount: deployment.instances.length,
+        entityKeys: deployment.runtimeEntities.map((entity) => entity.entityKey)
+      },
       requestId: requestIdFor(request)
     };
   });
@@ -7282,16 +7910,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     const entityContext = await buildFddEntityContext(request.params.projectId);
     const equipmentAvailability = fddEquipmentAvailabilityFromContext(entityContext);
-    const currentInventorySignature = fddEquipmentInventorySignature(entityContext, equipmentAvailability);
-    const check = task.deployabilityCheck
-      && fddCheckMatchesCurrentProjectSignature(request.params.projectId, task.deployabilityCheck)
-      && fddCheckMatchesCurrentPolicy(task.deployabilityCheck)
-      && fddCheckIsFresh(task.deployabilityCheck)
-      && fddCheckMatchesAlgorithm(task.deployabilityCheck, task.algorithmSnapshot)
-      && fddCheckHasEntityCoverage(task.deployabilityCheck, task.algorithmSnapshot)
-      && task.deployabilityCheck.equipmentInventorySignature === currentInventorySignature
-      ? task.deployabilityCheck
-      : await runFddDeployabilityCheck(request.params.projectId, session.userId, task.algorithmSnapshot, "auto", task.id, entityContext, equipmentAvailability);
+    const check = await runFddDeployabilityCheck(
+      request.params.projectId,
+      session.userId,
+      task.algorithmSnapshot,
+      "auto",
+      task.id,
+      entityContext,
+      equipmentAvailability
+    );
     if (check.status !== "can_deploy") {
       return sendError(request, reply, 422, "fdd_cannot_deploy", "This FDD task requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first.");
     }
@@ -7301,7 +7928,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     persistSoon();
     broadcastToProject(request.params.projectId, { type: "fdd_tasks_updated", projectId: request.params.projectId });
-    return { projectId: request.params.projectId, task: deployment.task, requestId: requestIdFor(request) };
+    return {
+      projectId: request.params.projectId,
+      task: deployment.task,
+      deployment: {
+        expectedEntityCount: check.equipmentAvailability?.entityCount ?? deployment.runtimeEntities.length,
+        deployedEntityCount: deployment.instances.length,
+        entityKeys: deployment.runtimeEntities.map((entity) => entity.entityKey)
+      },
+      requestId: requestIdFor(request)
+    };
   });
 
   app.get<{ Params: ProjectParams & { instanceId: string } }>("/api/projects/:projectId/derived-metrics/:instanceId", async (request, reply) => {

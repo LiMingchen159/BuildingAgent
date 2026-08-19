@@ -568,7 +568,7 @@ describe("BMS API contract", () => {
     expect(checked.statusCode).toBe(200);
     expect(checked.json().check).toMatchObject({
       status: "cannot_deploy",
-      checkPolicyVersion: "v3-equipment-first"
+      checkPolicyVersion: "v4-homogeneous-fleet"
     });
 
     const legacyCheck = store.fddChecksByProject?.project_element?.[0];
@@ -590,7 +590,7 @@ describe("BMS API contract", () => {
     expect(store.fddChecksByProject?.project_element?.[0]).not.toBe(legacyCheck);
     expect(store.fddChecksByProject?.project_element?.[0]).toMatchObject({
       status: "cannot_deploy",
-      checkPolicyVersion: "v3-equipment-first"
+      checkPolicyVersion: "v4-homogeneous-fleet"
     });
 
     const staleCheck = store.fddChecksByProject?.project_element?.[0];
@@ -721,16 +721,16 @@ describe("BMS API contract", () => {
       headers: bearer()
     });
     const check = store.fddChecksByProject?.project_element?.[0];
-    expect(check?.checkPolicyVersion).toBe("v3-equipment-first");
+    expect(check?.checkPolicyVersion).toBe("v4-homogeneous-fleet");
     if (!check) return;
     check.status = "can_deploy";
     check.missingPoints = [];
     check.historyIssues = [];
     const selectedMappings = algorithm.requiredPoints
       .filter((point) => point.required)
-      .map((point) => ({ slot: point.slot, pointName: `CHILLER_01_${point.slot}` }));
+      .map((point) => ({ slot: point.slot, pointName: `WCC_01_${point.slot}` }));
     check.deployableEntities = [{
-      entityKey: "CHILLER_01",
+      entityKey: "WCC_01",
       status: "can_deploy",
       selectedMappings,
       ambiguousInputs: [],
@@ -756,11 +756,11 @@ describe("BMS API contract", () => {
     const instance = metrics.registerMetric({
       projectId: "project_element",
       metricKey: algorithm.algorithmKey,
-      entityId: "CHILLER_01",
+      entityId: "WCC_01",
       metricType: "fdd",
       formula: algorithm.formula,
       metadata: { fddTaskId: task.id, fddAlgorithmId: algorithm.id },
-      dependencies: [{ role: "chiller_status", sourceId: "CHILLER_01_STATUS" }]
+      dependencies: [{ role: "chiller_status", sourceId: "WCC_01_STATUS" }]
     }).instance;
     metrics.configureMaterialization({ instanceId: instance.instanceId, enabled: true, formulaKind: "fdd_rule" });
     await firstApp.close();
