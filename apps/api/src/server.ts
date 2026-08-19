@@ -121,14 +121,17 @@ import {
   type DashboardWidget
 } from "./dashboards.js";
 import {
+  alignFddV4CandidatesToExampleEntity,
+  applyFddHomogeneousV4FleetDecision,
   createFddAlgorithmFromInput,
   ensureStoreFddLibrary,
   evaluateFddDeployability,
   FDD_DEPLOYABILITY_POLICY_VERSION,
-  fddAmbiguousAlternativesForPoint,
-  fddPointMappingsAreDistinct,
+  fddV4DecisionHasFleetCoverage,
   latestFddCheck,
   normalizeFddCreateInput,
+  planFddHomogeneousV4Fleet,
+  projectFddV4FleetCandidateEvidence,
   sortFddPointCandidatesForRequiredPoint,
   type FddAlgorithm,
   type FddCheckSource,
@@ -4091,265 +4094,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
   }
 
-  function alignFddCandidatesToExampleEntity(
-    algorithm: FddAlgorithm,
-    candidates: FddPointCandidate[],
-    preferredEntityKey?: string,
-    preferredMappings: FddPointMapping[] = []
-  ): { candidates: FddPointCandidate[]; exampleEntityKey?: string; alignmentIssue?: string } {
-    const requiredSlots = algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot);
-    if (requiredSlots.length === 0) return { candidates };
-    const scores = new Map<string, { slots: Set<string>; confidenceBySlot: Map<string, number> }>();
-    for (const candidate of candidates) {
-      if (!candidate.entityKey || !requiredSlots.includes(candidate.slot)) continue;
-      const score = scores.get(candidate.entityKey) ?? { slots: new Set<string>(), confidenceBySlot: new Map<string, number>() };
-      score.slots.add(candidate.slot);
-      const previousConfidence = score.confidenceBySlot.get(candidate.slot) ?? 0;
-      if (candidate.confidence > previousConfidence) {
-        score.confidenceBySlot.set(candidate.slot, candidate.confidence);
-      }
-      scores.set(candidate.entityKey, score);
-    }
-    const completeEntities = [...scores.entries()]
-      .filter(([, score]) => requiredSlots.every((slot) => score.slots.has(slot)))
-      .sort((left, right) => {
-        const leftConfidence = requiredSlots.reduce((total, slot) => total + (left[1].confidenceBySlot.get(slot) ?? 0), 0);
-        const rightConfidence = requiredSlots.reduce((total, slot) => total + (right[1].confidenceBySlot.get(slot) ?? 0), 0);
-        const confidenceRank = rightConfidence - leftConfidence;
-        if (confidenceRank !== 0) return confidenceRank;
-        return left[0].localeCompare(right[0]);
-      });
-    const preferredCanonical = preferredEntityKey ? normalizeFddEntityAlias(preferredEntityKey) : "";
-    const preferredCompleteEntity = preferredCanonical
-      ? completeEntities.find(([entityKey]) => normalizeFddEntityAlias(entityKey) === preferredCanonical)?.[0]
-      : undefined;
-    const exampleEntityKey = preferredCompleteEntity ?? completeEntities[0]?.[0];
-    if (!exampleEntityKey) {
-      const observedEntities = [...scores.keys()].sort();
-      return {
-        candidates: [],
-        alignmentIssue: observedEntities.length > 0
-          ? `No single entity has candidates for all required inputs. Candidate entities found: ${observedEntities.slice(0, 8).join(", ")}.`
-          : "No entity-level point candidates were found for the required inputs."
-      };
-    }
-    const preferredPointBySlot = new Map(preferredMappings.map((mapping) => [mapping.slot, mapping]));
-    const aligned = candidates
-      .filter((candidate) => {
-        if (candidate.entityKey !== exampleEntityKey) return false;
-        if (preferredPointBySlot.size === 0) return true;
-        const mapping = preferredPointBySlot.get(candidate.slot);
-        if (!mapping) return true;
-        return mapping.pointName === candidate.pointName
-          && (!mapping.objectRef || mapping.objectRef === candidate.objectRef);
-      })
-      .sort((left, right) => right.confidence - left.confidence)
-      .slice(0, 120);
-    return { candidates: aligned, exampleEntityKey };
-  }
-
-  function fddPointMappingFromCandidate(candidate: FddPointCandidate): FddPointMapping {
-    return {
-      slot: candidate.slot,
-      pointName: candidate.pointName,
-      ...(candidate.objectRef ? { objectRef: candidate.objectRef } : {}),
-      ...(candidate.unit ? { unit: candidate.unit } : {})
-    };
-  }
-
-  function fddEntityDeployabilityFromCandidates(
-    algorithm: FddAlgorithm,
-    entityKey: string,
-    candidates: FddPointCandidate[],
-    supplementalPoints: FddAlgorithm["requiredPoints"] = []
-  ): FddEntityDeployability {
-    const required = [...algorithm.requiredPoints, ...supplementalPoints]
-      .filter((point) => point.required)
-      .filter((point, index, values) => values.findIndex((entry) => entry.slot === point.slot) === index);
-    const selectedMappings: FddPointMapping[] = [];
-    const ambiguousInputs: FddEntityDeployability["ambiguousInputs"] = [];
-    const missingPoints: string[] = [];
-    const historyIssues: string[] = [];
-    const selectedConfidences: number[] = [];
-    const usedPointNames = new Set<string>();
-    const usedObjectRefs = new Set<string>();
-    let uncertain = false;
-
-    for (const point of required) {
-      const slotCandidates = sortFddPointCandidatesForRequiredPoint(
-        point,
-        candidates.filter((candidate) => {
-          if (candidate.slot !== point.slot) return false;
-          const pointName = candidate.pointName.trim().toLowerCase();
-          const objectRef = candidate.objectRef?.trim().toLowerCase();
-          return !usedPointNames.has(pointName) && (!objectRef || !usedObjectRefs.has(objectRef));
-        })
-      );
-      const best = slotCandidates[0];
-      if (!best) {
-        missingPoints.push(point.label);
-        continue;
-      }
-      const closeAlternatives = fddAmbiguousAlternativesForPoint(point, best, slotCandidates.slice(1));
-      if (closeAlternatives.length > 0 || best.confidence < 0.68 || best.unitCompatibility === "unknown") {
-        uncertain = true;
-        ambiguousInputs.push({
-          slot: point.slot,
-          label: point.label,
-          candidates: [best, ...closeAlternatives].slice(0, 6)
-        });
-      }
-      const minDays = point.historyRequirement?.minDays ?? 0;
-      if (minDays > 0 && typeof best.historyDays !== "number") {
-        historyIssues.push(`${point.label} history coverage is unverified; requires ${minDays}d.`);
-      } else if (typeof best.historyDays === "number" && best.historyDays < minDays) {
-        historyIssues.push(`${point.label} has ${best.historyDays}d history; requires ${minDays}d.`);
-      }
-      selectedConfidences.push(best.confidence);
-      selectedMappings.push(fddPointMappingFromCandidate(best));
-      usedPointNames.add(best.pointName.trim().toLowerCase());
-      if (best.objectRef) usedObjectRefs.add(best.objectRef.trim().toLowerCase());
-    }
-
-    for (const point of supplementalPoints.filter((entry) => !entry.required)) {
-      const alreadyMapped = selectedMappings.some((mapping) => mapping.slot === point.slot);
-      if (alreadyMapped) continue;
-      const best = candidates
-        .filter((candidate) => {
-          if (candidate.slot !== point.slot) return false;
-          const pointName = candidate.pointName.trim().toLowerCase();
-          const objectRef = candidate.objectRef?.trim().toLowerCase();
-          return !usedPointNames.has(pointName) && (!objectRef || !usedObjectRefs.has(objectRef));
-        })
-        .sort((left, right) => right.confidence - left.confidence)[0];
-      if (!best || best.confidence < 0.56) continue;
-      selectedMappings.push(fddPointMappingFromCandidate(best));
-      usedPointNames.add(best.pointName.trim().toLowerCase());
-      if (best.objectRef) usedObjectRefs.add(best.objectRef.trim().toLowerCase());
-    }
-
-    const status: FddDeployabilityCheck["status"] = missingPoints.length > 0 || historyIssues.length > 0
-      ? "cannot_deploy"
-      : uncertain
-        ? "uncertain"
-        : "can_deploy";
-    const confidence = selectedConfidences.length > 0
-      ? selectedConfidences.reduce((total, value) => total + value, 0) / selectedConfidences.length
-      : 0;
-    return {
-      entityKey,
-      status,
-      selectedMappings,
-      ambiguousInputs,
-      missingPoints,
-      historyIssues,
-      confidence
-    };
-  }
-
-  function fddDeployableEntitiesForCandidates(
-    algorithm: FddAlgorithm,
-    candidates: FddPointCandidate[],
-    context: FddEntityContext,
-    targetEntityKeys: string[],
-    supplementalPoints: FddAlgorithm["requiredPoints"] = []
-  ): {
-    entities: FddEntityDeployability[];
-    mappingStrategy: "entity_independent" | "homogeneous_template";
-    templateEntityKey?: string;
-  } {
-    const byEntity = new Map<string, FddPointCandidate[]>();
-    for (const candidate of candidates) {
-      if (!candidate.entityKey) continue;
-      const canonical = canonicalFddEntityKey(candidate.entityKey, context);
-      byEntity.set(canonical, [...(byEntity.get(canonical) ?? []), candidate]);
-    }
-    const entityKeys = (targetEntityKeys.length > 0 ? targetEntityKeys : [...byEntity.keys()])
-      .map((entityKey) => canonicalFddEntityKey(entityKey, context))
-      .filter((entityKey, index, values) => values.findIndex((value) => normalizeFddEntityAlias(value) === normalizeFddEntityAlias(entityKey)) === index)
-      .sort((left, right) => left.localeCompare(right));
-    const provisional = entityKeys.map((entityKey) =>
-      fddEntityDeployabilityFromCandidates(algorithm, entityKey, byEntity.get(entityKey) ?? [], supplementalPoints)
-    );
-    const template = provisional.find((entity) => entity.status === "can_deploy");
-    const requiredSlots = algorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot);
-    const familyBySlot = new Map<string, string>();
-    if (template) {
-      for (const mapping of template.selectedMappings) {
-        const signature = fddPointFamilySignature(mapping.pointName, context);
-        if (signature) familyBySlot.set(mapping.slot, signature);
-      }
-    }
-    const hasCompleteTemplate = fddTargetEntityType(algorithm) === "chiller"
-      && entityKeys.length > 1
-      && Boolean(template)
-      && requiredSlots.every((slot) => familyBySlot.has(slot));
-    const resolved = hasCompleteTemplate
-      ? entityKeys.map((entityKey) => {
-          const familyCandidates = (byEntity.get(entityKey) ?? []).filter((candidate) => {
-            const expectedFamily = familyBySlot.get(candidate.slot);
-            return expectedFamily ? fddPointFamilySignature(candidate.pointName, context) === expectedFamily : true;
-          });
-          return fddEntityDeployabilityFromCandidates(algorithm, entityKey, familyCandidates, supplementalPoints);
-        })
-      : provisional;
-    const statusRank: Record<FddDeployabilityCheck["status"], number> = {
-      can_deploy: 0,
-      uncertain: 1,
-      cannot_deploy: 2
-    };
-    const entities = resolved.sort((left, right) => {
-        const rank = statusRank[left.status] - statusRank[right.status];
-        if (rank !== 0) return rank;
-        const confidenceRank = right.confidence - left.confidence;
-        if (confidenceRank !== 0) return confidenceRank;
-        return left.entityKey.localeCompare(right.entityKey);
-      });
-    return {
-      entities,
-      mappingStrategy: hasCompleteTemplate ? "homogeneous_template" : "entity_independent",
-      ...(hasCompleteTemplate && template ? { templateEntityKey: template.entityKey } : {})
-    };
-  }
-
   function fddRuntimeEntitiesForCheck(check: FddDeployabilityCheck): FddEntityDeployability[] {
     return (check.deployableEntities ?? [])
       .filter((entity) => entity.status === "can_deploy" && entity.selectedMappings.length > 0);
   }
 
   function fddCheckHasEntityCoverage(check: FddDeployabilityCheck, algorithm: FddAlgorithm): boolean {
-    if (!fddCheckHasEquipmentEvidence(check)) return false;
-    if (check.status !== "can_deploy") return false;
-    if (check.applicability !== "applicable" || check.equipmentAvailability.status !== "available") return false;
-    if (!Array.isArray(check.deployableEntities)) return false;
-    const algorithmRequiredSlots = algorithm.requiredPoints
-      .filter((point) => point.required)
-      .map((point) => point.slot);
-    const requiredSlots = check.requiredRuntimeSlots?.length
-      ? [...new Set(check.requiredRuntimeSlots)]
-      : algorithmRequiredSlots;
-    if (!algorithmRequiredSlots.every((slot) => requiredSlots.includes(slot))) return false;
-    const expectedEntityKeys = (check.equipmentAvailability.entityKeys ?? [])
-      .map((entityKey) => normalizeFddEntityAlias(entityKey));
-    const expectedEntityCount = expectedEntityKeys.length > 0
-      ? expectedEntityKeys.length
-      : check.equipmentAvailability.entityCount;
-    if (expectedEntityCount <= 0 || check.deployableEntities.length !== expectedEntityCount) return false;
-    if (typeof check.expectedEntityCount === "number" && check.expectedEntityCount !== expectedEntityCount) return false;
-    const entitiesByKey = new Map(check.deployableEntities.map((entity) => [normalizeFddEntityAlias(entity.entityKey), entity]));
-    if (entitiesByKey.size !== expectedEntityCount) return false;
-    const entities = expectedEntityKeys.length > 0
-      ? expectedEntityKeys.map((entityKey) => entitiesByKey.get(entityKey))
-      : [...entitiesByKey.values()];
-    return entities.every((entity) => {
-      if (!entity) return false;
-      if (entity.status !== "can_deploy") return false;
-      const requiredMappings = entity.selectedMappings.filter((mapping) => requiredSlots.includes(mapping.slot));
-      if (requiredMappings.length !== requiredSlots.length) return false;
-      const mappedSlots = new Set(requiredMappings.map((mapping) => mapping.slot));
-      return mappedSlots.size === requiredSlots.length
-        && fddPointMappingsAreDistinct(requiredMappings)
-        && requiredSlots.every((slot) => mappedSlots.has(slot));
+    return fddV4DecisionHasFleetCoverage({
+      decision: check,
+      algorithmRequiredSlots: algorithm.requiredPoints
+        .filter((point) => point.required)
+        .map((point) => point.slot),
+      expectedCanonicalEntityKeys: (check.equipmentAvailability?.entityKeys ?? [])
+        .map((entityKey) => normalizeFddEntityAlias(entityKey))
     });
   }
 
@@ -4475,21 +4232,30 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const rawRejectedCandidates = rawCandidates.filter((candidate) => candidate.unitCompatibility === "mismatch");
     const targetEntityKeys = (targetAvailability.entityKeys ?? [])
       .filter((entityKey) => !excludedEntityKeys.has(normalizeFddEntityAlias(entityKey)));
-    const deployability = fddDeployableEntitiesForCandidates(
-      effectiveAlgorithm,
-      usableCandidates,
-      context,
-      targetEntityKeys,
-      candidateResult.supplementalPoints
-    );
+    const fleetCandidateEvidence = projectFddV4FleetCandidateEvidence(usableCandidates, {
+      canonicalEntityKey: (entityKey) => canonicalFddEntityKey(entityKey, context),
+      pointFamilyKey: (pointName) => fddPointFamilySignature(pointName, context)
+    });
+    const deployability = planFddHomogeneousV4Fleet({
+      algorithm: effectiveAlgorithm,
+      candidates: fleetCandidateEvidence,
+      targetEntityKeys: targetEntityKeys.map((entityKey) => canonicalFddEntityKey(entityKey, context)),
+      supplementalPoints: candidateResult.supplementalPoints,
+      homogeneousTemplateEligible: fddTargetEntityType(effectiveAlgorithm) === "chiller"
+    });
     const preferredExampleEntity = deployability.templateEntityKey
       ?? deployability.entities.find((entity) => entity.status === "can_deploy")?.entityKey;
     const preferredMappings = deployability.entities.find((entity) => entity.entityKey === preferredExampleEntity)?.selectedMappings ?? [];
-    const alignedCandidates = alignFddCandidatesToExampleEntity(effectiveAlgorithm, usableCandidates, preferredExampleEntity, preferredMappings);
+    const alignedCandidates = alignFddV4CandidatesToExampleEntity({
+      algorithm: effectiveAlgorithm,
+      candidates: fleetCandidateEvidence,
+      ...(preferredExampleEntity ? { preferredEntityKey: preferredExampleEntity } : {}),
+      preferredMappings
+    });
     const rejectedCandidates = alignedCandidates.exampleEntityKey
       ? rawRejectedCandidates.filter((candidate) => !candidate.entityKey || candidate.entityKey === alignedCandidates.exampleEntityKey)
       : rawRejectedCandidates;
-    const check = evaluateFddDeployability({
+    const evaluatedCheck = evaluateFddDeployability({
       algorithm: effectiveAlgorithm,
       projectId,
       source,
@@ -4506,18 +4272,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         : {}),
       ...(projectTaskId ? { projectTaskId } : {})
     });
-    check.mappingStrategy = deployability.mappingStrategy;
-    check.expectedEntityCount = targetEntityKeys.length;
-    check.requiredRuntimeSlots = effectiveAlgorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot);
-    if (deployability.templateEntityKey) check.templateEntityKey = deployability.templateEntityKey;
-    const allExpectedEntitiesPresent = deployability.entities.length === targetEntityKeys.length;
-    const hasCannotDeployEntity = deployability.entities.some((entity) => entity.status === "cannot_deploy");
-    const hasUncertainEntity = deployability.entities.some((entity) => entity.status === "uncertain");
-    check.status = !allExpectedEntitiesPresent || hasCannotDeployEntity
-      ? "cannot_deploy"
-      : hasUncertainEntity
-        ? "uncertain"
-        : check.status;
+    const check = applyFddHomogeneousV4FleetDecision({
+      decision: evaluatedCheck,
+      plan: deployability,
+      expectedEntityCount: targetEntityKeys.length,
+      requiredRuntimeSlots: effectiveAlgorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot)
+    });
     check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
     persistFddDeployabilityCheck(projectId, check, projectTaskId);
     return check;

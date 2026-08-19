@@ -1,55 +1,27 @@
 import type { SeedStore } from "../seed.js";
 import { importedEquipmentFddAlgorithms } from "./importedEquipmentLibrary.js";
 import { hasExecutableFddEvaluator } from "./runtimeRegistry.js";
+import type {
+  FddAlgorithmRequirement,
+  FddEquipmentType,
+  FddQuantityKind,
+  FddRequiredPoint
+} from "@building-agent/fdd-deployment-planner";
+import type { FddDeployabilityCheck } from "./deploymentPlannerAdapter.js";
 
-export type FddAlgorithmScope = "global_builtin" | "global_community";
-export type FddEquipmentType = "ahu" | "chiller" | "pump" | "cooling_tower" | "fcu" | "vav" | "sensor";
-export type FddMethod = "rule_based" | "bayesian_network" | "performance_indicator" | "statistical";
-export type FddDeployabilityStatus = "can_deploy" | "uncertain" | "cannot_deploy";
-export type FddApplicability = "applicable" | "no_equipment" | "unknown";
-export type FddEquipmentAvailabilityStatus = "available" | "not_available" | "unknown";
+export * from "@building-agent/fdd-deployment-planner";
+export * from "./deploymentPlannerAdapter.js";
+
 export type FddTaskSource = "global_library" | "project_upload" | "buildinggpt_generated";
 export type FddSharingScope = "project_only" | "global_community";
 export type FddTaskStatus = "checking" | "ready" | "running" | "paused" | "cannot_deploy";
-export type FddCheckSource = "auto" | "manual";
-export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" | "load" | "status" | "pressure" | "humidity" | "position" | "speed" | "current" | "level" | "concentration" | "unknown";
+export type FddAlgorithmScope = "global_builtin" | "global_community";
+export type FddMethod = "rule_based" | "bayesian_network" | "performance_indicator" | "statistical";
 export type FddDefinitionStatus = "implementation_ready" | "requires_configuration" | "requires_review";
 export type FddDefinitionParameterResolution = "source_default" | "source_expression" | "site_required";
-export type FddUnitCompatibility = "match" | "convertible" | "mismatch" | "unknown";
 export type FddParameterType = "number" | "boolean" | "select";
 export type FddParameterValue = string | number | boolean;
 export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended" | "user_override";
-
-// Cached deployability checks are persisted in the project store. Bump this
-// contract whenever the evidence required for `can_deploy` changes so a check
-// produced by older, weaker validation cannot authorize a deployment.
-export const FDD_DEPLOYABILITY_POLICY_VERSION = "v4-homogeneous-fleet";
-
-export interface FddEquipmentAvailability {
-  equipmentType: FddEquipmentType;
-  status: FddEquipmentAvailabilityStatus;
-  entityCount: number;
-  entityKeys?: string[];
-  reason?: string;
-  evidenceSources?: string[];
-}
-
-export interface FddRequiredPoint {
-  slot: string;
-  label: string;
-  semantic: string;
-  required: boolean;
-  quantityKind: FddQuantityKind;
-  unitRoleDescription: string;
-  acceptableUnits?: string[];
-  keywords?: string[];
-  sourceSymbols?: string[];
-  sourceBrickClasses?: string[];
-  historyRequirement?: {
-    minDays: number;
-    preferredDays: number;
-  };
-}
 
 export interface FddDefinitionParameter {
   symbol: string;
@@ -98,18 +70,14 @@ export interface FddTaskParameterValue {
   updatedBy?: string;
 }
 
-export interface FddAlgorithm {
-  id: string;
+export interface FddAlgorithm extends FddAlgorithmRequirement {
   scope: FddAlgorithmScope;
   algorithmKey: string;
-  version: string;
   name: string;
-  equipmentType: FddEquipmentType;
   faultType: string;
   method: FddMethod;
   categoryKey: string;
   categoryLabel: string;
-  requiredPoints: FddRequiredPoint[];
   outputs: FddOutput[];
   parameters: FddParameterSpec[];
   formula: string;
@@ -121,100 +89,6 @@ export interface FddAlgorithm {
   definitionIssues?: string[];
   definitionParameters?: FddDefinitionParameter[];
   sourceDefinition?: FddSourceDefinition;
-}
-
-export interface FddPointCandidate {
-  slot: string;
-  pointName: string;
-  entityKey?: string;
-  objectRef?: string;
-  unit?: string;
-  unitCompatibility: FddUnitCompatibility;
-  dimensionReason: string;
-  rejectionReason?: string;
-  confidence: number;
-  reason: string;
-  historyDays?: number;
-}
-
-export interface FddPointMapping {
-  slot: string;
-  pointName: string;
-  objectRef?: string;
-  unit?: string;
-}
-
-export function fddPointMappingsAreDistinct(mappings: FddPointMapping[]): boolean {
-  const pointNames = mappings.map((mapping) => mapping.pointName.trim().toLowerCase());
-  if (pointNames.some((pointName) => !pointName) || new Set(pointNames).size !== pointNames.length) return false;
-  const objectRefs = mappings
-    .map((mapping) => mapping.objectRef?.trim().toLowerCase())
-    .filter((objectRef): objectRef is string => Boolean(objectRef));
-  return new Set(objectRefs).size === objectRefs.length;
-}
-
-export interface FddCheckAgentWorkflow {
-  agentId: "buildinggpt";
-  skillId: string;
-  skillName: string;
-  mode: "deterministic_core" | "llm_deep_inference";
-  kbDocuments: string[];
-  skillIds?: string[];
-  memory?: {
-    userEntries: number;
-    projectEntries: number;
-  };
-  groundingRules?: Array<{
-    id: string;
-    name?: string;
-    source?: string;
-    content?: string;
-  }>;
-  steps: string[];
-}
-
-export interface FddAmbiguousInput {
-  slot: string;
-  label: string;
-  candidates: FddPointCandidate[];
-}
-
-export interface FddEntityDeployability {
-  entityKey: string;
-  status: FddDeployabilityStatus;
-  selectedMappings: FddPointMapping[];
-  ambiguousInputs: FddAmbiguousInput[];
-  missingPoints: string[];
-  historyIssues: string[];
-  confidence: number;
-}
-
-export interface FddDeployabilityCheck {
-  algorithmId?: string;
-  projectTaskId?: string;
-  algorithmVersion: string;
-  checkPolicyVersion?: string;
-  projectId: string;
-  status: FddDeployabilityStatus;
-  applicability?: FddApplicability;
-  equipmentAvailability?: FddEquipmentAvailability;
-  equipmentInventorySignature?: string;
-  pointCandidates: FddPointCandidate[];
-  exampleEntityKey?: string;
-  selectedMappings?: FddPointMapping[];
-  deployableEntities?: FddEntityDeployability[];
-  mappingStrategy?: "entity_independent" | "homogeneous_template";
-  templateEntityKey?: string;
-  expectedEntityCount?: number;
-  requiredRuntimeSlots?: string[];
-  ambiguousInputs: FddAmbiguousInput[];
-  rejectedCandidates: FddPointCandidate[];
-  missingPoints: string[];
-  historyIssues: string[];
-  checkedAt: string;
-  source: FddCheckSource;
-  projectDataSignature: string;
-  agentWorkflow?: FddCheckAgentWorkflow;
 }
 
 export interface ProjectFddTask {
@@ -1110,255 +984,6 @@ export function latestFddCheck(
   return checks
     .filter((check) => check.algorithmId === algorithmId && check.algorithmVersion === algorithmVersion)
     .sort((left, right) => Date.parse(right.checkedAt) - Date.parse(left.checkedAt))[0] ?? null;
-}
-
-function normalizedFddCandidateText(value: string): string {
-  return value.replace(/[^a-z0-9]+/giu, " ").toLowerCase().trim();
-}
-
-function fddCandidateRoleScore(point: FddRequiredPoint, candidate: FddPointCandidate): number {
-  const pointText = normalizedFddCandidateText(`${point.slot} ${point.label} ${point.semantic} ${point.quantityKind}`);
-  const pointNameText = normalizedFddCandidateText(candidate.pointName);
-  const candidateText = normalizedFddCandidateText([
-    candidate.pointName,
-    candidate.reason,
-    candidate.dimensionReason,
-    candidate.unit
-  ].filter(Boolean).join(" "));
-  let score = 0;
-
-  // Prefer the vocabulary supplied by the algorithm definition over a broad
-  // quantity-kind match. This is intentionally evaluated against the point
-  // name (not a generic Brick class in `reason`) so, for example, COMPSALM
-  // wins over another Alarm and Run_Status wins over a mislabeled PWR point.
-  const keywordRoleScore = (point.keywords ?? []).reduce((best, keyword, index) => {
-    const normalizedKeyword = normalizedFddCandidateText(keyword);
-    const keywordTokens = normalizedKeyword.split(" ").filter((token) => token.length >= 3);
-    if (keywordTokens.length === 0) return best;
-    const pointNameTokens = pointNameText.split(" ").filter(Boolean);
-    const phraseMatch = ` ${pointNameText} `.includes(` ${normalizedKeyword} `);
-    const tokenMatch = keywordTokens.every((token) => pointNameTokens.includes(token));
-    const compactKeyword = normalizedKeyword.replace(/\s+/gu, "");
-    const compactName = pointNameText.replace(/\s+/gu, "");
-    // Compact aliases such as WCC1CHWST are useful, but a prefix match would
-    // incorrectly treat accumulated TLKWH as instantaneous TLKW power.
-    const compactMatch = compactKeyword.length >= 4 && compactName.endsWith(compactKeyword);
-    if (!phraseMatch && !tokenMatch && !compactMatch) return best;
-    return Math.max(best, Math.max(2, 18 - index * 2));
-  }, 0);
-  score += keywordRoleScore;
-
-  if (point.quantityKind === "status") {
-    const expectsCommand = /\bcommand\b|\bstart stop\b|\benable command\b/u.test(pointText);
-    const expectsAlarm = /\balarm\b|\btrip\b|\bfault status\b/u.test(pointText);
-    const expectsRunning = /\b(chiller on|run|running|operating|proof)\b/u.test(pointText);
-    if (expectsCommand && /\bstart stop command\b|\bcommand\b/u.test(candidateText)) score += 8;
-    if (expectsCommand && /\brun status\b|\balarm\b|\btrip\b|\bmode status\b/u.test(candidateText)) score -= 10;
-    if (expectsAlarm && /\balarm\b|\btrip\b|\bfault\b/u.test(candidateText)) score += 8;
-    if (expectsAlarm && /\bcommand\b|\brun status\b|\bmode status\b/u.test(candidateText)) score -= 10;
-    if (/\brun status\b|\brunning status\b|\boperating status\b/u.test(candidateText)) score += 5;
-    if (expectsRunning && /\brun\b|\brunning\b|\boperating\b/u.test(candidateText)) score += 2;
-    if (expectsRunning && /\bcommand\b|\balarm\b|\btrip\b|\bmode status\b/u.test(candidateText)) score -= 10;
-    if (/\bon off status\b|\bonoff status\b/u.test(candidateText)) score += 1;
-    if (/\bflow status\b|\bflow proof\b|\bflow switch\b/u.test(candidateText)) {
-      score += /\bflow\b/u.test(pointText) ? 5 : -2;
-    }
-    if (/\bpower status\b|\bpower proof\b/u.test(candidateText)) {
-      score += /\bpower\b/u.test(pointText) ? 5 : -1;
-    }
-    if (/\bacb\b|\bacbs\b|\bbreaker\b|\btrip\b|\balarm\b|\bfault\b/u.test(candidateText)
-      && !/\bbreaker\b|\btrip\b|\balarm\b|\bfault\b/u.test(pointText)) {
-      score -= 5;
-    }
-  }
-
-  if (point.quantityKind === "flow_rate" && /\bflow rate\b|\bflowrate\b|\bchwfwr\b/u.test(candidateText)) score += 4;
-  if (point.quantityKind === "temperature") {
-    const expectsSupply = /\bsupply\b/u.test(pointText);
-    const expectsReturn = /\breturn\b/u.test(pointText);
-    const nameLooksSupply = /\bchwst\b|\bsupply\b|\bsup\b/u.test(pointNameText);
-    const nameLooksReturn = /\bchwrt\b|\breturn\b|\bret\b/u.test(pointNameText);
-    if (expectsSupply && nameLooksSupply) score += 7;
-    if (expectsSupply && nameLooksReturn) score -= 6;
-    if (expectsReturn && nameLooksReturn) score += 7;
-    if (expectsReturn && nameLooksSupply) score -= 6;
-    if (expectsSupply && /\bsupply\b|\bchwst\b/u.test(candidateText)) score += 2;
-    if (expectsReturn && /\breturn\b|\bchwrt\b/u.test(candidateText)) score += 2;
-  }
-  if (point.quantityKind === "power") {
-    if (/\btlkw\b|\bmotor kilowatts\b|\belectric power\b|\bpower\b/u.test(candidateText)) score += 4;
-    // These are related electrical quantities, not interchangeable evidence
-    // for real instantaneous power. Keep this semantic penalty ahead of unit
-    // tie-breaking so a weak role cannot win merely because it has a unit.
-    if (/\bpercent\b|\bpercentage\b|\bdemand limit\b/u.test(pointNameText)) score -= 10;
-    if (/\btlkwh\b|\bkwh\b|\bkilowatt hours?\b|\benergy\b/u.test(pointNameText)) score -= 12;
-    if (/\bkva\b|\bapparent power\b/u.test(pointNameText)) score -= 6;
-  }
-  if (point.quantityKind === "energy" && /\bkwh\b|\benergy\b/u.test(candidateText)) score += 4;
-
-  return score;
-}
-
-function fddCandidateUnitEvidenceRank(candidate: FddPointCandidate): number {
-  if (candidate.unitCompatibility === "match") return 3;
-  if (candidate.unitCompatibility === "convertible") return 2;
-  if (candidate.unitCompatibility === "unknown") return 1;
-  return 0;
-}
-
-export function sortFddPointCandidatesForRequiredPoint(
-  point: FddRequiredPoint,
-  candidates: FddPointCandidate[]
-): FddPointCandidate[] {
-  return candidates.slice().sort((left, right) => {
-    const leftScore = left.confidence + fddCandidateRoleScore(point, left) * 0.03;
-    const rightScore = right.confidence + fddCandidateRoleScore(point, right) * 0.03;
-    const scoreRank = rightScore - leftScore;
-    if (Math.abs(scoreRank) > 0.0001) return scoreRank;
-    const confidenceRank = right.confidence - left.confidence;
-    if (confidenceRank !== 0) return confidenceRank;
-    // Engineering-unit evidence is deliberately the final evidence tie-break
-    // before a lexical name. A verified unit cannot promote a weaker semantic
-    // role or lower-confidence candidate.
-    const unitRank = fddCandidateUnitEvidenceRank(right) - fddCandidateUnitEvidenceRank(left);
-    if (unitRank !== 0) return unitRank;
-    return left.pointName.localeCompare(right.pointName);
-  });
-}
-
-export function fddAmbiguousAlternativesForPoint(
-  point: FddRequiredPoint,
-  best: FddPointCandidate,
-  alternatives: FddPointCandidate[]
-): FddPointCandidate[] {
-  const bestRoleScore = fddCandidateRoleScore(point, best);
-  return alternatives.filter((candidate) => {
-    if (best.confidence - candidate.confidence > 0.04) return false;
-    const candidateRoleScore = fddCandidateRoleScore(point, candidate);
-    if (bestRoleScore - candidateRoleScore >= 2) return false;
-    // A verified compatible unit resolves an otherwise equivalent unknown-unit
-    // alternative; keeping it as ambiguous would negate the evidence ordering.
-    if (bestRoleScore >= candidateRoleScore
-      && fddCandidateUnitEvidenceRank(best) > fddCandidateUnitEvidenceRank(candidate)) {
-      return false;
-    }
-    return true;
-  });
-}
-
-export function evaluateFddDeployability(input: {
-  algorithm: FddAlgorithm;
-  projectId: string;
-  source: FddCheckSource;
-  projectDataSignature: string;
-  pointCandidates: FddPointCandidate[];
-  exampleEntityKey?: string;
-  rejectedCandidates?: FddPointCandidate[];
-  deployableEntities?: FddEntityDeployability[];
-  historyIssues?: string[];
-  applicability?: FddApplicability;
-  equipmentAvailability?: FddEquipmentAvailability;
-  equipmentInventorySignature?: string;
-  checkedAt?: string;
-  projectTaskId?: string;
-}): FddDeployabilityCheck {
-  const required = input.algorithm.requiredPoints.filter((point) => point.required);
-  const missingPoints: string[] = [];
-  const historyIssues: string[] = input.historyIssues ? [...input.historyIssues] : [];
-  const selectedMappings: FddPointMapping[] = [];
-  const ambiguousInputs: FddAmbiguousInput[] = [];
-  let uncertain = false;
-  const usedPointKeys = new Set<string>();
-
-  if (input.applicability === "no_equipment" || input.applicability === "unknown") {
-    return {
-      algorithmId: input.algorithm.id,
-      ...(input.projectTaskId ? { projectTaskId: input.projectTaskId } : {}),
-      algorithmVersion: input.algorithm.version,
-      checkPolicyVersion: FDD_DEPLOYABILITY_POLICY_VERSION,
-      projectId: input.projectId,
-      status: "cannot_deploy",
-      applicability: input.applicability,
-      ...(input.equipmentAvailability ? { equipmentAvailability: input.equipmentAvailability } : {}),
-      ...(input.equipmentInventorySignature ? { equipmentInventorySignature: input.equipmentInventorySignature } : {}),
-      pointCandidates: [],
-      deployableEntities: [],
-      ambiguousInputs: [],
-      rejectedCandidates: [],
-      missingPoints: [],
-      historyIssues,
-      checkedAt: input.checkedAt ?? new Date().toISOString(),
-      source: input.source,
-      projectDataSignature: input.projectDataSignature
-    };
-  }
-
-  for (const point of required) {
-    const candidates = sortFddPointCandidatesForRequiredPoint(
-      point,
-      input.pointCandidates.filter((candidate) => {
-        if (candidate.slot !== point.slot) return false;
-        const pointKey = (candidate.objectRef ?? candidate.pointName).trim().toLowerCase();
-        return !usedPointKeys.has(pointKey);
-      })
-    );
-    const best = candidates[0];
-    if (!best) {
-      missingPoints.push(point.label);
-      continue;
-    }
-    const closeAlternatives = fddAmbiguousAlternativesForPoint(point, best, candidates.slice(1));
-    if (closeAlternatives.length > 0 || best.confidence < 0.68 || best.unitCompatibility === "unknown") {
-      uncertain = true;
-      ambiguousInputs.push({
-        slot: point.slot,
-        label: point.label,
-        candidates: [best, ...closeAlternatives].slice(0, 6)
-      });
-    }
-    const minDays = point.historyRequirement?.minDays ?? 0;
-    if (minDays > 0 && typeof best.historyDays !== "number") {
-      historyIssues.push(`${point.label} history coverage is unverified; requires ${minDays}d.`);
-    } else if (typeof best.historyDays === "number" && best.historyDays < minDays) {
-      historyIssues.push(`${point.label} has ${best.historyDays}d history; requires ${minDays}d.`);
-    }
-    selectedMappings.push({
-      slot: point.slot,
-      pointName: best.pointName,
-      ...(best.objectRef ? { objectRef: best.objectRef } : {}),
-      ...(best.unit ? { unit: best.unit } : {})
-    });
-    usedPointKeys.add((best.objectRef ?? best.pointName).trim().toLowerCase());
-  }
-
-  const status: FddDeployabilityStatus = missingPoints.length > 0 || historyIssues.length > 0
-    ? "cannot_deploy"
-    : uncertain
-      ? "uncertain"
-      : "can_deploy";
-
-  return {
-    algorithmId: input.algorithm.id,
-    ...(input.projectTaskId ? { projectTaskId: input.projectTaskId } : {}),
-    algorithmVersion: input.algorithm.version,
-    checkPolicyVersion: FDD_DEPLOYABILITY_POLICY_VERSION,
-    projectId: input.projectId,
-    status,
-    ...(input.applicability ? { applicability: input.applicability } : {}),
-    ...(input.equipmentAvailability ? { equipmentAvailability: input.equipmentAvailability } : {}),
-    ...(input.equipmentInventorySignature ? { equipmentInventorySignature: input.equipmentInventorySignature } : {}),
-    pointCandidates: input.pointCandidates,
-    ...(input.exampleEntityKey ? { exampleEntityKey: input.exampleEntityKey } : {}),
-    ...(selectedMappings.length > 0 ? { selectedMappings } : {}),
-    ...(input.deployableEntities ? { deployableEntities: input.deployableEntities } : {}),
-    ambiguousInputs,
-    rejectedCandidates: input.rejectedCandidates ?? [],
-    missingPoints,
-    historyIssues,
-    checkedAt: input.checkedAt ?? new Date().toISOString(),
-    source: input.source,
-    projectDataSignature: input.projectDataSignature
-  };
 }
 
 function normalizeQuantityKind(value: unknown, fallback: FddQuantityKind): FddQuantityKind {
