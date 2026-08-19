@@ -467,6 +467,41 @@ describe("FleetGuard fleet-consensus planning", () => {
     expect(plan.blockers.filter((entry) => entry.code === (identity === "pointId" ? "duplicate_point_id" : "duplicate_object_ref"))).toHaveLength(2);
   });
 
+  it("keeps fleet-wide duplicate-reference corruption handling bounded", () => {
+    const input = inputFor();
+    const fixture = roleFixtures.CH01[0]!;
+    const memberCount = 8_192;
+    input.algorithm.requiredRoles = [{ ...fixture.requirement }];
+    input.roleFamilies = [{
+      role: fixture.requirement.role,
+      familyKey: fixture.familyKey,
+      status: "verified",
+      source: "deterministic_ontology"
+    }];
+    input.inventory.members = Array.from({ length: memberCount }, (_, index) => ({
+      entityKey: `WCC_${index + 1}`
+    }));
+    input.lookups = Array.from({ length: memberCount }, (_, index): FleetGuardExactLookupEvidence => {
+      const observation = point(index + 1, fixture);
+      observation.objectRef = "//Elements/SHARED_CORRUPT_REF";
+      return {
+        entityKey: observation.entityKey,
+        familyKey: fixture.familyKey,
+        status: "found",
+        observations: [observation]
+      };
+    });
+    const startedAt = performance.now();
+
+    const plan = planFleetGuard(input);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(plan.state).toBe("blocked");
+    expect(plan.coverage).toEqual({ expected: memberCount, bound: 0, dataReady: 0, authorized: 0 });
+    expect(plan.blockers.filter((entry) => entry.code === "duplicate_object_ref")).toHaveLength(memberCount);
+    expect(elapsedMs).toBeLessThan(3_000);
+  });
+
   it.each([
     ["tlkwh", "TLKWH", "energy", "kWh"],
     ["kva", "KVA", "power", "kVA"],
@@ -844,6 +879,22 @@ describe("FleetGuard fleet-consensus planning", () => {
       shuffled.algorithm.requiredRoles.reverse();
       expect(planFleetGuard(shuffled)).toEqual(baseline);
     }
+  });
+
+  it("indexes exact lookups once instead of rescanning the table for every entity and role", () => {
+    const input = inputFor("CH03");
+    const slicedLookups = input.lookups.slice();
+    Object.defineProperty(slicedLookups, "filter", {
+      value: () => { throw new Error("exact lookup table was rescanned"); }
+    });
+    Object.defineProperty(input.lookups, "slice", {
+      value: () => slicedLookups
+    });
+
+    const plan = planFleetGuard(input);
+
+    expect(plan.state).toBe("ready");
+    expect(plan.coverage.authorized).toBe(8);
   });
 
   it("changes planId only when an input signature changes", () => {

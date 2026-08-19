@@ -170,6 +170,8 @@ export interface SeedStore {
   fddTasksByProject?: Record<string, ProjectFddTask[]>;
   fddChecksByProject?: Record<string, FddDeployabilityCheck[]>;
   fddLibraryCheckRunsByProject?: Record<string, ProjectFddLibraryCheckRun[]>;
+  /** Optional, bounded shadow-proposer audit records keyed by project. */
+  fddBindingProposalAuditsByProject?: Record<string, import("./fdd/bindingProposer.js").FddBindingProposerAuditRecord[]>;
   runtimeProviders: PlaceholderRuntimeProvider[];
   tools: PlaceholderTool[];
   skills: PlaceholderSkill[];
@@ -440,6 +442,7 @@ export function createSeedStore(): SeedStore {
     fddTasksByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ProjectFddTask[]])),
     fddChecksByProject: Object.fromEntries(projects.map((project) => [project.id, [] as FddDeployabilityCheck[]])),
     fddLibraryCheckRunsByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ProjectFddLibraryCheckRun[]])),
+    fddBindingProposalAuditsByProject: Object.fromEntries(projects.map((project) => [project.id, []])),
     runtimeProviders,
     tools,
     skills,
@@ -525,6 +528,12 @@ export function cloneStore(store: SeedStore): SeedStore {
       Object.entries(store.fddLibraryCheckRunsByProject ?? {}).map(([projectId, runs]) => [
         projectId,
         runs.map((run) => ({ ...run, algorithmIds: [...run.algorithmIds] }))
+      ])
+    ),
+    fddBindingProposalAuditsByProject: Object.fromEntries(
+      Object.entries(store.fddBindingProposalAuditsByProject ?? {}).map(([projectId, records]) => [
+        projectId,
+        records.map((record) => structuredClone(record))
       ])
     ),
     runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),

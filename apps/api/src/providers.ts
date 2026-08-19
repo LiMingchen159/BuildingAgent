@@ -44,6 +44,7 @@ export interface ChatToolDefinition {
       type: "object";
       properties: Record<string, unknown>;
       required?: string[];
+      additionalProperties?: false;
     };
   };
 }
@@ -205,6 +206,24 @@ export function formatProviderFailureMessage(error: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return sleep(ms);
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Request aborted."));
+  return new Promise((resolve, reject) => {
+    let handle: ReturnType<typeof setTimeout>;
+    const onAbort = () => {
+      clearTimeout(handle);
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason ?? new Error("Request aborted."));
+    };
+    handle = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function isRetriableProviderError(error: unknown): boolean {
@@ -645,6 +664,7 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     };
 
     for (let attempt = 0; attempt <= PROVIDER_FETCH_MAX_RETRIES; attempt++) {
+      if (request.signal?.aborted) throw request.signal.reason ?? new Error("Request aborted.");
       try {
         const response = await fetchImpl(`${baseUrl}/chat/completions`, init);
         if (!response.ok) {
@@ -666,7 +686,7 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
               cause
             });
         if (attempt < PROVIDER_FETCH_MAX_RETRIES && isRetriableProviderError(lastError)) {
-          await sleep(providerRetryDelayMs(lastError, attempt));
+          await sleepWithSignal(providerRetryDelayMs(lastError, attempt), request.signal);
           continue;
         }
         throw lastError;

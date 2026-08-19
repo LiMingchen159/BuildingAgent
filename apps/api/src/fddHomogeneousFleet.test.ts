@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import { DerivedMetricStore } from "./derivedMetrics.js";
 import { buildServer } from "./server.js";
 import { createSeedStore } from "./seed.js";
+import { ensureStoreFddLibrary } from "./fddLibrary.js";
+import type { ChatProvider } from "./providers.js";
 
 const token = "seed-token-ada";
 const headers = { authorization: `Bearer ${token}` };
@@ -1249,5 +1251,110 @@ describe("Element homogeneous chiller FDD deployment", () => {
     expect(historiesAfter).toEqual(historiesBefore);
     expect(store.fddTasksByProject?.project_element?.find((entry) => entry.id === task.id)).toEqual(taskBefore);
     await app.close();
+  });
+});
+
+describe("FDD binding proposer production shadow wiring", () => {
+  it("uses the same collected evidence without extra BMS scans or changing the v4 check", async () => {
+    async function run(mode: "off" | "shadow", pauseProjection = false) {
+      const dataDir = mkdtempSync(path.join(tmpdir(), `ba-fdd-proposer-${mode}-`));
+      const names = writeElementFleetFixture(dataDir);
+      const store = elementStoreWithRunningPowerGrounding();
+      ensureStoreFddLibrary(store);
+      const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_01_commanded_fails_to_start");
+      if (!algorithm) throw new Error("Missing CH-01 fixture algorithm");
+      const fetchMock = elementCollectorFetch(names, { includeObjectRefs: true });
+      const providerComplete = vi.fn<ChatProvider["complete"]>(async (request) => {
+        const task = JSON.parse(request.messages.find((message) => message.role === "user")?.content ?? "{}") as {
+          projectId: string;
+          evidenceSnapshotHash: string;
+          algorithmSignature: string;
+        };
+        return {
+          text: JSON.stringify({
+            schemaVersion: "fleetguard-binding-proposal-v1",
+            outcome: "abstain",
+            projectId: task.projectId,
+            evidenceSnapshotHash: task.evidenceSnapshotHash,
+            algorithmSignature: task.algorithmSignature,
+            reason: "insufficient_evidence"
+          }),
+          provider: { id: "test-real", mode: "real", model: "test-proposer" },
+          fallbackUsed: false
+        };
+      });
+      const chatProvider: ChatProvider = {
+        metadata: { id: "test-real", mode: "real", model: "test-proposer" },
+        complete: providerComplete
+      };
+      let resolveCompleted: ((record: unknown) => void) | undefined;
+      const completed = new Promise<unknown>((resolve) => { resolveCompleted = resolve; });
+      let releaseProjection: (() => void) | undefined;
+      let projectionFinished = false;
+      const projectionGate = new Promise<void>((resolve) => { releaseProjection = resolve; });
+      const app = buildServer({
+        store,
+        fetch: fetchMock as typeof fetch,
+        chatProvider,
+        env: {
+          BUILDING_AGENT_DATA_DIR: dataDir,
+          BMS_DATABASE_API_URL: "http://collector.test",
+          DERIVED_METRIC_MATERIALIZER_DISABLED: "1",
+          BUILDING_AGENT_FDD_PROPOSER_MODE: mode,
+          BUILDING_AGENT_FDD_PROPOSER_PROJECT_IDS: "project_element",
+          BUILDING_AGENT_FDD_PROPOSER_ALGORITHM_IDS: algorithm.id
+        },
+        fddTestHooks: {
+          beforeBindingProposerProjection: async () => {
+            if (pauseProjection) await projectionGate;
+            projectionFinished = true;
+          },
+          onBindingProposerCompleted: (record) => resolveCompleted?.(record)
+        }
+      });
+      await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+        headers
+      });
+      const responseDidNotWaitForProjection = !pauseProjection || !projectionFinished;
+      releaseProjection?.();
+      const record = mode === "shadow"
+        ? await Promise.race([
+            completed,
+            new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("shadow proposer did not complete")), 1_000))
+          ])
+        : undefined;
+      const result = {
+        check: frozenFleetPlan(response.json().check),
+        fetchCount: fetchMock.mock.calls.length,
+        providerCalls: providerComplete.mock.calls.length,
+        responseDidNotWaitForProjection,
+        record,
+        audits: store.fddBindingProposalAuditsByProject?.project_element ?? []
+      };
+      await app.close();
+      return result;
+    }
+
+    const off = await run("off");
+    const shadow = await run("shadow");
+    const slowShadow = await run("shadow", true);
+
+    expect(shadow.fetchCount).toBe(off.fetchCount);
+    expect(shadow.check).toEqual(off.check);
+    expect(off.providerCalls).toBe(0);
+    expect(off.audits).toEqual([]);
+    expect(shadow.providerCalls).toBe(1);
+    expect(shadow.record).toMatchObject({
+      status: "succeeded",
+      projectId: "project_element",
+      comparison: { fleetGuardState: "blocked", matchesFleetGuardFamilies: null }
+    });
+    expect(shadow.audits).toHaveLength(1);
+    expect(slowShadow.responseDidNotWaitForProjection).toBe(true);
+    expect(slowShadow.check).toEqual(off.check);
+    expect(slowShadow.fetchCount).toBe(off.fetchCount);
   });
 });
