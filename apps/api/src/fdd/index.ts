@@ -5,3 +5,4 @@ export * from "./bindingProposerSkill.js";
 export * from "./bindingProposerTools.js";
 export * from "./bindingProposerProvider.js";
 export * from "./bindingProposerEvidenceAdapter.js";
+export * from "./fleetTemplates.js";

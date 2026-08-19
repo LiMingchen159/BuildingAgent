@@ -169,6 +169,12 @@ import {
 } from "./fdd/bindingProposer.js";
 import { createFddBindingProposerCompletionPort } from "./fdd/bindingProposerProvider.js";
 import { buildFleetGuardShadowInputFromV4Evidence } from "./fdd/bindingProposerEvidenceAdapter.js";
+import {
+  applyCurrentFddFleetTemplateToPlannerInput,
+  createFddFleetTemplateBindings,
+  ensureStoreFddFleetTemplates,
+  FddFleetTemplateError
+} from "./fdd/fleetTemplates.js";
 export { fddPersistenceWindowGraceMs } from "./fdd/evaluator.js";
 
 type DashboardDataSource = "bms" | "derived_metric";
@@ -2313,6 +2319,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   ensureStoreMemoryProposals(store);
   restoreMemoryProposalSequence(store);
   const fddLibraryChangedOnBoot = ensureStoreFddLibrary(store);
+  const fddFleetTemplatesChangedOnBoot = ensureStoreFddFleetTemplates(store);
   const persistStore = options.persist === true;
   const persistSoon = (): void => {
     if (persistStore) {
@@ -2324,7 +2331,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       saveStoreSync(store);
     }
   };
-  if (fddLibraryChangedOnBoot) {
+  if (fddLibraryChangedOnBoot || fddFleetTemplatesChangedOnBoot) {
     persistNow();
   }
   const env = options.env ?? process.env;
@@ -2347,6 +2354,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectExists: (projectId) => store.projects.some((project) => project.id === projectId)
     })
   });
+  const fddFleetTemplates = createFddFleetTemplateBindings(store, { onChange: persistSoon });
   const fetchProxy = options.fetch ?? fetch;
   const fddHistoryProbeCache = new Map<string, { expiresAt: number; promise: Promise<number | undefined> }>();
   const fddCatalogQueryCache = new Map<string, { expiresAt: number; promise: Promise<Record<string, unknown>[]> }>();
@@ -2690,10 +2698,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     store.fddChecksByProject ??= {};
     store.fddLibraryCheckRunsByProject ??= {};
     store.fddBindingProposalAuditsByProject ??= {};
+    store.fddFleetTemplateVersionsByProject ??= {};
+    store.fddFleetTemplateAuditByProject ??= {};
     store.fddTasksByProject[projectId] ??= [];
     store.fddChecksByProject[projectId] ??= [];
     store.fddLibraryCheckRunsByProject[projectId] ??= [];
     store.fddBindingProposalAuditsByProject[projectId] ??= [];
+    store.fddFleetTemplateVersionsByProject[projectId] ??= [];
+    store.fddFleetTemplateAuditByProject[projectId] ??= [];
   }
 
   function fddProjectDataSignature(projectId: string): string {
@@ -4235,7 +4247,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         ) return;
         const fullFleet = rawFleet
           .map((key) => canonicalFddEntityKey(key, input.context));
-        const plannerInput = buildFleetGuardShadowInputFromV4Evidence({
+        const plannerInputWithoutTemplate = buildFleetGuardShadowInputFromV4Evidence({
           projectId: input.projectId,
           algorithm: input.algorithm,
           evaluatorId: input.algorithm.algorithmKey,
@@ -4258,6 +4270,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           sourceDataSignature: fddProjectDataSignature(input.projectId),
           inventorySignature: input.inventorySignature
         });
+        const plannerInput = applyCurrentFddFleetTemplateToPlannerInput(
+          store,
+          input.projectId,
+          plannerInputWithoutTemplate
+        );
         const result = fddBindingProposerShadow.schedule({
           projectId: input.projectId,
           evidenceProjectId: input.projectId,
@@ -7515,6 +7532,119 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   });
 
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/fdd-fleet-templates", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const templates = fddFleetTemplates.list(request.params.projectId);
+    return {
+      projectId: request.params.projectId,
+      templates: bounded(templates, store.maxListSize),
+      totalCount: templates.length,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams & { templateId: string } }>("/api/projects/:projectId/fdd-fleet-templates/:templateId", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const template = fddFleetTemplates.get(request.params.projectId, request.params.templateId);
+    if (!template) {
+      return sendError(request, reply, 404, "fdd_fleet_template_not_found", "The requested fleet template does not exist in this project.");
+    }
+    return {
+      projectId: request.params.projectId,
+      template,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.post<{ Params: ProjectParams; Body: unknown }>("/api/projects/:projectId/fdd-fleet-templates", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const configurable = requirePermission(request, reply, membership, "project:configure");
+    if (isReply(configurable)) return configurable;
+
+    try {
+      const template = fddFleetTemplates.create({
+        projectId: request.params.projectId,
+        actorId: session.userId,
+        requestId: requestIdFor(request),
+        input: request.body
+      });
+      return reply.status(201).send({
+        projectId: request.params.projectId,
+        template,
+        requestId: requestIdFor(request)
+      });
+    } catch (error) {
+      if (error instanceof FddFleetTemplateError) {
+        return sendError(request, reply, error.statusCode, error.code, error.message);
+      }
+      throw error;
+    }
+  });
+
+  app.patch<{ Params: ProjectParams & { templateId: string }; Body: unknown }>("/api/projects/:projectId/fdd-fleet-templates/:templateId", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const configurable = requirePermission(request, reply, membership, "project:configure");
+    if (isReply(configurable)) return configurable;
+
+    try {
+      const template = fddFleetTemplates.update({
+        projectId: request.params.projectId,
+        templateId: request.params.templateId,
+        actorId: session.userId,
+        requestId: requestIdFor(request),
+        input: request.body
+      });
+      return {
+        projectId: request.params.projectId,
+        template,
+        requestId: requestIdFor(request)
+      };
+    } catch (error) {
+      if (error instanceof FddFleetTemplateError) {
+        return sendError(request, reply, error.statusCode, error.code, error.message);
+      }
+      throw error;
+    }
+  });
+
   app.post<{ Params: ProjectParams & { algorithmId: string } }>("/api/projects/:projectId/fdd-library/:algorithmId/test", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
@@ -9310,6 +9440,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     delete store.knowledgeBaseByProject[projectId];
     if (store.fddBindingProposalAuditsByProject) {
       delete store.fddBindingProposalAuditsByProject[projectId];
+    }
+    if (store.fddFleetTemplateVersionsByProject) {
+      delete store.fddFleetTemplateVersionsByProject[projectId];
+    }
+    if (store.fddFleetTemplateAuditByProject) {
+      delete store.fddFleetTemplateAuditByProject[projectId];
     }
     writeSessionForToken(store, session.token, { userId: session.userId, selectedProjectId: null });
     persistSoon();
