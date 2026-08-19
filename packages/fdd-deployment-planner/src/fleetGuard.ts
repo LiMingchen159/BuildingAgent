@@ -507,7 +507,9 @@ function duplicateIdentityBlockers(
     const rawIdentity = value.observation[identity].trim();
     if (!rawIdentity) continue;
     const key = rawIdentity.toLowerCase();
-    byIdentity.set(key, [...(byIdentity.get(key) ?? []), value]);
+    const matching = byIdentity.get(key);
+    if (matching) matching.push(value);
+    else byIdentity.set(key, [value]);
   }
   const blockers: FleetGuardBlocker[] = [];
   for (const values of byIdentity.values()) {
@@ -707,6 +709,13 @@ export function planFleetGuard(input: FleetGuardPlanInput): FleetGuardPlan {
   const selectedFamilyByRole = new Map(selectedRoleFamilies.map((family) => [normalizedRole(family.role), family]));
 
   const lookups = input.lookups.slice().sort((left, right) => compareText(lookupKey(left), lookupKey(right)));
+  const lookupsByEntityFamily = new Map<string, FleetGuardExactLookupEvidence[]>();
+  for (const lookup of lookups) {
+    const key = `${normalizedIdentity(lookup.entityKey)}|${normalizedFamily(lookup.familyKey)}`;
+    const matching = lookupsByEntityFamily.get(key);
+    if (matching) matching.push(lookup);
+    else lookupsByEntityFamily.set(key, [lookup]);
+  }
 
   const mutableEntities: MutableEntityPlan[] = entityKeys.map((entityKey) => {
     const entityBlockers: FleetGuardBlocker[] = [];
@@ -722,10 +731,9 @@ export function planFleetGuard(input: FleetGuardPlanInput): FleetGuardPlan {
         dataReady = false;
         continue;
       }
-      const matchingLookups = lookups.filter((lookup) =>
-        normalizedIdentity(lookup.entityKey) === normalizedIdentity(entityKey)
-        && normalizedFamily(lookup.familyKey) === normalizedFamily(family.familyKey)
-      );
+      const matchingLookups = lookupsByEntityFamily.get(
+        `${normalizedIdentity(entityKey)}|${normalizedFamily(family.familyKey)}`
+      ) ?? [];
       if (matchingLookups.length === 0) {
         entityBlockers.push(blocker(
           "lookup_unknown",
@@ -826,10 +834,11 @@ export function planFleetGuard(input: FleetGuardPlanInput): FleetGuardPlan {
     ...duplicateIdentityBlockers(mutableEntities, "pointId"),
     ...duplicateIdentityBlockers(mutableEntities, "objectRef")
   ];
+  const mutableEntityByKey = new Map(
+    mutableEntities.map((entity) => [normalizedIdentity(entity.entityKey), entity])
+  );
   for (const duplicate of duplicateBlockers) {
-    const entity = mutableEntities.find((entry) =>
-      normalizedIdentity(entry.entityKey) === normalizedIdentity(duplicate.entityKey ?? "")
-    );
+    const entity = mutableEntityByKey.get(normalizedIdentity(duplicate.entityKey ?? ""));
     if (!entity) continue;
     entity.blockers.push(duplicate);
     entity.structurallyBound = false;

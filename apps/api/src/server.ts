@@ -160,6 +160,15 @@ import {
   parseMinimalBrickFacts
 } from "./fdd/equipmentEvidence.js";
 import { isExecutableFddAlgorithm } from "./fdd/runtimeRegistry.js";
+import {
+  FddBindingProposerShadowService,
+  ProjectFddBindingProposerAuditStore,
+  fddBindingProposerConfigFromEnv,
+  type FddBindingProposerAuditRecord,
+  type FddBindingProposerScheduleResult
+} from "./fdd/bindingProposer.js";
+import { createFddBindingProposerCompletionPort } from "./fdd/bindingProposerProvider.js";
+import { buildFleetGuardShadowInputFromV4Evidence } from "./fdd/bindingProposerEvidenceAdapter.js";
 export { fddPersistenceWindowGraceMs } from "./fdd/evaluator.js";
 
 type DashboardDataSource = "bms" | "derived_metric";
@@ -232,6 +241,13 @@ interface BuildServerOptions {
     onAuthorizationRefresh?: (input: { projectId: string; taskId: string }) => void;
     onFddMaterialized?: (input: { projectId: string; instanceId: string }) => void;
     onMaterializerReady?: (run: () => Promise<void>) => void;
+    beforeBindingProposerProjection?: (input: { projectId: string; algorithmId: string }) => void | Promise<void>;
+    onBindingProposerScheduled?: (input: {
+      projectId: string;
+      algorithmId: string;
+      result: FddBindingProposerScheduleResult;
+    }) => void;
+    onBindingProposerCompleted?: (record: FddBindingProposerAuditRecord) => void;
   };
 }
 
@@ -2323,6 +2339,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   restoreSequences(store);
 
   const provider = options.chatProvider ?? providerResolver(env);
+  const fddBindingProposerConfig = fddBindingProposerConfigFromEnv(env);
+  const fddBindingProposerShadow = new FddBindingProposerShadowService({
+    config: fddBindingProposerConfig,
+    completionPort: createFddBindingProposerCompletionPort(provider),
+    auditSink: new ProjectFddBindingProposerAuditStore(store, persistSoon, {
+      projectExists: (projectId) => store.projects.some((project) => project.id === projectId)
+    })
+  });
   const fetchProxy = options.fetch ?? fetch;
   const fddHistoryProbeCache = new Map<string, { expiresAt: number; promise: Promise<number | undefined> }>();
   const fddCatalogQueryCache = new Map<string, { expiresAt: number; promise: Promise<Record<string, unknown>[]> }>();
@@ -2665,9 +2689,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     store.fddTasksByProject ??= {};
     store.fddChecksByProject ??= {};
     store.fddLibraryCheckRunsByProject ??= {};
+    store.fddBindingProposalAuditsByProject ??= {};
     store.fddTasksByProject[projectId] ??= [];
     store.fddChecksByProject[projectId] ??= [];
     store.fddLibraryCheckRunsByProject[projectId] ??= [];
+    store.fddBindingProposalAuditsByProject[projectId] ??= [];
   }
 
   function fddProjectDataSignature(projectId: string): string {
@@ -4176,6 +4202,84 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     ];
   }
 
+  function scheduleFddBindingProposalShadow(input: {
+    projectId: string;
+    algorithm: FddAlgorithm;
+    context: FddEntityContext;
+    targetAvailability: FddEquipmentAvailability;
+    inventorySignature: string;
+    candidates: ReturnType<typeof projectFddV4FleetCandidateEvidence>;
+  }): void {
+    if (
+      fddBindingProposerConfig.mode !== "shadow"
+      || !fddBindingProposerConfig.projectIds.includes(input.projectId)
+      || !fddBindingProposerConfig.algorithmIds.includes(input.algorithm.id)
+    ) return;
+    // Projection/model work is deliberately moved beyond the authoritative
+    // request's call stack. It reuses the already-collected immutable facts
+    // below and never performs BMS, Brick, or history I/O.
+    setImmediate(() => void (async () => {
+      try {
+        await options.fddTestHooks?.beforeBindingProposerProjection?.({
+          projectId: input.projectId,
+          algorithmId: input.algorithm.id
+        });
+        if (!store.projects.some((project) => project.id === input.projectId)) return;
+        const rawFleet = input.targetAvailability.entityKeys ?? [];
+        const requiredBrickPoints = input.algorithm.requiredPoints.filter((point) => point.required);
+        if (
+          rawFleet.length > 10_000
+          || requiredBrickPoints.length > 64
+          || input.candidates.length > 8_192
+          || input.context.brickPoints.length > 8_192
+        ) return;
+        const fullFleet = rawFleet
+          .map((key) => canonicalFddEntityKey(key, input.context));
+        const plannerInput = buildFleetGuardShadowInputFromV4Evidence({
+          projectId: input.projectId,
+          algorithm: input.algorithm,
+          evaluatorId: input.algorithm.algorithmKey,
+          evaluatorAvailable: isExecutableFddAlgorithm(input.algorithm),
+          targetAvailability: input.targetAvailability,
+          authoritativeInventory: input.context.authoritativeInventory,
+          targetEntityKeys: fullFleet,
+          candidates: input.candidates,
+          brickPoints: input.context.brickPoints.map((fact) => ({
+            subjectKey: fact.subjectKey,
+            pointName: fact.pointName,
+            entityKey: canonicalFddEntityKey(fact.entityKey, input.context),
+            brickClass: fact.brickClass,
+            ...(fact.unit ? { unit: fact.unit } : {}),
+            matchedRoleSlots: requiredBrickPoints
+              .filter((point) => fddBrickPointMatchesRequiredPoint(point, fact))
+              .map((point) => point.slot)
+              .sort()
+          })),
+          sourceDataSignature: fddProjectDataSignature(input.projectId),
+          inventorySignature: input.inventorySignature
+        });
+        const result = fddBindingProposerShadow.schedule({
+          projectId: input.projectId,
+          evidenceProjectId: input.projectId,
+          plannerInput
+        });
+        options.fddTestHooks?.onBindingProposerScheduled?.({
+          projectId: input.projectId,
+          algorithmId: input.algorithm.id,
+          result
+        });
+        if (result.status === "scheduled" || result.status === "deduplicated") {
+          void result.completion.then((record) => {
+            options.fddTestHooks?.onBindingProposerCompleted?.(record);
+          }, () => undefined);
+        }
+      } catch {
+        // The proposer is shadow-only. Projection failures never change the
+        // authoritative v4 check, task, or deploy flow.
+      }
+    })());
+  }
+
   async function runFddDeployabilityCheck(
     projectId: string,
     userId: string,
@@ -4211,6 +4315,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       });
       check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
       persistFddDeployabilityCheck(projectId, check, projectTaskId);
+      scheduleFddBindingProposalShadow({
+        projectId,
+        algorithm,
+        context,
+        targetAvailability,
+        inventorySignature,
+        candidates: []
+      });
       return check;
     }
     const excludedEntityKeys = new Set(skillContext.excludedEntityKeys.map(normalizeFddEntityAlias));
@@ -4280,6 +4392,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
     check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
     persistFddDeployabilityCheck(projectId, check, projectTaskId);
+    scheduleFddBindingProposalShadow({
+      projectId,
+      algorithm: effectiveAlgorithm,
+      context,
+      targetAvailability,
+      inventorySignature,
+      candidates: fleetCandidateEvidence
+    });
     return check;
   }
 
@@ -9188,6 +9308,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     delete store.conversationsByProject[projectId];
     delete store.repositoryByProject[projectId];
     delete store.knowledgeBaseByProject[projectId];
+    if (store.fddBindingProposalAuditsByProject) {
+      delete store.fddBindingProposalAuditsByProject[projectId];
+    }
     writeSessionForToken(store, session.token, { userId: session.userId, selectedProjectId: null });
     persistSoon();
 
