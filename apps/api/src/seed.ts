@@ -172,6 +172,10 @@ export interface SeedStore {
   fddLibraryCheckRunsByProject?: Record<string, ProjectFddLibraryCheckRun[]>;
   /** Optional, bounded shadow-proposer audit records keyed by project. */
   fddBindingProposalAuditsByProject?: Record<string, import("./fdd/bindingProposer.js").FddBindingProposerAuditRecord[]>;
+  /** Optional, append-only fleet template versions keyed by project. */
+  fddFleetTemplateVersionsByProject?: Record<string, import("./fdd/fleetTemplates.js").FddFleetTemplateVersion[]>;
+  /** Optional, append-only fleet template audit events keyed by project. */
+  fddFleetTemplateAuditByProject?: Record<string, import("./fdd/fleetTemplates.js").FddFleetTemplateAuditEvent[]>;
   runtimeProviders: PlaceholderRuntimeProvider[];
   tools: PlaceholderTool[];
   skills: PlaceholderSkill[];
@@ -443,6 +447,8 @@ export function createSeedStore(): SeedStore {
     fddChecksByProject: Object.fromEntries(projects.map((project) => [project.id, [] as FddDeployabilityCheck[]])),
     fddLibraryCheckRunsByProject: Object.fromEntries(projects.map((project) => [project.id, [] as ProjectFddLibraryCheckRun[]])),
     fddBindingProposalAuditsByProject: Object.fromEntries(projects.map((project) => [project.id, []])),
+    fddFleetTemplateVersionsByProject: Object.fromEntries(projects.map((project) => [project.id, []])),
+    fddFleetTemplateAuditByProject: Object.fromEntries(projects.map((project) => [project.id, []])),
     runtimeProviders,
     tools,
     skills,
@@ -534,6 +540,18 @@ export function cloneStore(store: SeedStore): SeedStore {
       Object.entries(store.fddBindingProposalAuditsByProject ?? {}).map(([projectId, records]) => [
         projectId,
         records.map((record) => structuredClone(record))
+      ])
+    ),
+    fddFleetTemplateVersionsByProject: Object.fromEntries(
+      Object.entries(store.fddFleetTemplateVersionsByProject ?? {}).map(([projectId, versions]) => [
+        projectId,
+        versions.map((version) => structuredClone(version))
+      ])
+    ),
+    fddFleetTemplateAuditByProject: Object.fromEntries(
+      Object.entries(store.fddFleetTemplateAuditByProject ?? {}).map(([projectId, events]) => [
+        projectId,
+        events.map((event) => structuredClone(event))
       ])
     ),
     runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),

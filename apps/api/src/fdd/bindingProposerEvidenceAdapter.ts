@@ -55,6 +55,30 @@ function hash(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
+export function fddFleetGuardAlgorithmEvidenceSignature(input: {
+  projectId: string;
+  algorithm: FddAlgorithmRequirement;
+}): string {
+  const requiredPoints = input.algorithm.requiredPoints
+    .filter((point) => point.required)
+    .slice()
+    .sort((left, right) => compareText(left.slot.trim(), right.slot.trim()));
+  return hash([input.projectId.trim(), input.algorithm.id, input.algorithm.version, requiredPoints]);
+}
+
+export function fddFleetGuardEvaluatorEvidenceSignature(input: {
+  projectId: string;
+  evaluatorId: string;
+  evaluatorAvailable: boolean;
+}): string {
+  return hash([
+    input.projectId.trim(),
+    input.evaluatorId.trim(),
+    input.evaluatorAvailable,
+    "unversioned_registry"
+  ]);
+}
+
 function entityKey(value: string): string {
   return value.trim().toUpperCase();
 }
@@ -249,8 +273,12 @@ export function buildFleetGuardShadowInputFromV4Evidence(
         ? "absent"
         : "unknown";
   const signatures = {
-    algorithm: hash([projectId, input.algorithm.id, input.algorithm.version, requiredPoints]),
-    evaluator: hash([projectId, input.evaluatorId, input.evaluatorAvailable, "unversioned_registry"]),
+    algorithm: fddFleetGuardAlgorithmEvidenceSignature({ projectId, algorithm: input.algorithm }),
+    evaluator: fddFleetGuardEvaluatorEvidenceSignature({
+      projectId,
+      evaluatorId: input.evaluatorId,
+      evaluatorAvailable: input.evaluatorAvailable
+    }),
     inventory: hash([projectId, input.inventorySignature, inventoryStatus, members]),
     evidence: hash([
       projectId,
