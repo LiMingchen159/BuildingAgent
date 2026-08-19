@@ -85,8 +85,22 @@ function writeElementFleetFixture(dataDir: string, options: { omitWcc8Alarm?: bo
   return names;
 }
 
-function elementCollectorFetch(names: Set<string>) {
-  return vi.fn(async (input: string | URL | Request) => {
+type ElementCollectorOptions = {
+  includeObjectRefs?: boolean;
+  pointUnitOverrides?: Record<string, string>;
+  sharedObjectRefPoints?: Set<string>;
+  historyFailurePoints?: Set<string>;
+  historyTimeoutPoints?: Set<string>;
+};
+
+function elementPointObjectRef(pointName: string, options: ElementCollectorOptions): string | undefined {
+  if (!options.includeObjectRefs) return undefined;
+  if (options.sharedObjectRefPoints?.has(pointName)) return "//Elements/WCC_8_SHARED";
+  return `//Elements/${pointName}`;
+}
+
+function elementCollectorFetch(names: Set<string>, options: ElementCollectorOptions = {}) {
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.pathname === "/api/v1/points") {
       const query = url.searchParams.get("q") ?? "";
@@ -112,20 +126,42 @@ function elementCollectorFetch(names: Set<string>) {
                 : query === "WCC-L1-08-PWR"
                   ? "WCC-08 Auto/Local Status"
                   : "Run Status";
-      const unit = query.includes("CHWST") || query.includes("LCW_Setpoint")
-        ? "C"
-        : query.endsWith("_TLKWH")
-          ? "kWh"
-          : query.endsWith("_KVA")
-            ? "kVA"
-            : undefined;
-      return new Response(JSON.stringify({ total: 1, items: [{ name: query, description, ...(unit ? { unit } : {}) }] }), {
+      const unit = options.pointUnitOverrides?.[query]
+        ?? (query.includes("CHWST") || query.includes("LCW_Setpoint")
+          ? "C"
+          : query.endsWith("_TLKWH")
+            ? "kWh"
+            : query.endsWith("_KVA")
+              ? "kVA"
+              : undefined);
+      const objectRef = elementPointObjectRef(query, options);
+      return new Response(JSON.stringify({
+        total: 1,
+        items: [{ name: query, description, ...(unit ? { unit } : {}), ...(objectRef ? { object_ref: objectRef } : {}) }]
+      }), {
         status: 200,
         headers: { "content-type": "application/json" }
       });
     }
     if (url.pathname === "/api/v1/readings") {
-      const name = url.searchParams.get("name") ?? "unknown";
+      const objectRef = url.searchParams.get("object_ref");
+      const name = url.searchParams.get("name")
+        ?? (objectRef ? [...names].find((candidate) => elementPointObjectRef(candidate, options) === objectRef) : undefined)
+        ?? "unknown";
+      if (options.historyFailurePoints?.has(name)) {
+        return new Response(JSON.stringify({ error: "simulated_history_failure" }), {
+          status: 503,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (options.historyTimeoutPoints?.has(name)) {
+        const signal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          const rejectTimeout = () => reject(signal?.reason ?? new Error("simulated_history_timeout"));
+          if (signal?.aborted) rejectTimeout();
+          else signal?.addEventListener("abort", rejectTimeout, { once: true });
+        });
+      }
       const boundaryProbe = url.searchParams.has("to");
       return new Response(JSON.stringify({
         total: Number(url.searchParams.get("limit")) === 1 ? 100 : 1,
@@ -154,6 +190,32 @@ function elementStoreWithRunningPowerGrounding() {
     }]
   };
   return store;
+}
+
+function frozenFleetPlan(check: Record<string, unknown>) {
+  const entities = (check.deployableEntities as Array<{
+    entityKey: string;
+    status: string;
+    selectedMappings: Array<{ slot: string; pointName: string; objectRef?: string; unit?: string }>;
+  }>).map((entity) => ({
+    entityKey: entity.entityKey,
+    status: entity.status,
+    selectedMappings: [...entity.selectedMappings]
+      .map((mapping) => ({
+        slot: mapping.slot,
+        pointName: mapping.pointName,
+        ...(mapping.objectRef ? { objectRef: mapping.objectRef } : {}),
+        ...(mapping.unit ? { unit: mapping.unit } : {})
+      }))
+      .sort((left, right) => left.slot.localeCompare(right.slot))
+  })).sort((left, right) => left.entityKey.localeCompare(right.entityKey));
+  return {
+    status: check.status,
+    mappingStrategy: check.mappingStrategy,
+    expectedEntityCount: check.expectedEntityCount,
+    requiredRuntimeSlots: check.requiredRuntimeSlots,
+    entities
+  };
 }
 
 describe("Element homogeneous chiller FDD deployment", () => {
@@ -290,6 +352,190 @@ describe("Element homogeneous chiller FDD deployment", () => {
     expect(wcc8?.dependencies.map((dependency) => dependency.pointName)).not.toContain("WCC-L1-08-PWR");
     await app.close();
   });
+
+  it("freezes exact CH-01/CH-02/CH-03 8x fleet plans with distinct references across 20 repeated checks", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-frozen-contract-fdd-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const fetchMock = elementCollectorFetch(names, { includeObjectRefs: true });
+    const app = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const algorithmContracts = [
+      {
+        algorithmKey: "chiller_ch_01_commanded_fails_to_start",
+        pointSuffixBySlot: {
+          chiller_command: "Chiller_Start_Stop",
+          chiller_status: "Run_Status",
+          chiller_power: "TLKW"
+        }
+      },
+      {
+        algorithmKey: "chiller_ch_02_uncommanded_operation",
+        pointSuffixBySlot: {
+          chiller_command: "Chiller_Start_Stop",
+          chiller_status: "Run_Status",
+          chiller_power: "TLKW"
+        }
+      },
+      {
+        algorithmKey: "chiller_ch_03_abnormal_shutdown",
+        pointSuffixBySlot: {
+          chiller_command: "Chiller_Start_Stop",
+          chiller_status: "Run_Status",
+          chiller_alarm: "COMPSALM",
+          chiller_running_power: "TLKW"
+        }
+      }
+    ] as const;
+    let frozenCh03: ReturnType<typeof frozenFleetPlan> | undefined;
+
+    for (const contract of algorithmContracts) {
+      const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === contract.algorithmKey);
+      expect(algorithm).toBeTruthy();
+      if (!algorithm) continue;
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+        headers
+      });
+      expect(tested.statusCode).toBe(200);
+      const check = tested.json().check as Record<string, unknown>;
+      expect(check).toMatchObject({
+        status: "can_deploy",
+        mappingStrategy: "homogeneous_template",
+        expectedEntityCount: 8
+      });
+      const plan = frozenFleetPlan(check);
+      expect(plan.entities).toHaveLength(8);
+      const planObjectRefs: string[] = [];
+      for (const entity of plan.entities) {
+        const number = Number(entity.entityKey.match(/(\d+)$/u)?.[1]);
+        expect(entity.status).toBe("can_deploy");
+        expect(entity.selectedMappings).toHaveLength(Object.keys(contract.pointSuffixBySlot).length);
+        for (const [slot, suffix] of Object.entries(contract.pointSuffixBySlot)) {
+          const mapping = entity.selectedMappings.find((entry) => entry.slot === slot);
+          expect(mapping).toMatchObject({
+            pointName: `WCC_${number}_${suffix}`,
+            objectRef: `//Elements/WCC_${number}_${suffix}`
+          });
+          planObjectRefs.push(mapping!.objectRef!);
+        }
+        expect(new Set(entity.selectedMappings.map((mapping) => mapping.pointName)).size).toBe(entity.selectedMappings.length);
+        expect(new Set(entity.selectedMappings.map((mapping) => mapping.objectRef)).size).toBe(entity.selectedMappings.length);
+        expect(entity.selectedMappings.map((mapping) => mapping.pointName)).not.toEqual(expect.arrayContaining([
+          `WCC_${number}_Motor_Percent_Kilowatts`,
+          `WCC_${number}_TLKWH`,
+          `WCC_${number}_KVA`
+        ]));
+      }
+      expect(new Set(planObjectRefs).size).toBe(planObjectRefs.length);
+      const rejectedNames = (check.rejectedCandidates as Array<{ pointName: string }>).map((candidate) => candidate.pointName);
+      expect(rejectedNames).toEqual(expect.arrayContaining([
+        "WCC_1_TLKWH",
+        "WCC_1_KVA"
+      ]));
+      if (contract.algorithmKey === "chiller_ch_03_abnormal_shutdown") frozenCh03 = plan;
+    }
+
+    expect(frozenCh03).toBeTruthy();
+    const catalogQueries = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .filter((url) => url.pathname === "/api/v1/points")
+      .map((url) => url.searchParams.get("q"));
+    expect(catalogQueries).toEqual(expect.arrayContaining([
+      "WCC_1_Motor_Percent_Kilowatts",
+      "WCC_1_TLKW",
+      "WCC_1_TLKWH",
+      "WCC_1_KVA"
+    ]));
+    const ch03 = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_03_abnormal_shutdown");
+    expect(ch03).toBeTruthy();
+    if (!ch03 || !frozenCh03) return;
+    for (let repeat = 0; repeat < 20; repeat += 1) {
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${ch03.id}/test`,
+        headers
+      });
+      expect(tested.statusCode).toBe(200);
+      expect(frozenFleetPlan(tested.json().check as Record<string, unknown>)).toEqual(frozenCh03);
+    }
+    await app.close();
+  });
+
+  it.each([
+    {
+      name: "an incompatible instantaneous-power unit",
+      options: { pointUnitOverrides: { WCC_8_TLKW: "kWh" } }
+    },
+    {
+      name: "a duplicate command/status object reference",
+      options: {
+        includeObjectRefs: true,
+        sharedObjectRefPoints: new Set(["WCC_8_Chiller_Start_Stop", "WCC_8_Run_Status"])
+      }
+    },
+    {
+      name: "a failed required-history probe",
+      options: { historyFailurePoints: new Set(["WCC_8_TLKW"]) }
+    },
+    {
+      name: "a timed-out required-history probe",
+      options: { historyTimeoutPoints: new Set(["WCC_8_TLKW"]) }
+    }
+  ])("fails closed for $name on fleet member 8", async ({ options }) => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-corrupt-contract-fdd-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const app = buildServer({
+      store,
+      fetch: elementCollectorFetch(names, options) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_03_abnormal_shutdown");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+    const url = `/api/projects/project_element/fdd-library/${algorithm.id}`;
+    const tested = await app.inject({ method: "POST", url: `${url}/test`, headers });
+    expect(tested.statusCode).toBe(200);
+    const check = tested.json().check as {
+      status: string;
+      deployableEntities: Array<{
+        entityKey: string;
+        status: string;
+        missingPoints: string[];
+        historyIssues: string[];
+        ambiguousInputs: unknown[];
+      }>;
+    };
+    expect(check.status).not.toBe("can_deploy");
+    const wcc8 = check.deployableEntities.find((entity) => /(?:^|_)0?8$/u.test(entity.entityKey));
+    expect(wcc8).toBeTruthy();
+    expect(wcc8?.status).not.toBe("can_deploy");
+    expect([
+      ...(wcc8?.missingPoints ?? []),
+      ...(wcc8?.historyIssues ?? []),
+      ...(wcc8?.ambiguousInputs ?? [])
+    ].length).toBeGreaterThan(0);
+
+    const deployed = await app.inject({ method: "POST", url: `${url}/deploy`, headers });
+    expect(deployed.statusCode).toBe(422);
+    expect(new DerivedMetricStore(dataDir).listProjectMetrics("project_element")).toHaveLength(0);
+    await app.close();
+  }, 10_000);
 
   it("blocks Deploy All when one chiller lacks the template counterpart", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-incomplete-fdd-"));
@@ -997,6 +1243,8 @@ describe("Element homogeneous chiller FDD deployment", () => {
     const materializationsAfter = existingAfter.map((metric) => metrics.readMaterialization(metric.instanceId));
     const historiesAfter = existingAfter.map((metric) => metrics.readHistory(metric.instanceId, { order: "asc", limit: 20 }));
     expect(existingAfter).toEqual(existingBefore);
+    expect(existingAfter).toHaveLength(7);
+    expect(existingAfter.some((metric) => /(?:^|_)0?8$/u.test(metric.entityId))).toBe(false);
     expect(materializationsAfter).toEqual(materializationsBefore);
     expect(historiesAfter).toEqual(historiesBefore);
     expect(store.fddTasksByProject?.project_element?.find((entry) => entry.id === task.id)).toEqual(taskBefore);
