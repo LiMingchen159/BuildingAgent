@@ -1,0 +1,347 @@
+import { describe, expect, it } from "vitest";
+import {
+  EVIDENCE_PACKAGE_SCHEMA_VERSION,
+  REPORT_SPEC_SCHEMA_VERSION,
+  createEquipmentIdentity,
+  parseReportSpec,
+  type AnalysisResult,
+  type ChartResult,
+  type EvidencePackage,
+  type EvidenceReference,
+  type FaultEvent,
+  type MetricResult,
+  type ReportBlock,
+  type ReportSectionConfig,
+  type ResolvedReportPeriod
+} from "./contracts.js";
+
+const allSections: ReportSectionConfig = {
+  ordered: [
+    { section: "executive_summary", enabled: true },
+    { section: "key_findings", enabled: true },
+    { section: "system_performance", enabled: true },
+    { section: "selected_dashboards", enabled: true },
+    { section: "fault_summary", enabled: true },
+    { section: "equipment_analysis", enabled: true },
+    { section: "recommended_actions", enabled: true },
+    { section: "appendix", enabled: true }
+  ]
+};
+
+function weeklySpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: REPORT_SPEC_SCHEMA_VERSION,
+    specId: " weekly-building-a ",
+    projectId: " project_element ",
+    title: " Building A Weekly Performance Report ",
+    timeZone: "Asia/Hong_Kong",
+    period: { kind: "weekly", window: "previous_complete", weekStartsOn: "monday" },
+    schedule: { enabled: true, frequency: "weekly", weekday: "monday", time: "08:00" },
+    sections: allSections,
+    kpiKeys: [" cooling_energy ", "electricity", "plant_cop", "kw_per_rt"],
+    dashboardIds: [" plant_overview ", "energy_dashboard"],
+    equipment: { mode: "selected", equipmentIds: [" CH-01 ", "CHWP-01"] },
+    ...overrides
+  };
+}
+
+describe("ReportSpec contracts", () => {
+  it("parses and normalizes a weekly scheduled report", () => {
+    const parsed = parseReportSpec(weeklySpec());
+
+    expect(parsed).toEqual({
+      ok: true,
+      value: expect.objectContaining({
+        specId: "weekly-building-a",
+        projectId: "project_element",
+        title: "Building A Weekly Performance Report",
+        kpiKeys: ["cooling_energy", "electricity", "plant_cop", "kw_per_rt"],
+        dashboardIds: ["plant_overview", "energy_dashboard"],
+        equipment: { mode: "selected", equipmentIds: ["CH-01", "CHWP-01"] }
+      })
+    });
+  });
+
+  it("supports monthly schedules and fixed custom one-off periods", () => {
+    const monthly = parseReportSpec(weeklySpec({
+      period: { kind: "monthly", window: "previous_complete" },
+      schedule: { enabled: true, frequency: "monthly", dayOfMonth: 31, time: "08:30" }
+    }));
+    expect(monthly).toMatchObject({
+      ok: true,
+      value: {
+        schedule: {
+          enabled: true,
+          frequency: "monthly",
+          dayOfMonth: 31,
+          shortMonthPolicy: "last_day"
+        }
+      }
+    });
+
+    const custom = parseReportSpec(weeklySpec({
+      period: {
+        kind: "custom",
+        startAt: "2026-06-01T00:00:00.000Z",
+        endAt: "2026-07-01T00:00:00.000Z"
+      },
+      schedule: { enabled: false }
+    }));
+    expect(custom).toMatchObject({ ok: true, value: { period: { kind: "custom" } } });
+  });
+
+  it("reports multiple path-aware validation issues", () => {
+    const parsed = parseReportSpec(weeklySpec({
+      timeZone: "Moon/Sea_of_Tranquility",
+      schedule: { enabled: true, frequency: "monthly", dayOfMonth: 40, time: "25:70" },
+      kpiKeys: ["plant_cop", "plant_cop"],
+      sections: {
+        ordered: [
+          { section: "executive_summary", enabled: true },
+          { section: "executive_summary", enabled: true },
+          { section: "system_performance", enabled: true },
+          { section: "selected_dashboards", enabled: true },
+          { section: "fault_summary", enabled: true },
+          { section: "equipment_analysis", enabled: true },
+          { section: "recommended_actions", enabled: true },
+          { section: "appendix", enabled: true }
+        ]
+      }
+    }));
+
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.issues.map((entry) => entry.code)).toEqual(expect.arrayContaining([
+      "invalid_timezone",
+      "invalid_time",
+      "invalid_value",
+      "duplicate",
+      "missing_section"
+    ]));
+    expect(parsed.issues).toContainEqual(expect.objectContaining({ path: "timeZone" }));
+    expect(parsed.issues).toContainEqual(expect.objectContaining({ path: "kpiKeys[1]" }));
+  });
+
+  it("rejects recurring schedules for fixed custom ranges", () => {
+    const parsed = parseReportSpec(weeklySpec({
+      period: {
+        kind: "custom",
+        startAt: "2026-06-01T00:00:00.000Z",
+        endAt: "2026-06-08T00:00:00.000Z"
+      }
+    }));
+
+    expect(parsed).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([expect.objectContaining({ code: "incompatible", path: "schedule.enabled" })])
+    });
+  });
+
+  it("rejects impossible calendar dates instead of accepting Date.parse normalization", () => {
+    const parsed = parseReportSpec(weeklySpec({
+      period: {
+        kind: "custom",
+        startAt: "2026-02-30T00:00:00.000Z",
+        endAt: "2026-03-03T00:00:00.000Z"
+      },
+      schedule: { enabled: false }
+    }));
+
+    expect(parsed).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: "period.startAt", code: "invalid_datetime" })
+      ])
+    });
+  });
+
+  it("allows an empty explicit equipment selection for a system-only report", () => {
+    const systemOnlySections: ReportSectionConfig = {
+      ordered: allSections.ordered.map((selection) => ({
+        ...selection,
+        enabled: selection.section === "system_performance"
+      }))
+    };
+    const parsed = parseReportSpec(weeklySpec({
+      sections: systemOnlySections,
+      dashboardIds: [],
+      equipment: { mode: "selected", equipmentIds: [] }
+    }));
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: { equipment: { mode: "selected", equipmentIds: [] } }
+    });
+  });
+
+  it("requires KPI keys when system performance is enabled", () => {
+    const parsed = parseReportSpec(weeklySpec({ kpiKeys: [] }));
+
+    expect(parsed).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: "kpiKeys", code: "required" })
+      ])
+    });
+  });
+});
+
+describe("equipment naming contracts", () => {
+  it("retains the identifier and authoritative full name in a code-derived display name", () => {
+    const chiller = createEquipmentIdentity({
+      equipmentId: " CH-01 ",
+      equipmentType: "chiller",
+      fullName: " Main Plant Chiller No. 1 ",
+      nameSource: "semantic_model",
+      nameSourceRef: "urn:brick:Main_Plant_Chiller_1"
+    });
+    const pump = createEquipmentIdentity({
+      equipmentId: "CHWP-01",
+      equipmentType: "chilled_water_pump",
+      nameSource: "deterministic_fallback"
+    });
+
+    expect(chiller).toEqual({
+      ok: true,
+      value: {
+        equipmentId: "CH-01",
+        equipmentType: "chiller",
+        fullName: "Main Plant Chiller No. 1",
+        displayName: "CH-01 — Main Plant Chiller No. 1",
+        nameSource: "semantic_model",
+        nameSourceRef: "urn:brick:Main_Plant_Chiller_1"
+      }
+    });
+    expect(pump).toMatchObject({
+      ok: true,
+      value: { displayName: "CHWP-01 — Chilled Water Pump 01" }
+    });
+  });
+
+  it("does not admit an LLM as an equipment-name source", () => {
+    const result = createEquipmentIdentity({
+      equipmentId: "AHU-01",
+      equipmentType: "ahu",
+      fullName: "Air Handling Unit 01",
+      nameSource: "llm",
+      nameSourceRef: "model-output"
+    } as never);
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ path: "nameSource", code: "invalid_value" })]
+    });
+  });
+});
+
+describe("evidence and renderer-neutral contracts", () => {
+  it("keeps facts, detected faults, analysis, and blocks linked by typed references", () => {
+    const period: ResolvedReportPeriod = {
+      startAt: "2026-06-01T00:00:00.000Z",
+      endAt: "2026-06-08T00:00:00.000Z",
+      timeZone: "Asia/Hong_Kong"
+    };
+    const evidence: EvidenceReference = {
+      evidenceId: "ev-cop-01",
+      sourceKind: "derived_metric",
+      sourceId: "plant_cop:CH-01"
+    };
+    const equipmentScope = {
+      kind: "equipment" as const,
+      equipmentId: "CH-01",
+      equipmentType: "chiller"
+    };
+    const equipmentResult = createEquipmentIdentity({
+      equipmentId: "CH-01",
+      equipmentType: "chiller",
+      fullName: "Chiller 01",
+      nameSource: "project_metadata",
+      nameSourceRef: "project-assets.json#CH-01"
+    });
+    if (!equipmentResult.ok) throw new Error("fixture equipment must be valid");
+
+    const metric: MetricResult = {
+      status: "available",
+      resultId: "metric-cop-01",
+      metricKey: "plant_cop",
+      label: "Average COP",
+      unit: "COP",
+      scope: equipmentScope,
+      period,
+      evidence: [evidence],
+      value: 5.12,
+      aggregation: "average",
+      sampleCount: 672,
+      coverage: 1
+    };
+    const chart: ChartResult = {
+      status: "no_data",
+      resultId: "chart-cop-01",
+      chartKey: "cop_trend",
+      title: "CH-01 — Chiller 01 COP Trend",
+      scope: equipmentScope,
+      period,
+      evidence: [evidence],
+      reason: "No samples in the selected period."
+    };
+    const fault: FaultEvent = {
+      status: "active",
+      eventId: "fault-low-cop-01",
+      equipment: equipmentResult.value,
+      faultCode: "LOW_COP",
+      severity: "high",
+      startedAt: "2026-06-07T12:00:00.000Z",
+      observedThrough: "2026-06-08T00:00:00.000Z",
+      durationHours: 12,
+      detectorId: "fdd-low-cop",
+      detectorVersion: "1",
+      evidence: [{ ...evidence, sourceKind: "fdd_rule", sourceId: "fdd-low-cop" }]
+    };
+    const evidencePackage: EvidencePackage = {
+      schemaVersion: EVIDENCE_PACKAGE_SCHEMA_VERSION,
+      packageId: "evidence-equipment-ch-01",
+      planId: "plan-week-23",
+      projectId: "project_element",
+      scope: equipmentScope,
+      period,
+      generatedAt: "2026-06-08T00:05:00.000Z",
+      revisionHash: "sha256:fixture",
+      metricResults: [metric],
+      chartResults: [chart],
+      dashboardResults: [],
+      faultEvents: [fault],
+      dataQuality: []
+    };
+    const analysis: AnalysisResult = {
+      status: "complete",
+      analysisId: "analysis-ch-01",
+      analysisKind: "equipment_performance",
+      scope: equipmentScope,
+      evidencePackageId: evidencePackage.packageId,
+      generatedAt: "2026-06-08T00:06:00.000Z",
+      evidenceIds: [evidence.evidenceId],
+      segments: [
+        { kind: "equipment_ref", equipmentId: "CH-01" },
+        { kind: "text", text: "operated with an average COP of", evidenceIds: [evidence.evidenceId] },
+        { kind: "metric_ref", metricResultId: metric.resultId }
+      ]
+    };
+    const block: ReportBlock = {
+      kind: "section",
+      blockId: "section-ch-01",
+      title: equipmentResult.value.displayName,
+      level: 2,
+      blocks: [
+        { kind: "kpi", blockId: "kpi-ch-01", title: "Performance KPIs", metricResultIds: [metric.resultId] },
+        { kind: "analysis", blockId: "analysis-block-ch-01", title: "Performance Analysis", analysisResultId: analysis.analysisId }
+      ]
+    };
+
+    expect(evidencePackage.faultEvents[0]).not.toHaveProperty("diagnosis");
+    expect(analysis.status).toBe("complete");
+    if (analysis.status === "complete") {
+      expect(analysis.segments).toContainEqual({ kind: "metric_ref", metricResultId: "metric-cop-01" });
+    }
+    expect(block).toMatchObject({ kind: "section", title: "CH-01 — Chiller 01" });
+  });
+});
