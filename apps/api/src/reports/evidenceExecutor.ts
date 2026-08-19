@@ -9,6 +9,7 @@ import {
   type DataQualityIssue,
   type EvidenceDefinitionReference,
   type EvidenceExecutionRecord,
+  type EvidencePackage,
   type EvidenceReference,
   type EvidenceToolProvenance,
   type FaultEvent,
@@ -1687,22 +1688,37 @@ function executionOrder(plan: ReportPlan): string[] {
   ].map((request) => request.requestId);
 }
 
-function packageEvidenceIntegrityIssues(value: {
-  executions: EvidenceExecutionRecord[];
-  metricResults: MetricResult[];
-  chartResults: ChartResult[];
-  dashboardResults: DashboardResult[];
-  faultEvents: FaultEvent[];
-  dataQuality: DataQualityIssue[];
-}): ReportValidationIssue[] {
+type EvidencePackageCollections = Pick<
+  EvidencePackage,
+  | "executions"
+  | "metricResults"
+  | "chartResults"
+  | "dashboardResults"
+  | "faultEvents"
+  | "dataQuality"
+>;
+
+function packageEvidenceIntegrityIssues(value: EvidencePackageCollections): ReportValidationIssue[] {
   const issues: ReportValidationIssue[] = [];
   const canonicalReferenceById = new Map<string, string>();
   const executionByRequestId = new Map<string, EvidenceExecutionRecord>();
   const executionByResultId = new Map<string, EvidenceExecutionRecord>();
   const resultKinds = new Map<string, EvidenceExecutionRecord["requestKind"]>();
+  const registeredResultIds = new Set<string>();
 
   const registerReferences = (references: EvidenceReference[], path: string): void => {
-    for (const [index, reference] of references.entries()) {
+    let validatedReferences: EvidenceReference[];
+    try {
+      validatedReferences = evidenceReferences(references);
+    } catch (error) {
+      issues.push(issue(
+        path,
+        "invalid_evidence_reference",
+        error instanceof InvalidToolOutput ? error.message : "Evidence references are invalid."
+      ));
+      return;
+    }
+    for (const [index, reference] of validatedReferences.entries()) {
       const canonical = JSON.stringify(canonicalize(reference));
       const existing = canonicalReferenceById.get(reference.evidenceId);
       if (existing !== undefined && existing !== canonical) {
@@ -1718,7 +1734,15 @@ function packageEvidenceIntegrityIssues(value: {
   };
 
   for (const [index, execution] of value.executions.entries()) {
-    executionByRequestId.set(execution.requestId, execution);
+    if (executionByRequestId.has(execution.requestId)) {
+      issues.push(issue(
+        `executions[${index}].requestId`,
+        "duplicate_execution",
+        `Request ${execution.requestId} has more than one execution record.`
+      ));
+    } else {
+      executionByRequestId.set(execution.requestId, execution);
+    }
     registerReferences(execution.evidence, `executions[${index}].evidence`);
     const evidenceIds = new Set(execution.evidence.map((reference) => reference.evidenceId));
     for (const evidenceId of execution.provenance.inputEvidenceIds) {
@@ -1744,6 +1768,13 @@ function packageEvidenceIntegrityIssues(value: {
         "Fault no-data and error executions cannot own fault events."
       ));
     }
+    if (new Set(execution.resultIds).size !== execution.resultIds.length) {
+      issues.push(issue(
+        `executions[${index}].resultIds`,
+        "duplicate_result_reference",
+        "An execution record cannot reference the same result more than once."
+      ));
+    }
     for (const resultId of execution.resultIds) {
       if (executionByResultId.has(resultId)) {
         issues.push(issue(
@@ -1763,6 +1794,11 @@ function packageEvidenceIntegrityIssues(value: {
     path: string
   ): void => {
     registerReferences(result.evidence, `${path}.evidence`);
+    if (registeredResultIds.has(result.resultId)) {
+      issues.push(issue(path, "duplicate_result", `Result ${result.resultId} is duplicated in the package.`));
+    } else {
+      registeredResultIds.add(result.resultId);
+    }
     const owner = executionByResultId.get(result.resultId);
     if (!owner || owner.requestKind !== expectedKind) {
       issues.push(issue(path, "orphan_result", `Result ${result.resultId} has no matching ${expectedKind} execution.`));
@@ -1779,6 +1815,15 @@ function packageEvidenceIntegrityIssues(value: {
   value.dashboardResults.forEach((result, index) => registerResult(result, "dashboard", `dashboardResults[${index}]`));
   for (const [index, event] of value.faultEvents.entries()) {
     registerReferences(event.evidence, `faultEvents[${index}].evidence`);
+    if (registeredResultIds.has(event.eventId)) {
+      issues.push(issue(
+        `faultEvents[${index}]`,
+        "duplicate_result",
+        `Fault event ${event.eventId} is duplicated in the package.`
+      ));
+    } else {
+      registeredResultIds.add(event.eventId);
+    }
     const owner = executionByResultId.get(event.eventId);
     if (!owner || owner.requestKind !== "fault") {
       issues.push(issue(`faultEvents[${index}]`, "orphan_result", `Fault event ${event.eventId} has no matching execution.`));
@@ -1818,6 +1863,365 @@ function packageEvidenceIntegrityIssues(value: {
     }
   }
   return issues;
+}
+
+type ExpectedEvidenceRequest =
+  | { kind: "metric"; request: PlannedMetricRequest }
+  | { kind: "chart"; request: PlannedChartRequest }
+  | { kind: "dashboard"; request: PlannedDashboardRequest }
+  | { kind: "fault"; request: PlannedFaultRequest };
+
+function canonicalEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right));
+}
+
+function evidencePackageRevision(evidencePackage: Readonly<EvidencePackage>): string {
+  const { revisionHash: _revisionHash, ...withoutRevision } = evidencePackage;
+  return canonicalReportHash({
+    ...withoutRevision,
+    packageId: undefined,
+    generatedAt: undefined
+  });
+}
+
+function expectedEvidenceRequests(plan: Readonly<ReportPlan>): ExpectedEvidenceRequest[] {
+  return [
+    ...plan.evidence.metrics.map((request) => ({ kind: "metric" as const, request })),
+    ...plan.evidence.charts.map((request) => ({ kind: "chart" as const, request })),
+    ...plan.evidence.dashboards.map((request) => ({ kind: "dashboard" as const, request })),
+    ...plan.evidence.faults.map((request) => ({ kind: "fault" as const, request }))
+  ];
+}
+
+function resultStatusMatchesExecution(
+  resultStatus: MetricResult["status"] | ChartResult["status"] | DashboardResult["status"],
+  executionStatus: EvidenceExecutionRecord["status"]
+): boolean {
+  const expectedExecutionStatus = resultStatus === "available" || resultStatus === "ready"
+    ? "complete"
+    : resultStatus;
+  return expectedExecutionStatus === executionStatus;
+}
+
+/**
+ * Validate that an evidence package is the complete, internally linked output for a report plan.
+ * This trust-boundary check performs no tool calls and does not mutate either input.
+ */
+export function validateEvidencePackageForPlan(
+  plan: Readonly<ReportPlan>,
+  evidencePackage: Readonly<EvidencePackage>
+): ReportValidationResult<EvidencePackage> {
+  const issues: ReportValidationIssue[] = [];
+  if (plan.schemaVersion !== REPORT_PLAN_SCHEMA_VERSION) {
+    issues.push(issue(
+      "plan.schemaVersion",
+      "unsupported_schema",
+      `Report plan schema ${REPORT_PLAN_SCHEMA_VERSION} is required.`
+    ));
+  }
+  if (evidencePackage.schemaVersion !== EVIDENCE_PACKAGE_SCHEMA_VERSION) {
+    issues.push(issue(
+      "evidencePackage.schemaVersion",
+      "unsupported_schema",
+      `Evidence package schema ${EVIDENCE_PACKAGE_SCHEMA_VERSION} is required.`
+    ));
+  }
+  if (!nonEmpty(evidencePackage.packageId)) {
+    issues.push(issue("evidencePackage.packageId", "required", "Evidence package ID is required."));
+  }
+  if (!isRfc3339Instant(evidencePackage.generatedAt)) {
+    issues.push(issue(
+      "evidencePackage.generatedAt",
+      "invalid_datetime",
+      "Evidence package generatedAt must be an RFC3339 instant."
+    ));
+  }
+  if (evidencePackage.planId !== plan.planId) {
+    issues.push(issue("evidencePackage.planId", "plan_mismatch", "Evidence package plan ID does not match the plan."));
+  }
+  const expectedPlanRevision = canonicalReportHash(plan);
+  if (evidencePackage.planRevision !== expectedPlanRevision) {
+    issues.push(issue(
+      "evidencePackage.planRevision",
+      "plan_revision_mismatch",
+      "Evidence package plan revision does not match the supplied plan."
+    ));
+  }
+  if (evidencePackage.projectId !== plan.projectId) {
+    issues.push(issue(
+      "evidencePackage.projectId",
+      "project_mismatch",
+      "Evidence package project does not match the plan."
+    ));
+  }
+  if (evidencePackage.assetRevision !== plan.assetRevision) {
+    issues.push(issue(
+      "evidencePackage.assetRevision",
+      "asset_revision_mismatch",
+      "Evidence package asset revision does not match the plan."
+    ));
+  }
+  if (!samePeriod(evidencePackage.period, plan.period)) {
+    issues.push(issue(
+      "evidencePackage.period",
+      "period_mismatch",
+      "Evidence package period does not match the plan."
+    ));
+  }
+  if (!canonicalEqual(evidencePackage.equipment, plan.equipment)) {
+    issues.push(issue(
+      "evidencePackage.equipment",
+      "equipment_mismatch",
+      "Evidence package equipment identities do not match the plan exactly."
+    ));
+  }
+  if (evidencePackage.revisionHash !== evidencePackageRevision(evidencePackage)) {
+    issues.push(issue(
+      "evidencePackage.revisionHash",
+      "revision_hash_mismatch",
+      "Evidence package revision hash is invalid."
+    ));
+  }
+
+  const expectedRequests = expectedEvidenceRequests(plan);
+  const expectedById = new Map<string, ExpectedEvidenceRequest>();
+  for (const expected of expectedRequests) {
+    if (expectedById.has(expected.request.requestId)) {
+      issues.push(issue(
+        "plan.evidence",
+        "duplicate_request",
+        `Plan evidence request ${expected.request.requestId} is duplicated.`
+      ));
+    } else {
+      expectedById.set(expected.request.requestId, expected);
+    }
+  }
+  const executionCounts = new Map<string, number>();
+  const executionByResultId = new Map<string, EvidenceExecutionRecord>();
+  const plannedExecutionOrder = expectedRequests.map((expected) => expected.request.requestId);
+  if (!canonicalEqual(
+    evidencePackage.executions.map((execution) => execution.requestId),
+    plannedExecutionOrder
+  )) {
+    issues.push(issue(
+      "evidencePackage.executions",
+      "execution_order_mismatch",
+      "Evidence executions must follow the deterministic plan request order."
+    ));
+  }
+  for (const [index, execution] of evidencePackage.executions.entries()) {
+    executionCounts.set(execution.requestId, (executionCounts.get(execution.requestId) ?? 0) + 1);
+    const expected = expectedById.get(execution.requestId);
+    if (!expected) {
+      issues.push(issue(
+        `evidencePackage.executions[${index}].requestId`,
+        "unknown_execution",
+        `Execution ${execution.requestId} is not planned.`
+      ));
+    } else {
+      if (execution.requestKind !== expected.kind) {
+        issues.push(issue(
+          `evidencePackage.executions[${index}].requestKind`,
+          "request_kind_mismatch",
+          `Execution ${execution.requestId} has the wrong request kind.`
+        ));
+      }
+      if (!sameReference(execution.provenance.definition, expected.request.definition)) {
+        issues.push(issue(
+          `evidencePackage.executions[${index}].provenance.definition`,
+          "definition_mismatch",
+          `Execution ${execution.requestId} does not use the definition pinned by the plan.`
+        ));
+      }
+      const canonicalInputEvidenceIds = [...new Set(execution.provenance.inputEvidenceIds)].sort(compareText);
+      if (!canonicalEqual(execution.provenance.inputEvidenceIds, canonicalInputEvidenceIds)) {
+        issues.push(issue(
+          `evidencePackage.executions[${index}].provenance.inputEvidenceIds`,
+          "noncanonical_evidence_references",
+          "Execution provenance evidence IDs must be unique and canonically ordered."
+        ));
+      }
+      const expectedQueryHash = canonicalReportHash({
+        planId: plan.planId,
+        projectId: plan.projectId,
+        assetRevision: plan.assetRevision,
+        period: plan.period,
+        request: expected.request,
+        definition: expected.request.definition,
+        inputEvidenceIds: execution.provenance.inputEvidenceIds
+      });
+      if (execution.provenance.queryHash !== expectedQueryHash) {
+        issues.push(issue(
+          `evidencePackage.executions[${index}].provenance.queryHash`,
+          "query_hash_mismatch",
+          `Execution ${execution.requestId} query hash does not match its canonical plan input.`
+        ));
+      }
+    }
+    if (
+      !EVIDENCE_PRODUCER_KINDS.includes(execution.provenance.producerKind)
+      || !nonEmpty(execution.provenance.producerId)
+      || !nonEmpty(execution.provenance.producerVersion)
+      || (
+        execution.provenance.sourceRevision !== undefined
+        && !nonEmpty(execution.provenance.sourceRevision)
+      )
+    ) {
+      issues.push(issue(
+        `evidencePackage.executions[${index}].provenance`,
+        "invalid_provenance",
+        `Execution ${execution.requestId} has invalid producer provenance.`
+      ));
+    }
+    for (const resultId of execution.resultIds) {
+      if (!executionByResultId.has(resultId)) executionByResultId.set(resultId, execution);
+    }
+  }
+  for (const expected of expectedRequests) {
+    const count = executionCounts.get(expected.request.requestId) ?? 0;
+    if (count === 0) {
+      issues.push(issue(
+        "evidencePackage.executions",
+        "missing_execution",
+        `Planned request ${expected.request.requestId} has no execution record.`
+      ));
+    } else if (count > 1) {
+      issues.push(issue(
+        "evidencePackage.executions",
+        "duplicate_execution",
+        `Planned request ${expected.request.requestId} has ${count} execution records.`
+      ));
+    }
+  }
+
+  for (const [index, result] of evidencePackage.metricResults.entries()) {
+    const owner = executionByResultId.get(result.resultId);
+    const expected = owner ? expectedById.get(owner.requestId) : undefined;
+    if (
+      expected?.kind === "metric"
+      && (
+        result.metricKey !== expected.request.metricKey
+        || !sameScope(result.scope, expected.request.scope)
+        || !samePeriod(result.period, plan.period)
+      )
+    ) {
+      issues.push(issue(
+        `evidencePackage.metricResults[${index}]`,
+        "result_plan_mismatch",
+        `Metric result ${result.resultId} does not match its planned request.`
+      ));
+    }
+    if (owner && !resultStatusMatchesExecution(result.status, owner.status)) {
+      issues.push(issue(
+        `evidencePackage.metricResults[${index}].status`,
+        "result_status_mismatch",
+        `Metric result ${result.resultId} status does not match its execution.`
+      ));
+    }
+  }
+  for (const [index, result] of evidencePackage.chartResults.entries()) {
+    const owner = executionByResultId.get(result.resultId);
+    const expected = owner ? expectedById.get(owner.requestId) : undefined;
+    if (
+      expected?.kind === "chart"
+      && (
+        result.chartKey !== expected.request.chartKey
+        || !sameScope(result.scope, expected.request.scope)
+        || !samePeriod(result.period, plan.period)
+      )
+    ) {
+      issues.push(issue(
+        `evidencePackage.chartResults[${index}]`,
+        "result_plan_mismatch",
+        `Chart result ${result.resultId} does not match its planned request.`
+      ));
+    }
+    if (owner && !resultStatusMatchesExecution(result.status, owner.status)) {
+      issues.push(issue(
+        `evidencePackage.chartResults[${index}].status`,
+        "result_status_mismatch",
+        `Chart result ${result.resultId} status does not match its execution.`
+      ));
+    }
+  }
+  for (const [index, result] of evidencePackage.dashboardResults.entries()) {
+    const owner = executionByResultId.get(result.resultId);
+    const expected = owner ? expectedById.get(owner.requestId) : undefined;
+    if (
+      expected?.kind === "dashboard"
+      && (
+        result.dashboardId !== expected.request.dashboardId
+        || result.dashboardRevision !== expected.request.dashboardRevision
+        || !samePeriod(result.period, plan.period)
+      )
+    ) {
+      issues.push(issue(
+        `evidencePackage.dashboardResults[${index}]`,
+        "result_plan_mismatch",
+        `Dashboard result ${result.resultId} does not match its planned request.`
+      ));
+    }
+    if (owner && !resultStatusMatchesExecution(result.status, owner.status)) {
+      issues.push(issue(
+        `evidencePackage.dashboardResults[${index}].status`,
+        "result_status_mismatch",
+        `Dashboard result ${result.resultId} status does not match its execution.`
+      ));
+    }
+  }
+  for (const [index, event] of evidencePackage.faultEvents.entries()) {
+    const owner = executionByResultId.get(event.eventId);
+    const expected = owner ? expectedById.get(owner.requestId) : undefined;
+    if (expected?.kind === "fault") {
+      const plannedEquipment = plan.equipment.find((equipment) => equipment.equipmentId === expected.request.equipmentId);
+      if (
+        event.equipment.equipmentId !== expected.request.equipmentId
+        || event.equipment.equipmentType !== expected.request.equipmentType
+        || !plannedEquipment
+        || !canonicalEqual(event.equipment, plannedEquipment)
+      ) {
+        issues.push(issue(
+          `evidencePackage.faultEvents[${index}].equipment`,
+          "result_plan_mismatch",
+          `Fault event ${event.eventId} equipment does not match its planned request.`
+        ));
+      }
+    }
+    if (owner && owner.status !== "complete") {
+      issues.push(issue(
+        `evidencePackage.faultEvents[${index}]`,
+        "result_status_mismatch",
+        `Fault event ${event.eventId} belongs to a non-complete execution.`
+      ));
+    }
+  }
+
+  const resultOrderChecks: Array<{
+    kind: EvidenceExecutionRecord["requestKind"];
+    path: string;
+    actualIds: string[];
+  }> = [
+    { kind: "metric", path: "evidencePackage.metricResults", actualIds: evidencePackage.metricResults.map((item) => item.resultId) },
+    { kind: "chart", path: "evidencePackage.chartResults", actualIds: evidencePackage.chartResults.map((item) => item.resultId) },
+    { kind: "dashboard", path: "evidencePackage.dashboardResults", actualIds: evidencePackage.dashboardResults.map((item) => item.resultId) },
+    { kind: "fault", path: "evidencePackage.faultEvents", actualIds: evidencePackage.faultEvents.map((item) => item.eventId) }
+  ];
+  for (const check of resultOrderChecks) {
+    const expectedIds = evidencePackage.executions
+      .filter((execution) => execution.requestKind === check.kind)
+      .flatMap((execution) => execution.resultIds);
+    if (!canonicalEqual(check.actualIds, expectedIds)) {
+      issues.push(issue(
+        check.path,
+        "result_order_mismatch",
+        `${check.kind} results must follow their deterministic execution ownership order.`
+      ));
+    }
+  }
+
+  issues.push(...packageEvidenceIntegrityIssues(evidencePackage as EvidencePackage));
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, value: structuredClone(evidencePackage) as EvidencePackage };
 }
 
 function createConcurrencyLimiter(maxConcurrency: number) {
@@ -1942,8 +2346,6 @@ export async function executeReportEvidence(
       ...faultRuns
     ].flatMap((run) => structuredClone(run.dataQuality))
   };
-  const integrityIssues = packageEvidenceIntegrityIssues(packageWithoutRevision);
-  if (integrityIssues.length > 0) return { ok: false, issues: integrityIssues };
   const revisionPayload = {
     ...packageWithoutRevision,
     packageId: undefined,
@@ -1953,5 +2355,5 @@ export async function executeReportEvidence(
     ...packageWithoutRevision,
     revisionHash: canonicalReportHash(revisionPayload)
   };
-  return { ok: true, value: evidencePackage };
+  return validateEvidencePackageForPlan(plan, evidencePackage);
 }

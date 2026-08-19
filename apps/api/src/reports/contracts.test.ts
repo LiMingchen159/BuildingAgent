@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  ANALYSIS_PACKAGE_SCHEMA_VERSION,
+  ANALYSIS_TOOL_DRAFT_SCHEMA_VERSION,
+  ANALYSIS_TOOL_INPUT_SCHEMA_VERSION,
   EVIDENCE_PACKAGE_SCHEMA_VERSION,
+  REPORT_PLAN_SCHEMA_VERSION,
   REPORT_SPEC_SCHEMA_VERSION,
   createEquipmentIdentity,
   parseReportSpec,
   type AnalysisResult,
+  type AnalysisPackage,
+  type AnalysisToolDraft,
+  type AnalysisToolInput,
   type ChartResult,
   type EvidencePackage,
   type EvidenceReference,
@@ -422,10 +429,34 @@ describe("evidence and renderer-neutral contracts", () => {
     const analysis: AnalysisResult = {
       status: "complete",
       analysisId: "analysis-ch-01",
+      requestId: "analysis:equipment_performance:CH-01",
       analysisKind: "equipment_performance",
       scope: equipmentScope,
       evidencePackageId: evidencePackage.packageId,
       generatedAt: "2026-06-08T00:06:00.000Z",
+      provenance: {
+        producerKind: "b_agent",
+        producerId: "report-analysis-executor",
+        producerVersion: "1",
+        definition: {
+          definitionId: "analysis:equipment_performance:equipment",
+          definitionVersion: "1"
+        },
+        evidencePackageRevision: evidencePackage.revisionHash,
+        inputEvidenceRequestIds: ["request-metric-cop-01"],
+        inputResultIds: [metric.resultId],
+        model: {
+          adapterId: "chat-provider-report-analysis",
+          adapterVersion: "1",
+          providerId: "fixture-provider",
+          modelId: "fixture-model",
+          requestAlias: "REQ_A",
+          inputHash: "sha256:analysis-input",
+          promptVersion: "grounded-report-analysis-v1",
+          promptHash: "sha256:analysis-prompt",
+          responseHash: "sha256:analysis-response"
+        }
+      },
       evidenceIds: [evidence.evidenceId],
       segments: [
         { kind: "equipment_ref", equipmentId: "CH-01" },
@@ -445,10 +476,101 @@ describe("evidence and renderer-neutral contracts", () => {
     };
 
     expect(evidencePackage.faultEvents[0]).not.toHaveProperty("diagnosis");
+    expect(EVIDENCE_PACKAGE_SCHEMA_VERSION).toBe(3);
+    expect(REPORT_PLAN_SCHEMA_VERSION).toBe(4);
     expect(analysis.status).toBe("complete");
     if (analysis.status === "complete") {
       expect(analysis.segments).toContainEqual({ kind: "metric_ref", metricResultId: "metric-cop-01" });
     }
     expect(block).toMatchObject({ kind: "section", title: "CH-01 — Chiller 01" });
+  });
+
+  it("keeps v1 model I/O alias-only and represents a skipped planned request explicitly", () => {
+    const input: AnalysisToolInput = {
+      schemaVersion: ANALYSIS_TOOL_INPUT_SCHEMA_VERSION,
+      requestAlias: "REQ_A",
+      analysisKind: "equipment_performance",
+      scope: { kind: "equipment", equipmentAlias: "EQ_A", equipmentType: "chiller" },
+      definition: {
+        definitionId: "analysis:equipment_performance:equipment",
+        definitionVersion: "1"
+      },
+      period: {
+        startAt: "2026-05-31T16:00:00.000Z",
+        endAt: "2026-06-07T16:00:00.000Z",
+        timeZone: "Asia/Hong_Kong"
+      },
+      allowedCitationAliases: ["EV_A"],
+      equipment: [{ equipmentAlias: "EQ_A", equipmentType: "chiller" }],
+      metrics: [{
+        metricAlias: "MET_A",
+        metricKey: "plant_cop",
+        scope: { kind: "equipment", equipmentAlias: "EQ_A", equipmentType: "chiller" },
+        unit: "1",
+        aggregation: "average",
+        value: 5.25,
+        sampleCount: 672,
+        coverage: 1,
+        evidenceAliases: ["EV_A"]
+      }],
+      charts: [],
+      dashboards: [],
+      faults: [],
+      dataQuality: []
+    };
+    const draft: AnalysisToolDraft = {
+      schemaVersion: ANALYSIS_TOOL_DRAFT_SCHEMA_VERSION,
+      requestAlias: "REQ_A",
+      status: "complete",
+      segments: [
+        { kind: "equipment_ref", equipmentAlias: "EQ_A" },
+        { kind: "text", text: "Performance remained stable.", citationAliases: ["EV_A"] },
+        { kind: "metric_ref", metricAlias: "MET_A" }
+      ]
+    };
+    const analysisPackage: AnalysisPackage = {
+      schemaVersion: ANALYSIS_PACKAGE_SCHEMA_VERSION,
+      packageId: "analysis-package-week-23",
+      planId: "plan-week-23",
+      planRevision: "sha256:plan-fixture",
+      projectId: "project_element",
+      assetRevision: "sha256:asset-fixture",
+      period: input.period,
+      evidencePackageId: "evidence-week-23",
+      evidencePackageRevision: "sha256:evidence-fixture",
+      definitionsRevision: "sha256:analysis-definitions",
+      generatedAt: "2026-06-08T00:06:00.000Z",
+      revisionHash: "sha256:analysis-package",
+      results: [{
+        status: "skipped",
+        analysisId: "analysis-fault-diagnosis-ch-01",
+        requestId: "analysis:fault_diagnosis:CH-01",
+        analysisKind: "fault_diagnosis",
+        scope: { kind: "equipment", equipmentId: "CH-01", equipmentType: "chiller" },
+        evidencePackageId: "evidence-week-23",
+        generatedAt: "2026-06-08T00:06:00.000Z",
+        reasonCode: "no_fault_detected",
+        message: "No detected fault requires diagnosis.",
+        provenance: {
+          producerKind: "b_agent",
+          producerId: "report-analysis-executor",
+          producerVersion: "1",
+          definition: {
+            definitionId: "analysis:fault_diagnosis:equipment",
+            definitionVersion: "1"
+          },
+          evidencePackageRevision: "sha256:evidence-fixture",
+          inputEvidenceRequestIds: ["fault:CH-01"],
+          inputResultIds: [],
+          model: null
+        }
+      }]
+    };
+
+    expect(JSON.stringify(input)).not.toContain("CH-01");
+    expect(JSON.stringify(input)).not.toContain("Chiller 01");
+    expect(draft.status).toBe("complete");
+    expect(analysisPackage.results).toHaveLength(1);
+    expect(analysisPackage.results[0]?.status).toBe("skipped");
   });
 });

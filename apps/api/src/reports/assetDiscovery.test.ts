@@ -11,6 +11,7 @@ import {
   type EquipmentSelection,
   type ReportSpec
 } from "./contracts.js";
+import { DEFAULT_ANALYSIS_DEFINITION_REGISTRY } from "./analysisDefinitions.js";
 import { buildReportPlan } from "./planner.js";
 import { evidenceDefinitionsFixture } from "./evidenceTestFixtures.js";
 import {
@@ -176,6 +177,7 @@ describe("project report asset discovery", () => {
       equipment: assets.value.equipment,
       profiles: assets.value.profiles,
       evidenceDefinitions: evidenceDefinitionsFixture(assets.value.profiles),
+      analysisDefinitions: DEFAULT_ANALYSIS_DEFINITION_REGISTRY,
       assetRevision: assets.value.assetRevision,
       assetProvenance: assets.value.assetProvenance
     });

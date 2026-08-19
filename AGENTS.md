@@ -79,12 +79,12 @@ This permission is scoped to M008 report work; it is not permission for unrelate
 The active authorization for this branch is:
 
 - Milestone: `M008 - Generic recurring building performance reports`
-- Issue: `[M008-S3] Execute deterministic report evidence`
-- GitHub issue: `#199`
-- Branch: `m008-s3-execute-report-evidence`
-- Scope: `AGENTS.md`, deterministic report evidence orchestration and thin KPI/dashboard/plot/FDD adapter modules under `apps/api/src/reports/**`, and their directly corresponding tests
+- Issue: `[M008-S4] Generate grounded report analysis`
+- GitHub issue: `#201`
+- Branch: `m008-s4-generate-grounded-analysis`
+- Scope: `AGENTS.md`, versioned report-analysis contracts and definitions, a narrow read-only B-Agent adapter, grounded analysis orchestration under `apps/api/src/reports/**`, and their directly corresponding tests
 
-B-Agent calls, ReportBlock assembly, report persistence, API routes, scheduling, UI integration, LaTeX/PDF rendering, deployment changes, and modifications to unrelated KPI/dashboard/FDD infrastructure are outside M008-S3 and require later issues and branches.
+ReportBlock assembly, report persistence, API routes, scheduling, UI integration, LaTeX/PDF rendering, deployment changes, generic Agent/provider infrastructure changes, and modifications to unrelated KPI/dashboard/FDD infrastructure are outside M008-S4 and require later issues and branches. M008-S4 B-Agent calls are read-only, must receive only request-authorized typed evidence, and must not dispatch tools, read chat/memory/repository context, or create or alter deterministic evidence.
 
 For every implementation issue:
 

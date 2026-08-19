@@ -9,6 +9,7 @@ import {
   type PlannedMetricRequest,
   type PlannedAnalysisRequest,
   type ReportEvidencePlan,
+  type ReportAnalysisPlan,
   type ReportAssetProvenance,
   type ReportPlan,
   type ReportPlanSection,
@@ -35,6 +36,13 @@ import {
   validateEvidenceDefinitionRegistry,
   type EvidenceDefinitionRegistry
 } from "./evidenceDefinitions.js";
+import {
+  analysisDefinitionReference,
+  analysisDefinitionRegistryRevision,
+  findAnalysisDefinition,
+  validateAnalysisDefinitionRegistry,
+  type AnalysisDefinitionRegistry
+} from "./analysisDefinitions.js";
 
 export interface BuildReportPlanInput {
   planId: string;
@@ -49,6 +57,8 @@ export interface BuildReportPlanInput {
   resolvedDashboards?: ResolvedDashboardConfig[];
   /** Versioned deterministic definitions used to pin every evidence request. */
   evidenceDefinitions: EvidenceDefinitionRegistry;
+  /** Versioned declarative definitions used to pin every B-Agent request. */
+  analysisDefinitions: AnalysisDefinitionRegistry;
   /** Revision/hash of the asset metadata used to resolve equipment names. */
   assetRevision: string;
   /** Source/rule manifest returned by the same asset resolver revision. */
@@ -847,10 +857,20 @@ function fleetEvidenceRequestIds(
   ].map((request) => request.requestId);
 }
 
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, Extract<keyof T, K>>
+  : never;
+
+type AnalysisRequestIntent = DistributiveOmit<
+  PlannedAnalysisRequest,
+  "evidenceRequestIds" | "definition"
+>;
+
 function addAnalysisRequest(
   requests: PlannedAnalysisRequest[],
   issues: ReportValidationIssue[],
-  request: Omit<PlannedAnalysisRequest, "evidenceRequestIds">,
+  definitions: AnalysisDefinitionRegistry,
+  request: AnalysisRequestIntent,
   evidenceRequestIds: string[]
 ): void {
   const uniqueEvidenceRequestIds = [...new Set(evidenceRequestIds)];
@@ -862,7 +882,24 @@ function addAnalysisRequest(
     ));
     return;
   }
-  requests.push({ ...request, evidenceRequestIds: uniqueEvidenceRequestIds });
+  const definition = findAnalysisDefinition(
+    definitions,
+    request.analysisKind,
+    request.scope.kind
+  );
+  if (!definition) {
+    issues.push(issue(
+      `analysis.${request.analysisKind}.${request.scope.kind}`,
+      "analysis_definition_not_found",
+      `No ${request.scope.kind} analysis definition exists for ${request.analysisKind}.`
+    ));
+    return;
+  }
+  requests.push({
+    ...request,
+    evidenceRequestIds: uniqueEvidenceRequestIds,
+    definition: analysisDefinitionReference(definition)
+  } as PlannedAnalysisRequest);
 }
 
 function planAnalysis(
@@ -870,12 +907,16 @@ function planAnalysis(
   groups: EquipmentGroupPlan[],
   profilesByType: Map<string, EquipmentProfile>,
   evidence: ReportEvidencePlan,
+  definitions: AnalysisDefinitionRegistry,
   issues: ReportValidationIssue[]
-): PlannedAnalysisRequest[] {
+): ReportAnalysisPlan {
   const requests: PlannedAnalysisRequest[] = [];
+  const add = (request: AnalysisRequestIntent, evidenceRequestIds: string[]): void => {
+    addAnalysisRequest(requests, issues, definitions, request, evidenceRequestIds);
+  };
   const systemEvidenceRequestIds = allEvidenceRequestIds(evidence);
   if (sectionEnabled(spec.sections, "executive_summary")) {
-    addAnalysisRequest(requests, issues, {
+    add({
       requestId: requestId("analysis", "executive_summary", "system"),
       analysisKind: "executive_summary",
       scope: { kind: "system" },
@@ -883,7 +924,7 @@ function planAnalysis(
     }, systemEvidenceRequestIds);
   }
   if (sectionEnabled(spec.sections, "key_findings")) {
-    addAnalysisRequest(requests, issues, {
+    add({
       requestId: requestId("analysis", "key_findings", "system"),
       analysisKind: "key_findings",
       scope: { kind: "system" },
@@ -894,14 +935,14 @@ function planAnalysis(
     for (const group of groups) {
       const profile = profilesByType.get(group.equipmentType)!;
       if (profile.analysis.performance) {
-        addAnalysisRequest(requests, issues, {
+        add({
           requestId: requestId("analysis", "fleet_performance", group.equipmentType),
           analysisKind: "fleet_performance",
           scope: fleetScope(group.equipmentType),
           condition: "always"
         }, fleetEvidenceRequestIds(evidence, group.equipmentType));
         for (const item of group.equipment) {
-          addAnalysisRequest(requests, issues, {
+          add({
             requestId: requestId("analysis", "equipment_performance", item.equipmentId),
             analysisKind: "equipment_performance",
             scope: equipmentScope(item),
@@ -912,7 +953,7 @@ function planAnalysis(
     }
   }
   if (sectionEnabled(spec.sections, "fault_summary")) {
-    addAnalysisRequest(requests, issues, {
+    add({
       requestId: requestId("analysis", "fault_summary", "system"),
       analysisKind: "fault_summary",
       scope: { kind: "system" },
@@ -927,7 +968,7 @@ function planAnalysis(
       const profile = profilesByType.get(group.equipmentType)!;
       if (!profile.analysis.faultDiagnosis) continue;
       for (const item of group.equipment) {
-        addAnalysisRequest(requests, issues, {
+        add({
           requestId: requestId("analysis", "fault_diagnosis", item.equipmentId),
           analysisKind: "fault_diagnosis",
           scope: equipmentScope(item),
@@ -939,7 +980,7 @@ function planAnalysis(
     }
   }
   if (sectionEnabled(spec.sections, "recommended_actions")) {
-    addAnalysisRequest(requests, issues, {
+    add({
       requestId: requestId("analysis", "recommendations", "system"),
       analysisKind: "recommendations",
       scope: { kind: "system" },
@@ -948,17 +989,20 @@ function planAnalysis(
     if (sectionEnabled(spec.sections, "equipment_analysis")) {
       for (const group of groups) {
         for (const item of group.equipment) {
-          addAnalysisRequest(requests, issues, {
+          add({
             requestId: requestId("analysis", "recommendations", item.equipmentId),
             analysisKind: "recommendations",
             scope: equipmentScope(item),
-            condition: "when_actionable_evidence"
+            condition: "when_evidence_available"
           }, equipmentEvidenceRequestIds(evidence, item.equipmentId));
         }
       }
     }
   }
-  return requests;
+  return {
+    definitionsRevision: analysisDefinitionRegistryRevision(definitions),
+    requests
+  };
 }
 
 /**
@@ -980,7 +1024,9 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
   const resolvedSystemCharts = input.resolvedSystemCharts ?? [];
   const resolvedDashboards = input.resolvedDashboards ?? [];
   const evidenceDefinitions = input.evidenceDefinitions;
+  const analysisDefinitions = input.analysisDefinitions;
   issues.push(...validateEvidenceDefinitionRegistry(evidenceDefinitions));
+  issues.push(...validateAnalysisDefinitionRegistry(analysisDefinitions));
   if (sectionEnabled(input.spec.sections, "system_performance")) {
     const selectedMetricKeys = new Set(input.spec.kpiKeys);
     for (const [index, chart] of resolvedSystemCharts.entries()) {
@@ -1046,9 +1092,14 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
     issues
   );
   if (issues.length > 0) return { ok: false, issues };
-  const analysis = {
-    requests: planAnalysis(input.spec, groups, profilesByType, evidence, issues)
-  };
+  const analysis = planAnalysis(
+    input.spec,
+    groups,
+    profilesByType,
+    evidence,
+    analysisDefinitions,
+    issues
+  );
   if (issues.length > 0) return { ok: false, issues };
   const selectedEquipmentIds = new Set(equipment.map((item) => item.equipmentId));
   const assetProvenance = structuredClone(input.assetProvenance);

@@ -1,6 +1,9 @@
 export const REPORT_SPEC_SCHEMA_VERSION = 1 as const;
-export const REPORT_PLAN_SCHEMA_VERSION = 3 as const;
+export const REPORT_PLAN_SCHEMA_VERSION = 4 as const;
 export const EVIDENCE_PACKAGE_SCHEMA_VERSION = 3 as const;
+export const ANALYSIS_PACKAGE_SCHEMA_VERSION = 1 as const;
+export const ANALYSIS_TOOL_INPUT_SCHEMA_VERSION = 1 as const;
+export const ANALYSIS_TOOL_DRAFT_SCHEMA_VERSION = 1 as const;
 
 export const REPORT_WEEKDAYS = [
   "monday",
@@ -456,33 +459,16 @@ export type AnalysisKind =
   | "fault_diagnosis"
   | "recommendations";
 
-export type AnalysisSegment =
-  /** Qualitative prose only; numeric values are inserted through typed references. */
-  | { kind: "text"; text: string; evidenceIds: string[] }
-  | { kind: "metric_ref"; metricResultId: string }
-  | { kind: "equipment_ref"; equipmentId: string }
-  | { kind: "fault_ref"; faultEventId: string };
-
-interface AnalysisResultBase {
-  analysisId: string;
-  evidencePackageId: string;
-  generatedAt: string;
+export interface AnalysisDefinitionReference {
+  definitionId: string;
+  definitionVersion: string;
 }
 
-interface CompleteAnalysisContent {
-  status: "complete";
-  segments: AnalysisSegment[];
-  evidenceIds: string[];
-}
-
-export type CompleteAnalysisResult = AnalysisResultBase & CompleteAnalysisContent & (
+/** Analysis kind and scope are coupled so an invalid target cannot be planned or returned. */
+export type AnalysisRequestTarget =
   | {
       analysisKind: "executive_summary" | "key_findings" | "fault_summary";
       scope: { kind: "system" };
-    }
-  | {
-      analysisKind: "recommendations";
-      scope: ReportScope;
     }
   | {
       analysisKind: "fleet_performance";
@@ -495,31 +481,211 @@ export type CompleteAnalysisResult = AnalysisResultBase & CompleteAnalysisConten
   | {
       analysisKind: "fault_diagnosis";
       scope: { kind: "equipment"; equipmentId: string; equipmentType: string };
-      /** Diagnoses can only refer to faults detected in the supplied package. */
-      faultEventIds: string[];
     }
+  | {
+      analysisKind: "recommendations";
+      scope:
+        | { kind: "system" }
+        | { kind: "equipment"; equipmentId: string; equipmentType: string };
+    };
+
+export type AnalysisCondition =
+  | "always"
+  | "when_fault_detected"
+  | "when_evidence_available";
+
+export type AnalysisSegment =
+  /** Qualitative prose only; numeric values are inserted through typed references. */
+  | { kind: "text"; text: string; evidenceIds: string[] }
+  | { kind: "metric_ref"; metricResultId: string }
+  | { kind: "equipment_ref"; equipmentId: string }
+  | { kind: "fault_ref"; faultEventId: string };
+
+export interface AnalysisModelProvenance {
+  adapterId: string;
+  adapterVersion: string;
+  providerId: string;
+  modelId: string;
+  /** Opaque alias sent to the model for this planned request. */
+  requestAlias: string;
+  /** Hash of the exact alias-only AnalysisToolInput supplied to the model. */
+  inputHash: string;
+  promptVersion: string;
+  promptHash: string;
+  /** Null when a model call started but produced no accepted response. */
+  responseHash: string | null;
+}
+
+export interface AnalysisProvenance {
+  producerKind: "b_agent";
+  producerId: string;
+  producerVersion: string;
+  definition: AnalysisDefinitionReference;
+  evidencePackageRevision: string;
+  inputEvidenceRequestIds: string[];
+  /** Real typed result IDs retained for audit; the model receives only opaque aliases. */
+  inputResultIds: string[];
+  /** Null for deterministic skipped/insufficient-evidence outcomes that never invoke a model. */
+  model: AnalysisModelProvenance | null;
+}
+
+export interface AnalysisResultBase {
+  analysisId: string;
+  requestId: string;
+  evidencePackageId: string;
+  generatedAt: string;
+  provenance: AnalysisProvenance;
+}
+
+export interface CompleteAnalysisContent {
+  status: "complete";
+  segments: AnalysisSegment[];
+  evidenceIds: string[];
+}
+
+export type CompleteAnalysisResult = AnalysisResultBase & CompleteAnalysisContent & (
+  | Exclude<AnalysisRequestTarget, { analysisKind: "fault_diagnosis" }>
+  | (Extract<AnalysisRequestTarget, { analysisKind: "fault_diagnosis" }> & {
+      /** Diagnoses are hypotheses over faults detected in the supplied package. */
+      diagnosisNature: "hypothesis";
+      faultEventIds: string[];
+    })
 );
 
-export interface InsufficientEvidenceAnalysisResult extends AnalysisResultBase {
+export type InsufficientEvidenceAnalysisResult = AnalysisResultBase & AnalysisRequestTarget & {
   status: "insufficient_evidence";
-  analysisKind: AnalysisKind;
-  scope: ReportScope;
   message: string;
   missingEvidence: string[];
-}
+};
 
-export interface ErrorAnalysisResult extends AnalysisResultBase {
+export type SkippedAnalysisResult = AnalysisResultBase & AnalysisRequestTarget & {
+  status: "skipped";
+  reasonCode: string;
+  message: string;
+};
+
+export type ErrorAnalysisResult = AnalysisResultBase & AnalysisRequestTarget & {
   status: "error";
-  analysisKind: AnalysisKind;
-  scope: ReportScope;
   errorCode: string;
   message: string;
-}
+  retryable: boolean;
+};
 
 export type AnalysisResult =
   | CompleteAnalysisResult
   | InsufficientEvidenceAnalysisResult
+  | SkippedAnalysisResult
   | ErrorAnalysisResult;
+
+export interface AnalysisPackage {
+  schemaVersion: typeof ANALYSIS_PACKAGE_SCHEMA_VERSION;
+  packageId: string;
+  planId: string;
+  planRevision: string;
+  projectId: string;
+  assetRevision: string;
+  period: ResolvedReportPeriod;
+  evidencePackageId: string;
+  evidencePackageRevision: string;
+  definitionsRevision: string;
+  generatedAt: string;
+  revisionHash: string;
+  /** Exactly one result per planned request, retained in stable plan order. */
+  results: AnalysisResult[];
+}
+
+/** Alias-only scope exposed to the model; real equipment IDs and names remain executor-private. */
+export type AnalysisToolScope =
+  | { kind: "system" }
+  | { kind: "fleet"; equipmentType: string }
+  | { kind: "equipment"; equipmentAlias: string; equipmentType: string };
+
+export interface AnalysisToolEquipmentFact {
+  equipmentAlias: string;
+  equipmentType: string;
+}
+
+export interface AnalysisToolMetricFact {
+  metricAlias: string;
+  metricKey: string;
+  scope: AnalysisToolScope;
+  unit: string;
+  aggregation: MetricAggregation;
+  value: number;
+  sampleCount: number;
+  coverage: number;
+  evidenceAliases: string[];
+}
+
+export interface AnalysisToolChartFact {
+  chartAlias: string;
+  chartKey: string;
+  scope: AnalysisToolScope;
+  evidenceAliases: string[];
+}
+
+export interface AnalysisToolDashboardFact {
+  dashboardAlias: string;
+  evidenceAliases: string[];
+}
+
+interface AnalysisToolFaultFactBase {
+  faultAlias: string;
+  equipmentAlias: string;
+  faultCode: string;
+  severity: FaultSeverity;
+  startedAt: string;
+  durationHours: number;
+  evidenceAliases: string[];
+}
+
+export type AnalysisToolFaultFact =
+  | (AnalysisToolFaultFactBase & { status: "active"; observedThrough: string })
+  | (AnalysisToolFaultFactBase & { status: "resolved"; endedAt: string });
+
+export interface AnalysisToolDataQualityFact {
+  qualityAlias: string;
+  severity: DataQualityIssue["severity"];
+  code: string;
+  evidenceAliases: string[];
+}
+
+/** Per-request, prompt-safe projection. It intentionally contains no real IDs or equipment names. */
+export interface AnalysisToolInput {
+  schemaVersion: typeof ANALYSIS_TOOL_INPUT_SCHEMA_VERSION;
+  requestAlias: string;
+  analysisKind: AnalysisKind;
+  scope: AnalysisToolScope;
+  definition: AnalysisDefinitionReference;
+  period: ResolvedReportPeriod;
+  allowedCitationAliases: string[];
+  equipment: AnalysisToolEquipmentFact[];
+  metrics: AnalysisToolMetricFact[];
+  charts: AnalysisToolChartFact[];
+  dashboards: AnalysisToolDashboardFact[];
+  faults: AnalysisToolFaultFact[];
+  dataQuality: AnalysisToolDataQualityFact[];
+}
+
+export type AnalysisToolDraftSegment =
+  | { kind: "text"; text: string; citationAliases: string[] }
+  | { kind: "metric_ref"; metricAlias: string }
+  | { kind: "equipment_ref"; equipmentAlias: string }
+  | { kind: "fault_ref"; faultAlias: string };
+
+interface AnalysisToolDraftBase {
+  schemaVersion: typeof ANALYSIS_TOOL_DRAFT_SCHEMA_VERSION;
+  requestAlias: string;
+}
+
+/** Untrusted per-request structured model output; the executor resolves aliases to typed IDs. */
+export type AnalysisToolDraft = AnalysisToolDraftBase & (
+  | { status: "complete"; segments: AnalysisToolDraftSegment[] }
+  | {
+      status: "insufficient_evidence";
+      segments: [];
+    }
+);
 
 interface ReportBlockBase {
   blockId: string;
@@ -691,16 +857,19 @@ export interface ReportEvidencePlan {
   faults: PlannedFaultRequest[];
 }
 
-export interface PlannedAnalysisRequest {
+interface PlannedAnalysisRequestBase {
   requestId: string;
-  analysisKind: AnalysisKind;
-  scope: ReportScope;
-  condition: "always" | "when_fault_detected" | "when_actionable_evidence";
+  condition: AnalysisCondition;
   /** Deterministic tool requests that must be resolved before this analysis may run. */
   evidenceRequestIds: string[];
+  /** Versioned, declarative analysis contract pinned by the planner. */
+  definition: AnalysisDefinitionReference;
 }
 
+export type PlannedAnalysisRequest = PlannedAnalysisRequestBase & AnalysisRequestTarget;
+
 export interface ReportAnalysisPlan {
+  definitionsRevision: string;
   /** Rendering intents; a later execution adapter may safely batch compatible requests. */
   requests: PlannedAnalysisRequest[];
 }
@@ -799,7 +968,11 @@ export function isRfc3339Instant(value: string): boolean {
   return Number.isFinite(Date.parse(value));
 }
 
-function validTimeZone(value: string): boolean {
+/** Runtime-safe IANA timezone validation shared by planning and downstream trust boundaries. */
+export function isValidIanaTimeZone(value: string): boolean {
+  if (typeof value !== "string" || value.trim() !== value || value.length === 0 || value.length > 128) {
+    return false;
+  }
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: value }).format(0);
     return true;
@@ -979,7 +1152,7 @@ export function parseReportSpec(value: unknown): ReportValidationResult<ReportSp
   const projectId = requiredString(value.projectId, "projectId", issues);
   const title = requiredString(value.title, "title", issues, 160);
   const timeZone = requiredString(value.timeZone, "timeZone", issues);
-  if (timeZone && !validTimeZone(timeZone)) {
+  if (timeZone && !isValidIanaTimeZone(timeZone)) {
     issues.push({ path: "timeZone", code: "invalid_timezone", message: "timeZone must be a valid IANA timezone." });
   }
 
@@ -1011,7 +1184,7 @@ export function parseReportSpec(value: unknown): ReportValidationResult<ReportSp
     || !specId
     || !projectId
     || !title
-    || !validTimeZone(timeZone)
+    || !isValidIanaTimeZone(timeZone)
     || !period
     || !schedule
     || !sections
