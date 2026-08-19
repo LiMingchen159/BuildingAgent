@@ -56,6 +56,8 @@ describe("deployment planner architecture", () => {
       )).toEqual([]);
       expect(source).not.toMatch(/\bfetch\s*\(/u);
       expect(source).not.toMatch(/\bprocess\.env\b/u);
+      expect(source).not.toMatch(/\bDate\.now\s*\(/u);
+      expect(source).not.toMatch(/\bMath\.random\s*\(/u);
     }
   });
 
