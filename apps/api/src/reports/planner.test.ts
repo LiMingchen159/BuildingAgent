@@ -4,6 +4,7 @@ import {
   createEquipmentIdentity,
   type EquipmentIdentity,
   type EquipmentProfile,
+  type ReportAssetProvenance,
   type ReportSpec
 } from "./contracts.js";
 import { buildReportPlan } from "./planner.js";
@@ -47,6 +48,38 @@ function identity(equipmentId: string, equipmentType: string, fullName: string):
   return result.value;
 }
 
+function assetProvenance(
+  equipment: EquipmentIdentity[],
+  profileSet: EquipmentProfile[] = profiles
+): ReportAssetProvenance {
+  return {
+    resolverVersion: 1,
+    sources: [{
+      sourceKind: "project_metadata",
+      sourceId: "project-assets.json",
+      sourceRevision: "sha256:fixture-assets"
+    }],
+    equipment: equipment.map((item) => {
+      const profile = profileSet.find((candidate) => candidate.equipmentType === item.equipmentType);
+      return {
+        equipmentId: item.equipmentId,
+        resolvedIdentity: { ...item },
+        profileId: profile?.profileId ?? `profile-${item.equipmentType}`,
+        profileVersion: profile?.version ?? 1,
+        classificationRuleRefs: [`fixture-${item.equipmentType}-v1`],
+        sources: [{
+          sourceKind: "project_metadata",
+          sourceId: "project-assets.json",
+          sourceRef: `project-assets.json#${item.equipmentId}`,
+          sourceTypes: [item.equipmentType],
+          shortIdentifier: item.shortIdentifier,
+          fullName: item.fullName
+        }]
+      };
+    })
+  };
+}
+
 function reportSpec(equipment: ReportSpec["equipment"] = { mode: "all", equipmentTypes: [] }): ReportSpec {
   return {
     schemaVersion: REPORT_SPEC_SCHEMA_VERSION,
@@ -74,7 +107,12 @@ function reportSpec(equipment: ReportSpec["equipment"] = { mode: "all", equipmen
   };
 }
 
-function plan(equipment: EquipmentIdentity[], spec = reportSpec(), profileSet = profiles) {
+function plan(
+  equipment: EquipmentIdentity[],
+  spec = reportSpec(),
+  profileSet = profiles,
+  provenance = assetProvenance(equipment, profileSet)
+) {
   return buildReportPlan({
     planId: "plan-2026-w23",
     spec,
@@ -85,6 +123,7 @@ function plan(equipment: EquipmentIdentity[], spec = reportSpec(), profileSet = 
     },
     plannedAt: "2026-06-08T00:05:00.000Z",
     assetRevision: "brick-model-sha256",
+    assetProvenance: provenance,
     equipment,
     profiles: profileSet,
     resolvedSystemCharts: [
@@ -224,6 +263,7 @@ describe("buildReportPlan", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.equipment.map((item) => item.equipmentId)).toEqual(["CH-01", "CHWP-02"]);
+    expect(result.value.assetProvenance.equipment.map((item) => item.equipmentId)).toEqual(["CH-01", "CHWP-02"]);
     expect(result.value.sections.slice(0, 5)).toEqual([
       { kind: "cover" },
       { kind: "report_information" },
@@ -238,6 +278,7 @@ describe("buildReportPlan", () => {
       ...identity("CH-01", "chiller", "Chiller 01"),
       displayName: "Invented Chiller Name"
     };
+    const equipment = [invalidName, identity("AHU-01", "ahu", "Air Handling Unit 01")];
     const result = buildReportPlan({
       planId: "plan-invalid",
       spec: reportSpec({ mode: "selected", equipmentIds: ["CH-01", "CHWP-99"] }),
@@ -248,7 +289,8 @@ describe("buildReportPlan", () => {
       },
       plannedAt: "not-a-date",
       assetRevision: "brick-model-sha256",
-      equipment: [invalidName, identity("AHU-01", "ahu", "Air Handling Unit 01")],
+      assetProvenance: assetProvenance(equipment),
+      equipment,
       profiles
     });
 
@@ -294,6 +336,62 @@ describe("buildReportPlan", () => {
       ok: false,
       issues: expect.arrayContaining([
         expect.objectContaining({ path: "equipment[0].fullName", code: "invalid_fallback_name" })
+      ])
+    });
+  });
+
+  it("reports a missing short identifier without throwing on stale identity data", () => {
+    const staleIdentity = {
+      ...identity("CH-01", "chiller", "Chiller 01"),
+      shortIdentifier: undefined
+    } as unknown as EquipmentIdentity;
+
+    const result = plan([staleIdentity]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: "equipment[0].shortIdentifier", code: "required" })
+      ])
+    });
+  });
+
+  it("rejects a manually constructed metadata identity whose full name is only its code", () => {
+    const codeOnlyIdentity: EquipmentIdentity = {
+      ...identity("CH-01", "chiller", "Chiller 01"),
+      fullName: "CH-01",
+      displayName: "CH-01 — CH-01"
+    };
+
+    const result = plan([codeOnlyIdentity]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: "equipment[0].fullName", code: "identifier_only_name" })
+      ])
+    });
+  });
+
+  it("rejects a descriptive identity altered after authoritative resolution", () => {
+    const resolved = identity("CH-01", "chiller", "Main Plant Chiller No. 1");
+    const altered: EquipmentIdentity = {
+      ...resolved,
+      fullName: "LLM Invented Chiller",
+      displayName: "CH-01 — LLM Invented Chiller"
+    };
+
+    const result = plan(
+      [altered],
+      reportSpec(),
+      profiles,
+      assetProvenance([resolved])
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: "identity_provenance_mismatch" })
       ])
     });
   });
@@ -390,6 +488,7 @@ describe("buildReportPlan", () => {
   });
 
   it("rejects impossible resolved and planning calendar dates", () => {
+    const equipment = [identity("CH-01", "chiller", "Chiller 01")];
     const result = buildReportPlan({
       planId: "plan-invalid-calendar",
       spec: reportSpec(),
@@ -400,7 +499,8 @@ describe("buildReportPlan", () => {
       },
       plannedAt: "2026-02-30T08:00:00.000Z",
       assetRevision: "brick-model-sha256",
-      equipment: [identity("CH-01", "chiller", "Chiller 01")],
+      assetProvenance: assetProvenance(equipment),
+      equipment,
       profiles
     });
 

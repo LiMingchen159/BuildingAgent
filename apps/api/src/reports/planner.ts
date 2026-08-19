@@ -9,6 +9,7 @@ import {
   type PlannedMetricRequest,
   type PlannedAnalysisRequest,
   type ReportEvidencePlan,
+  type ReportAssetProvenance,
   type ReportPlan,
   type ReportPlanSection,
   type ReportScope,
@@ -19,6 +20,7 @@ import {
   type ResolvedReportPeriod,
   deriveDeterministicEquipmentFullName,
   formatEquipmentDisplayName,
+  isEquipmentIdentifierOnlyName,
   isRfc3339Instant,
   sectionEnabled
 } from "./contracts.js";
@@ -34,6 +36,8 @@ export interface BuildReportPlanInput {
   resolvedSystemCharts?: ResolvedSystemChartConfig[];
   /** Revision/hash of the asset metadata used to resolve equipment names. */
   assetRevision: string;
+  /** Source/rule manifest returned by the same asset resolver revision. */
+  assetProvenance: ReportAssetProvenance;
 }
 
 const naturalIdOrder = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
@@ -48,8 +52,8 @@ function issue(path: string, code: string, message: string): ReportValidationIss
   return { path, code, message };
 }
 
-function nonEmpty(value: string): boolean {
-  return value.trim().length > 0;
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function duplicates(values: string[]): string[] {
@@ -98,6 +102,9 @@ function validateEquipment(
     if (!nonEmpty(item.equipmentId)) {
       issues.push(issue(`equipment[${index}].equipmentId`, "required", "Equipment ID is required."));
     }
+    if (!nonEmpty(item.shortIdentifier)) {
+      issues.push(issue(`equipment[${index}].shortIdentifier`, "required", "Equipment short identifier is required."));
+    }
     if (!nonEmpty(item.equipmentType)) {
       issues.push(issue(`equipment[${index}].equipmentType`, "required", "Equipment type is required."));
     }
@@ -110,8 +117,16 @@ function validateEquipment(
     if (!["semantic_model", "project_metadata", "bms_metadata", "deterministic_fallback"].includes(item.nameSource)) {
       issues.push(issue(`equipment[${index}].nameSource`, "invalid_value", "Equipment name source is invalid."));
     }
-    if (item.nameSource === "deterministic_fallback") {
-      const expectedFullName = deriveDeterministicEquipmentFullName(item.equipmentId, item.equipmentType);
+    const canonicalShortIdentifier = nonEmpty(item.shortIdentifier)
+      ? item.shortIdentifier
+      : item.equipmentId;
+    if (
+      item.nameSource === "deterministic_fallback"
+      && nonEmpty(canonicalShortIdentifier)
+      && nonEmpty(item.equipmentType)
+      && nonEmpty(item.equipmentId)
+    ) {
+      const expectedFullName = deriveDeterministicEquipmentFullName(canonicalShortIdentifier, item.equipmentType);
       if (item.fullName !== expectedFullName) {
         issues.push(issue(
           `equipment[${index}].fullName`,
@@ -119,7 +134,7 @@ function validateEquipment(
           `Fallback equipment name must be derived as ${expectedFullName}.`
         ));
       }
-      const expectedSourceRef = `fallback:${item.equipmentType}:${item.equipmentId}`;
+      const expectedSourceRef = `fallback:${item.equipmentType}:${item.equipmentId}:short=${canonicalShortIdentifier}`;
       if (item.nameSourceRef !== expectedSourceRef) {
         issues.push(issue(
           `equipment[${index}].nameSourceRef`,
@@ -127,18 +142,152 @@ function validateEquipment(
           `Fallback name source reference must be ${expectedSourceRef}.`
         ));
       }
-    }
-    const expectedDisplayName = formatEquipmentDisplayName(item.equipmentId, item.fullName);
-    if (item.displayName !== expectedDisplayName) {
+    } else if (
+      nonEmpty(item.fullName)
+      && nonEmpty(item.equipmentId)
+      && nonEmpty(canonicalShortIdentifier)
+      && isEquipmentIdentifierOnlyName(item.fullName, item.equipmentId, canonicalShortIdentifier)
+    ) {
       issues.push(issue(
-        `equipment[${index}].displayName`,
-        "noncanonical_name",
-        `Equipment display name must be derived as ${expectedDisplayName}.`
+        `equipment[${index}].fullName`,
+        "identifier_only_name",
+        "Equipment full name must be descriptive rather than a copy of its identifier."
       ));
+    }
+    if (nonEmpty(canonicalShortIdentifier) && nonEmpty(item.fullName)) {
+      const expectedDisplayName = formatEquipmentDisplayName(canonicalShortIdentifier, item.fullName);
+      if (item.displayName !== expectedDisplayName) {
+        issues.push(issue(
+          `equipment[${index}].displayName`,
+          "noncanonical_name",
+          `Equipment display name must be derived as ${expectedDisplayName}.`
+        ));
+      }
     }
   }
   for (const equipmentId of duplicates(equipment.map((item) => item.equipmentId))) {
     issues.push(issue("equipment", "duplicate_equipment", `Equipment ID ${equipmentId} appears more than once.`));
+  }
+}
+
+function validateAssetProvenance(
+  provenance: ReportAssetProvenance | undefined,
+  equipment: EquipmentIdentity[],
+  profilesByType: Map<string, EquipmentProfile>,
+  issues: ReportValidationIssue[]
+): void {
+  if (!provenance || typeof provenance !== "object") {
+    issues.push(issue("assetProvenance", "required", "Asset provenance is required."));
+    return;
+  }
+  if (!Number.isInteger(provenance.resolverVersion) || provenance.resolverVersion < 1) {
+    issues.push(issue("assetProvenance.resolverVersion", "invalid_value", "Asset resolver version must be positive."));
+  }
+  if (!Array.isArray(provenance.sources) || provenance.sources.length === 0) {
+    issues.push(issue("assetProvenance.sources", "required", "At least one asset source revision is required."));
+  }
+  const sourceKeys = new Set<string>();
+  const provenanceSources = Array.isArray(provenance.sources) ? provenance.sources : [];
+  for (const [index, source] of provenanceSources.entries()) {
+    const path = `assetProvenance.sources[${index}]`;
+    if (!nonEmpty(source.sourceKind) || !["semantic_model", "project_metadata", "bms_metadata"].includes(source.sourceKind)) {
+      issues.push(issue(`${path}.sourceKind`, "invalid_value", "Asset source kind is invalid."));
+    }
+    if (!nonEmpty(source.sourceId)) issues.push(issue(`${path}.sourceId`, "required", "Asset source ID is required."));
+    if (!nonEmpty(source.sourceRevision)) {
+      issues.push(issue(`${path}.sourceRevision`, "required", "Asset source revision is required."));
+    }
+    const key = `${source.sourceKind}\u0000${source.sourceId}`;
+    if (sourceKeys.has(key)) issues.push(issue(path, "duplicate_source", "Asset source is duplicated."));
+    sourceKeys.add(key);
+  }
+  if (!Array.isArray(provenance.equipment)) {
+    issues.push(issue("assetProvenance.equipment", "invalid_type", "Asset equipment provenance must be an array."));
+    return;
+  }
+  const provenanceById = new Map<string, ReportAssetProvenance["equipment"][number]>();
+  for (const [index, entry] of provenance.equipment.entries()) {
+    const path = `assetProvenance.equipment[${index}]`;
+    if (!nonEmpty(entry.equipmentId)) issues.push(issue(`${path}.equipmentId`, "required", "Equipment ID is required."));
+    if (provenanceById.has(entry.equipmentId)) {
+      issues.push(issue(`${path}.equipmentId`, "duplicate_equipment", `Equipment ${entry.equipmentId} provenance is duplicated.`));
+    }
+    provenanceById.set(entry.equipmentId, entry);
+    if (!entry.resolvedIdentity || typeof entry.resolvedIdentity !== "object") {
+      issues.push(issue(`${path}.resolvedIdentity`, "required", "Resolved equipment identity is required."));
+    } else if (entry.resolvedIdentity.equipmentId !== entry.equipmentId) {
+      issues.push(issue(
+        `${path}.resolvedIdentity.equipmentId`,
+        "equipment_mismatch",
+        "Resolved identity must match the provenance equipment ID."
+      ));
+    }
+    if (!nonEmpty(entry.profileId)) issues.push(issue(`${path}.profileId`, "required", "Profile ID is required."));
+    if (!Number.isInteger(entry.profileVersion) || entry.profileVersion < 1) {
+      issues.push(issue(`${path}.profileVersion`, "invalid_value", "Profile version must be positive."));
+    }
+    if (!Array.isArray(entry.classificationRuleRefs) || entry.classificationRuleRefs.length === 0) {
+      issues.push(issue(`${path}.classificationRuleRefs`, "required", "Classification rule provenance is required."));
+    }
+    if (!Array.isArray(entry.sources) || entry.sources.length === 0) {
+      issues.push(issue(`${path}.sources`, "required", "Equipment source provenance is required."));
+      continue;
+    }
+    for (const [sourceIndex, source] of entry.sources.entries()) {
+      const sourcePath = `${path}.sources[${sourceIndex}]`;
+      if (!sourceKeys.has(`${source.sourceKind}\u0000${source.sourceId}`)) {
+        issues.push(issue(sourcePath, "source_not_in_manifest", "Equipment source is absent from the source manifest."));
+      }
+      if (!nonEmpty(source.sourceRef)) issues.push(issue(`${sourcePath}.sourceRef`, "required", "Equipment source reference is required."));
+      if (!Array.isArray(source.sourceTypes)) {
+        issues.push(issue(`${sourcePath}.sourceTypes`, "invalid_type", "Equipment source types must be an array."));
+      }
+    }
+  }
+  for (const item of equipment) {
+    const entry = provenanceById.get(item.equipmentId);
+    if (!entry) {
+      issues.push(issue(
+        "assetProvenance.equipment",
+        "equipment_provenance_not_found",
+        `Equipment ${item.equipmentId} has no asset provenance.`
+      ));
+      continue;
+    }
+    const identityFields: Array<keyof EquipmentIdentity> = [
+      "equipmentId",
+      "shortIdentifier",
+      "equipmentType",
+      "fullName",
+      "displayName",
+      "nameSource",
+      "nameSourceRef"
+    ];
+    if (identityFields.some((field) => entry.resolvedIdentity?.[field] !== item[field])) {
+      issues.push(issue(
+        `assetProvenance.equipment.${item.equipmentId}.resolvedIdentity`,
+        "identity_provenance_mismatch",
+        `Equipment ${item.equipmentId} identity does not match its resolver provenance.`
+      ));
+    }
+    if (
+      item.nameSource !== "deterministic_fallback"
+      && !entry.sources.some((source) => source.sourceKind === item.nameSource && source.sourceRef === item.nameSourceRef)
+    ) {
+      issues.push(issue(
+        `assetProvenance.equipment.${item.equipmentId}`,
+        "name_source_not_found",
+        `Equipment ${item.equipmentId} name source is absent from its provenance.`
+      ));
+    }
+    const profile = profilesByType.get(item.equipmentType);
+    if (profile && (entry.profileId !== profile.profileId || entry.profileVersion !== profile.version)) {
+      issues.push(issue(
+        `assetProvenance.equipment.${item.equipmentId}`,
+        "profile_provenance_mismatch",
+        `Equipment ${item.equipmentId} profile does not match its provenance.`
+      ));
+    }
   }
 }
 
@@ -612,6 +761,7 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
   const requireEquipment = sectionEnabled(input.spec.sections, "equipment_analysis")
     || sectionEnabled(input.spec.sections, "fault_summary");
   const equipment = selectedEquipment(input.spec, input.equipment, requireEquipment, issues);
+  validateAssetProvenance(input.assetProvenance, equipment, profilesByType, issues);
   const groups = buildGroups(
     equipment,
     profilesByType,
@@ -627,6 +777,11 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
     requests: planAnalysis(input.spec, groups, profilesByType, evidence, issues)
   };
   if (issues.length > 0) return { ok: false, issues };
+  const selectedEquipmentIds = new Set(equipment.map((item) => item.equipmentId));
+  const assetProvenance = structuredClone(input.assetProvenance);
+  assetProvenance.equipment = assetProvenance.equipment.filter((entry) => (
+    selectedEquipmentIds.has(entry.equipmentId)
+  ));
   const plan: ReportPlan = {
     schemaVersion: REPORT_PLAN_SCHEMA_VERSION,
     planId: input.planId.trim(),
@@ -642,7 +797,8 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
     sections,
     evidence,
     analysis,
-    assetRevision: input.assetRevision.trim()
+    assetRevision: input.assetRevision.trim(),
+    assetProvenance
   };
   return { ok: true, value: plan };
 }

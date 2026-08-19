@@ -1,6 +1,6 @@
 export const REPORT_SPEC_SCHEMA_VERSION = 1 as const;
-export const REPORT_PLAN_SCHEMA_VERSION = 1 as const;
-export const EVIDENCE_PACKAGE_SCHEMA_VERSION = 1 as const;
+export const REPORT_PLAN_SCHEMA_VERSION = 2 as const;
+export const EVIDENCE_PACKAGE_SCHEMA_VERSION = 2 as const;
 
 export const REPORT_WEEKDAYS = [
   "monday",
@@ -81,6 +81,7 @@ export type EquipmentSelection =
     }
   | {
       mode: "selected";
+      /** Stable project/semantic keys; UI labels must use EquipmentIdentity.shortIdentifier. */
       equipmentIds: string[];
     };
 
@@ -104,11 +105,16 @@ export type EquipmentNameSource =
   | "bms_metadata"
   | "deterministic_fallback";
 
+export type ReportAssetSourceKind = Exclude<EquipmentNameSource, "deterministic_fallback">;
+
 export interface EquipmentIdentity {
+  /** Stable project/semantic key used to join KPI, plot, and FDD results. */
   equipmentId: string;
+  /** Human-facing short code retained separately from the stable project key. */
+  shortIdentifier: string;
   equipmentType: string;
   fullName: string;
-  /** Always derived by code from equipmentId and fullName. */
+  /** Always derived by code from shortIdentifier and fullName. */
   displayName: string;
   /** LLM is intentionally not an accepted source kind. */
   nameSource: EquipmentNameSource;
@@ -116,8 +122,42 @@ export interface EquipmentIdentity {
   nameSourceRef: string;
 }
 
+export interface ReportAssetSourceReference {
+  sourceKind: ReportAssetSourceKind;
+  sourceId: string;
+  sourceRevision: string;
+}
+
+export interface ReportEquipmentSourceReference {
+  sourceKind: ReportAssetSourceKind;
+  sourceId: string;
+  sourceRef: string;
+  sourceTypes: string[];
+  shortIdentifier?: string;
+  fullName?: string;
+}
+
+export interface ReportEquipmentAssetProvenance {
+  equipmentId: string;
+  /** Canonical identity chosen by the deterministic resolver for planner consistency checks. */
+  resolvedIdentity: EquipmentIdentity;
+  profileId: string;
+  profileVersion: number;
+  classificationRuleRefs: string[];
+  sources: ReportEquipmentSourceReference[];
+}
+
+/** Reproducible source/rule manifest retained with every planned report. */
+export interface ReportAssetProvenance {
+  resolverVersion: number;
+  sources: ReportAssetSourceReference[];
+  equipment: ReportEquipmentAssetProvenance[];
+}
+
 interface EquipmentIdentityInputBase {
   equipmentId: string;
+  /** Defaults to equipmentId when the source has no separate human-facing code. */
+  shortIdentifier?: string;
   equipmentType: string;
 }
 
@@ -604,6 +644,8 @@ export interface ReportPlan {
   analysis: ReportAnalysisPlan;
   /** Required snapshot/hash of the authoritative asset metadata used for names. */
   assetRevision: string;
+  /** Source revisions, entity URIs, and classification rules behind selected equipment. */
+  assetProvenance: ReportAssetProvenance;
 }
 
 export interface ReportValidationIssue {
@@ -920,20 +962,39 @@ export function parseReportSpec(value: unknown): ReportValidationResult<ReportSp
   };
 }
 
-export function formatEquipmentDisplayName(equipmentId: string, fullName: string): string {
-  return `${equipmentId.trim()} — ${fullName.trim()}`;
+export function formatEquipmentDisplayName(shortIdentifier: string, fullName: string): string {
+  return `${shortIdentifier.trim()} — ${fullName.trim()}`;
+}
+
+function normalizedEquipmentIdentifier(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("en")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/** True when a purported full name is only a punctuation/case variant of an equipment code. */
+export function isEquipmentIdentifierOnlyName(
+  fullName: string,
+  equipmentId: string,
+  shortIdentifier: string = equipmentId
+): boolean {
+  const candidate = normalizedEquipmentIdentifier(fullName);
+  if (!candidate) return false;
+  return candidate === normalizedEquipmentIdentifier(equipmentId)
+    || candidate === normalizedEquipmentIdentifier(shortIdentifier);
 }
 
 function equipmentTypeLabel(equipmentType: string): string {
   const knownLabels: Record<string, string> = {
-    ahu: "AHU",
+    ahu: "Air Handling Unit",
     boiler: "Boiler",
     chiller: "Chiller",
     chilled_water_pump: "Chilled Water Pump",
     condenser_water_pump: "Condenser Water Pump",
     cooling_tower: "Cooling Tower",
-    fcu: "FCU",
-    vav: "VAV"
+    fcu: "Fan Coil Unit",
+    vav: "Variable Air Volume Box"
   };
   return knownLabels[equipmentType]
     ?? equipmentType
@@ -944,11 +1005,11 @@ function equipmentTypeLabel(equipmentType: string): string {
 }
 
 /** Derive the only permitted fallback name when authoritative project metadata has no name. */
-export function deriveDeterministicEquipmentFullName(equipmentId: string, equipmentType: string): string {
-  const numericSuffix = /(\d+)(?!.*\d)/.exec(equipmentId)?.[1];
+export function deriveDeterministicEquipmentFullName(shortIdentifier: string, equipmentType: string): string {
+  const numericSuffix = /(\d+)(?!.*\d)/.exec(shortIdentifier)?.[1];
   return numericSuffix
     ? `${equipmentTypeLabel(equipmentType)} ${numericSuffix}`
-    : `${equipmentTypeLabel(equipmentType)} ${equipmentId}`;
+    : `${equipmentTypeLabel(equipmentType)} ${shortIdentifier}`;
 }
 
 /**
@@ -960,6 +1021,9 @@ export function createEquipmentIdentity(
 ): ReportValidationResult<EquipmentIdentity> {
   const issues: ReportValidationIssue[] = [];
   const equipmentId = requiredString(input.equipmentId, "equipmentId", issues);
+  const shortIdentifier = input.shortIdentifier === undefined
+    ? equipmentId
+    : requiredString(input.shortIdentifier, "shortIdentifier", issues);
   const equipmentType = requiredString(input.equipmentType, "equipmentType", issues);
   const allowedSources: EquipmentNameSource[] = [
     "semantic_model",
@@ -971,19 +1035,31 @@ export function createEquipmentIdentity(
     issues.push({ path: "nameSource", code: "invalid_value", message: "Equipment name source must be deterministic project metadata." });
   }
   const fullName = input.nameSource === "deterministic_fallback"
-    ? deriveDeterministicEquipmentFullName(equipmentId, equipmentType)
+    ? deriveDeterministicEquipmentFullName(shortIdentifier, equipmentType)
     : requiredString((input as { fullName?: unknown }).fullName, "fullName", issues);
+  if (
+    input.nameSource !== "deterministic_fallback"
+    && fullName
+    && isEquipmentIdentifierOnlyName(fullName, equipmentId, shortIdentifier)
+  ) {
+    issues.push({
+      path: "fullName",
+      code: "identifier_only_name",
+      message: "Equipment full name must be descriptive rather than a copy of its identifier."
+    });
+  }
   const nameSourceRef = input.nameSource === "deterministic_fallback"
-    ? `fallback:${equipmentType}:${equipmentId}`
+    ? `fallback:${equipmentType}:${equipmentId}:short=${shortIdentifier}`
     : requiredString((input as { nameSourceRef?: unknown }).nameSourceRef, "nameSourceRef", issues);
   if (issues.length > 0) return { ok: false, issues };
   return {
     ok: true,
     value: {
       equipmentId,
+      shortIdentifier,
       equipmentType,
       fullName,
-      displayName: formatEquipmentDisplayName(equipmentId, fullName),
+      displayName: formatEquipmentDisplayName(shortIdentifier, fullName),
       nameSource: input.nameSource,
       nameSourceRef
     }
