@@ -4,6 +4,7 @@ export const EVIDENCE_PACKAGE_SCHEMA_VERSION = 3 as const;
 export const ANALYSIS_PACKAGE_SCHEMA_VERSION = 1 as const;
 export const ANALYSIS_TOOL_INPUT_SCHEMA_VERSION = 1 as const;
 export const ANALYSIS_TOOL_DRAFT_SCHEMA_VERSION = 1 as const;
+export const REPORT_DOCUMENT_SCHEMA_VERSION = 1 as const;
 
 export const REPORT_WEEKDAYS = [
   "monday",
@@ -745,6 +746,8 @@ export interface DashboardBlock extends ReportBlockBase {
 export interface FaultBlock extends ReportBlockBase {
   kind: "fault";
   title: string;
+  /** Planned scan requests retain zero-fault versus unavailable coverage semantics. */
+  faultRequestIds: string[];
   faultEventIds: string[];
 }
 
@@ -758,6 +761,7 @@ export interface SectionBlock extends ReportBlockBase {
   kind: "section";
   title: string;
   level: 1 | 2 | 3;
+  numbering: "unnumbered" | "numbered" | "appendix";
   blocks: ReportBlock[];
 }
 
@@ -777,6 +781,31 @@ export type ReportBlock =
   | AnalysisBlock
   | SectionBlock
   | PageBreakBlock;
+
+export interface ReportAssemblerProvenance {
+  assemblerId: string;
+  assemblerVersion: string;
+}
+
+/** Renderer-neutral document bound to the exact validated planning and fact packages. */
+export interface ReportDocument {
+  schemaVersion: typeof REPORT_DOCUMENT_SCHEMA_VERSION;
+  documentId: string;
+  planId: string;
+  planRevision: string;
+  projectId: string;
+  assetRevision: string;
+  period: ResolvedReportPeriod;
+  evidencePackageId: string;
+  evidencePackageRevision: string;
+  analysisPackageId: string;
+  analysisPackageRevision: string;
+  definitionsRevision: string;
+  generatedAt: string;
+  assembler: ReportAssemblerProvenance;
+  revisionHash: string;
+  blocks: ReportBlock[];
+}
 
 export type ReportPlanSection =
   | { kind: "cover" }
