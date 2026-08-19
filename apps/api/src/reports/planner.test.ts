@@ -8,6 +8,7 @@ import {
   type ReportSpec
 } from "./contracts.js";
 import { buildReportPlan } from "./planner.js";
+import { evidenceDefinitionsFixture } from "./evidenceTestFixtures.js";
 
 const profiles: EquipmentProfile[] = [
   {
@@ -126,6 +127,11 @@ function plan(
     assetProvenance: provenance,
     equipment,
     profiles: profileSet,
+    evidenceDefinitions: evidenceDefinitionsFixture(profileSet),
+    resolvedDashboards: spec.dashboardIds.map((dashboardId) => ({
+      dashboardId,
+      dashboardRevision: `fixture-revision:${dashboardId}`
+    })),
     resolvedSystemCharts: [
       { chartKey: "cooling_demand", metricKeys: ["cooling_energy"] },
       { chartKey: "energy_consumption", metricKeys: ["electricity"] },
@@ -216,7 +222,7 @@ describe("buildReportPlan", () => {
       fleetMetricKeys: ["runtime"],
       fleetChartKeys: ["fleet_temperature_comparison"],
       metricKeys: ["runtime", "supply_air_temperature"],
-      chartKeys: ["temperature_trend"],
+      chartKeys: ["supply_air_temperature_trend"],
       analysis: { performance: true, faultDiagnosis: false },
       order: 30
     };
@@ -291,7 +297,12 @@ describe("buildReportPlan", () => {
       assetRevision: "brick-model-sha256",
       assetProvenance: assetProvenance(equipment),
       equipment,
-      profiles
+      profiles,
+      evidenceDefinitions: evidenceDefinitionsFixture(profiles),
+      resolvedDashboards: [
+        { dashboardId: "plant_overview", dashboardRevision: "fixture-revision:plant_overview" },
+        { dashboardId: "energy_dashboard", dashboardRevision: "fixture-revision:energy_dashboard" }
+      ]
     });
 
     expect(result.ok).toBe(false);
@@ -501,7 +512,12 @@ describe("buildReportPlan", () => {
       assetRevision: "brick-model-sha256",
       assetProvenance: assetProvenance(equipment),
       equipment,
-      profiles
+      profiles,
+      evidenceDefinitions: evidenceDefinitionsFixture(profiles),
+      resolvedDashboards: [
+        { dashboardId: "plant_overview", dashboardRevision: "fixture-revision:plant_overview" },
+        { dashboardId: "energy_dashboard", dashboardRevision: "fixture-revision:energy_dashboard" }
+      ]
     });
 
     expect(result).toMatchObject({

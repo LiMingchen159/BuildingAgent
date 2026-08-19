@@ -12,6 +12,7 @@ import {
   type ReportSpec
 } from "./contracts.js";
 import { buildReportPlan } from "./planner.js";
+import { evidenceDefinitionsFixture } from "./evidenceTestFixtures.js";
 import {
   BRICK_NAMESPACE,
   type EquipmentProfileRegistration
@@ -174,6 +175,7 @@ describe("project report asset discovery", () => {
       plannedAt: "2026-08-17T00:05:00.000Z",
       equipment: assets.value.equipment,
       profiles: assets.value.profiles,
+      evidenceDefinitions: evidenceDefinitionsFixture(assets.value.profiles),
       assetRevision: assets.value.assetRevision,
       assetProvenance: assets.value.assetProvenance
     });
