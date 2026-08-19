@@ -79,12 +79,12 @@ This permission is scoped to M008 report work; it is not permission for unrelate
 The active authorization for this branch is:
 
 - Milestone: `M008 - Generic recurring building performance reports`
-- Issue: `[M008-S2] Resolve report equipment from authoritative project metadata`
-- GitHub issue: `#197`
-- Branch: `m008-s2-resolve-report-assets`
-- Scope: `AGENTS.md`, deterministic report asset discovery, authoritative equipment-name resolution, equipment profile classification modules under `apps/api/src/reports/**`, and their directly corresponding tests
+- Issue: `[M008-S3] Execute deterministic report evidence`
+- GitHub issue: `#199`
+- Branch: `m008-s3-execute-report-evidence`
+- Scope: `AGENTS.md`, deterministic report evidence orchestration and thin KPI/dashboard/plot/FDD adapter modules under `apps/api/src/reports/**`, and their directly corresponding tests
 
-KPI/dashboard/plot/FDD execution, EvidencePackage assembly, B-Agent calls, persistence, scheduling, UI integration, LaTeX/PDF rendering, and deployment changes are outside M008-S2 and require later issues and branches.
+B-Agent calls, ReportBlock assembly, report persistence, API routes, scheduling, UI integration, LaTeX/PDF rendering, deployment changes, and modifications to unrelated KPI/dashboard/FDD infrastructure are outside M008-S3 and require later issues and branches.
 
 For every implementation issue:
 

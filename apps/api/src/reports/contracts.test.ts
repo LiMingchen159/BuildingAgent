@@ -357,11 +357,62 @@ describe("evidence and renderer-neutral contracts", () => {
       schemaVersion: EVIDENCE_PACKAGE_SCHEMA_VERSION,
       packageId: "evidence-equipment-ch-01",
       planId: "plan-week-23",
+      planRevision: "sha256:plan-fixture",
       projectId: "project_element",
-      scope: equipmentScope,
+      assetRevision: "sha256:asset-fixture",
+      equipment: [equipmentResult.value],
       period,
       generatedAt: "2026-06-08T00:05:00.000Z",
       revisionHash: "sha256:fixture",
+      executions: [
+        {
+          requestId: "request-metric-cop-01",
+          requestKind: "metric",
+          status: "complete",
+          resultIds: [metric.resultId],
+          evidence: [evidence],
+          provenance: {
+            producerKind: "derived_metric",
+            producerId: "fixture-metric-tool",
+            producerVersion: "1",
+            definition: { definitionId: "metric:plant_cop", definitionVersion: "1" },
+            queryHash: "sha256:metric-query",
+            inputEvidenceIds: []
+          }
+        },
+        {
+          requestId: "request-chart-cop-01",
+          requestKind: "chart",
+          status: "no_data",
+          resultIds: [chart.resultId],
+          reasonCode: "no_samples",
+          message: "No samples in the selected period.",
+          evidence: [evidence],
+          provenance: {
+            producerKind: "plot_tool",
+            producerId: "fixture-plot-tool",
+            producerVersion: "1",
+            definition: { definitionId: "chart:cop_trend", definitionVersion: "1" },
+            queryHash: "sha256:chart-query",
+            inputEvidenceIds: [evidence.evidenceId]
+          }
+        },
+        {
+          requestId: "request-fault-ch-01",
+          requestKind: "fault",
+          status: "complete",
+          resultIds: [fault.eventId],
+          evidence: fault.evidence,
+          provenance: {
+            producerKind: "fdd_rule",
+            producerId: "fixture-fdd-tool",
+            producerVersion: "1",
+            definition: { definitionId: "fdd:chiller", definitionVersion: "1" },
+            queryHash: "sha256:fault-query",
+            inputEvidenceIds: []
+          }
+        }
+      ],
       metricResults: [metric],
       chartResults: [chart],
       dashboardResults: [],

@@ -1,6 +1,6 @@
 export const REPORT_SPEC_SCHEMA_VERSION = 1 as const;
-export const REPORT_PLAN_SCHEMA_VERSION = 2 as const;
-export const EVIDENCE_PACKAGE_SCHEMA_VERSION = 2 as const;
+export const REPORT_PLAN_SCHEMA_VERSION = 3 as const;
+export const EVIDENCE_PACKAGE_SCHEMA_VERSION = 3 as const;
 
 export const REPORT_WEEKDAYS = [
   "monday",
@@ -195,6 +195,16 @@ export interface ResolvedSystemChartConfig {
   metricKeys: string[];
 }
 
+export interface EvidenceDefinitionReference {
+  definitionId: string;
+  definitionVersion: string;
+}
+
+export interface ResolvedDashboardConfig {
+  dashboardId: string;
+  dashboardRevision: string;
+}
+
 /** A resolved half-open reporting interval: [startAt, endAt). */
 export interface ResolvedReportPeriod {
   startAt: string;
@@ -359,21 +369,77 @@ export type FaultEvent = ActiveFaultEvent | ResolvedFaultEvent;
 
 export interface DataQualityIssue {
   issueId: string;
+  requestId?: string;
   severity: "info" | "warning" | "error";
   code: string;
   message: string;
   evidence: EvidenceReference[];
 }
 
+export const EVIDENCE_PRODUCER_KINDS = [
+  "bms_timeseries",
+  "derived_metric",
+  "calculation",
+  "plot_tool",
+  "dashboard_renderer",
+  "fdd_rule"
+] as const;
+
+export type EvidenceProducerKind = (typeof EVIDENCE_PRODUCER_KINDS)[number];
+
+export interface EvidenceToolProvenance {
+  producerKind: EvidenceProducerKind;
+  producerId: string;
+  producerVersion: string;
+  definition: EvidenceDefinitionReference;
+  queryHash: string;
+  inputEvidenceIds: string[];
+  sourceRevision?: string;
+}
+
+interface EvidenceExecutionRecordBase {
+  requestId: string;
+  requestKind: "metric" | "chart" | "dashboard" | "fault";
+  resultIds: string[];
+  /** Every provenance input ID must resolve to one of these typed references. */
+  evidence: EvidenceReference[];
+  provenance: EvidenceToolProvenance;
+}
+
+export interface CompleteEvidenceExecutionRecord extends EvidenceExecutionRecordBase {
+  status: "complete";
+}
+
+export interface NoDataEvidenceExecutionRecord extends EvidenceExecutionRecordBase {
+  status: "no_data";
+  reasonCode: string;
+  message: string;
+}
+
+export interface ErrorEvidenceExecutionRecord extends EvidenceExecutionRecordBase {
+  status: "error";
+  errorCode: string;
+  message: string;
+  retryable: boolean;
+}
+
+export type EvidenceExecutionRecord =
+  | CompleteEvidenceExecutionRecord
+  | NoDataEvidenceExecutionRecord
+  | ErrorEvidenceExecutionRecord;
+
 export interface EvidencePackage {
   schemaVersion: typeof EVIDENCE_PACKAGE_SCHEMA_VERSION;
   packageId: string;
   planId: string;
+  planRevision: string;
   projectId: string;
-  scope: ReportScope;
+  assetRevision: string;
+  equipment: EquipmentIdentity[];
   period: ResolvedReportPeriod;
   generatedAt: string;
   revisionHash: string;
+  executions: EvidenceExecutionRecord[];
   metricResults: MetricResult[];
   chartResults: ChartResult[];
   dashboardResults: DashboardResult[];
@@ -572,6 +638,7 @@ export interface PlannedMetricRequest {
   metricKey: string;
   scope: ReportScope;
   profileId?: string;
+  definition: EvidenceDefinitionReference;
 }
 
 export type PlannedChartRequest =
@@ -582,6 +649,7 @@ export type PlannedChartRequest =
       scope: { kind: "system" };
       metricKeys: string[];
       inputMetricRequestIds: string[];
+      definition: EvidenceDefinitionReference;
     }
   | {
       requestId: string;
@@ -589,6 +657,7 @@ export type PlannedChartRequest =
       chartKey: "fault_distribution" | "fault_timeline";
       scope: { kind: "system" };
       inputFaultRequestIds: string[];
+      definition: EvidenceDefinitionReference;
     }
   | {
       requestId: string;
@@ -596,20 +665,26 @@ export type PlannedChartRequest =
       chartKey: string;
       scope: Extract<ReportScope, { kind: "fleet" | "equipment" }>;
       profileId: string;
+      inputMetricRequestIds: string[];
+      definition: EvidenceDefinitionReference;
     };
 
 export interface PlannedDashboardRequest {
   requestId: string;
   dashboardId: string;
+  dashboardRevision: string;
+  definition: EvidenceDefinitionReference;
 }
 
 export interface PlannedFaultRequest {
   requestId: string;
   equipmentId: string;
   equipmentType: string;
+  definition: EvidenceDefinitionReference;
 }
 
 export interface ReportEvidencePlan {
+  definitionsRevision: string;
   metrics: PlannedMetricRequest[];
   charts: PlannedChartRequest[];
   dashboards: PlannedDashboardRequest[];

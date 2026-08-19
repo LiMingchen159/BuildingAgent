@@ -14,6 +14,7 @@ import {
   type ReportPlanSection,
   type ReportScope,
   type ReportSpec,
+  type ResolvedDashboardConfig,
   type ResolvedSystemChartConfig,
   type ReportValidationIssue,
   type ReportValidationResult,
@@ -24,6 +25,16 @@ import {
   isRfc3339Instant,
   sectionEnabled
 } from "./contracts.js";
+import {
+  definitionReference,
+  evidenceDefinitionRegistryRevision,
+  findChartDefinition,
+  findDashboardDefinition,
+  findFaultDefinition,
+  findMetricDefinition,
+  validateEvidenceDefinitionRegistry,
+  type EvidenceDefinitionRegistry
+} from "./evidenceDefinitions.js";
 
 export interface BuildReportPlanInput {
   planId: string;
@@ -34,6 +45,10 @@ export interface BuildReportPlanInput {
   profiles: EquipmentProfile[];
   /** Optional chart metadata resolved by deterministic KPI/plot registries. */
   resolvedSystemCharts?: ResolvedSystemChartConfig[];
+  /** Immutable dashboard content revisions selected for this report plan. */
+  resolvedDashboards?: ResolvedDashboardConfig[];
+  /** Versioned deterministic definitions used to pin every evidence request. */
+  evidenceDefinitions: EvidenceDefinitionRegistry;
   /** Revision/hash of the asset metadata used to resolve equipment names. */
   assetRevision: string;
   /** Source/rule manifest returned by the same asset resolver revision. */
@@ -462,75 +477,259 @@ function planSections(spec: ReportSpec, groups: EquipmentGroupPlan[]): ReportPla
   return sections;
 }
 
+function metricDefinitionFor(
+  registry: EvidenceDefinitionRegistry,
+  metricKey: string,
+  scopeKind: ReportScope["kind"],
+  path: string,
+  issues: ReportValidationIssue[]
+) {
+  const definition = findMetricDefinition(registry, metricKey, scopeKind);
+  if (!definition) {
+    issues.push(issue(
+      path,
+      "metric_definition_not_found",
+      `No deterministic ${scopeKind} metric definition exists for ${metricKey}.`
+    ));
+  }
+  return definition;
+}
+
+function chartDefinitionFor(
+  registry: EvidenceDefinitionRegistry,
+  chartKey: string,
+  scopeKind: ReportScope["kind"],
+  path: string,
+  issues: ReportValidationIssue[]
+) {
+  const definition = findChartDefinition(registry, chartKey, scopeKind);
+  if (!definition) {
+    issues.push(issue(
+      path,
+      "chart_definition_not_found",
+      `No deterministic ${scopeKind} chart definition exists for ${chartKey}.`
+    ));
+  }
+  return definition;
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  return left.length === right.length
+    && left.every((value) => right.includes(value))
+    && right.every((value) => left.includes(value));
+}
+
 function planEvidence(
   spec: ReportSpec,
   equipment: EquipmentIdentity[],
   groups: EquipmentGroupPlan[],
   profilesByType: Map<string, EquipmentProfile>,
-  resolvedSystemCharts: ResolvedSystemChartConfig[]
+  resolvedSystemCharts: ResolvedSystemChartConfig[],
+  resolvedDashboards: ResolvedDashboardConfig[],
+  definitions: EvidenceDefinitionRegistry,
+  issues: ReportValidationIssue[]
 ): ReportEvidencePlan {
   const metrics: PlannedMetricRequest[] = [];
   const charts: PlannedChartRequest[] = [];
   const dashboards: PlannedDashboardRequest[] = [];
   const faults: PlannedFaultRequest[] = [];
+  const definitionsRevision = evidenceDefinitionRegistryRevision(definitions);
 
   if (sectionEnabled(spec.sections, "system_performance")) {
     for (const metricKey of spec.kpiKeys) {
-      metrics.push({ requestId: requestId("metric", "system", metricKey), metricKey, scope: { kind: "system" } });
+      const definition = metricDefinitionFor(
+        definitions,
+        metricKey,
+        "system",
+        `spec.kpiKeys.${metricKey}`,
+        issues
+      );
+      if (!definition) continue;
+      metrics.push({
+        requestId: requestId("metric", "system", metricKey),
+        metricKey,
+        scope: { kind: "system" },
+        definition: definitionReference(definition)
+      });
     }
     const metricRequestsByKey = new Map(metrics.map((request) => [request.metricKey, request]));
     for (const chart of resolvedSystemCharts) {
+      const definition = chartDefinitionFor(
+        definitions,
+        chart.chartKey,
+        "system",
+        `resolvedSystemCharts.${chart.chartKey}`,
+        issues
+      );
+      const inputMetricRequests = chart.metricKeys
+        .map((metricKey) => metricRequestsByKey.get(metricKey))
+        .filter((request): request is PlannedMetricRequest => request !== undefined);
+      if (definition && (
+        definition.inputKind !== "metrics"
+        || !sameStringSet(definition.requiredMetricKeys, chart.metricKeys)
+      )) {
+        issues.push(issue(
+          `resolvedSystemCharts.${chart.chartKey}.metricKeys`,
+          "chart_input_mismatch",
+          `System chart ${chart.chartKey} inputs do not match its pinned definition.`
+        ));
+      }
+      if (
+        !definition
+        || definition.inputKind !== "metrics"
+        || inputMetricRequests.length !== chart.metricKeys.length
+        || !sameStringSet(definition.requiredMetricKeys, chart.metricKeys)
+      ) continue;
       charts.push({
         requestId: requestId("chart", "system", chart.chartKey),
         origin: "system_kpi",
         chartKey: chart.chartKey,
         scope: { kind: "system" },
         metricKeys: [...chart.metricKeys],
-        inputMetricRequestIds: chart.metricKeys.map((metricKey) => metricRequestsByKey.get(metricKey)!.requestId)
+        inputMetricRequestIds: inputMetricRequests.map((request) => request.requestId),
+        definition: definitionReference(definition)
       });
     }
   }
   if (sectionEnabled(spec.sections, "selected_dashboards")) {
+    const rendererDefinition = findDashboardDefinition(definitions);
+    if (!rendererDefinition) {
+      issues.push(issue(
+        "evidenceDefinitions.dashboards",
+        "dashboard_definition_not_found",
+        "No deterministic dashboard renderer definition exists."
+      ));
+    }
+    const revisionsById = new Map(resolvedDashboards.map((dashboard) => (
+      [dashboard.dashboardId, dashboard.dashboardRevision]
+    )));
     for (const dashboardId of spec.dashboardIds) {
-      dashboards.push({ requestId: requestId("dashboard", dashboardId), dashboardId });
+      const dashboardRevision = revisionsById.get(dashboardId);
+      if (!dashboardRevision) {
+        issues.push(issue(
+          `spec.dashboardIds.${dashboardId}`,
+          "dashboard_revision_not_found",
+          `Dashboard ${dashboardId} does not have a resolved revision.`
+        ));
+        continue;
+      }
+      if (!rendererDefinition) continue;
+      dashboards.push({
+        requestId: requestId("dashboard", dashboardId),
+        dashboardId,
+        dashboardRevision,
+        definition: definitionReference(rendererDefinition)
+      });
     }
   }
   if (sectionEnabled(spec.sections, "equipment_analysis")) {
     for (const group of groups) {
       const profile = profilesByType.get(group.equipmentType)!;
+      const fleetMetricRequests: PlannedMetricRequest[] = [];
       for (const metricKey of profile.fleetMetricKeys) {
-        metrics.push({
+        const definition = metricDefinitionFor(
+          definitions,
+          metricKey,
+          "fleet",
+          `profiles.${profile.profileId}.fleetMetricKeys.${metricKey}`,
+          issues
+        );
+        if (!definition) continue;
+        const request: PlannedMetricRequest = {
           requestId: requestId("metric", "fleet", group.equipmentType, metricKey),
           metricKey,
           scope: fleetScope(group.equipmentType),
-          profileId: profile.profileId
-        });
+          profileId: profile.profileId,
+          definition: definitionReference(definition)
+        };
+        metrics.push(request);
+        fleetMetricRequests.push(request);
       }
       for (const chartKey of profile.fleetChartKeys) {
+        const definition = chartDefinitionFor(
+          definitions,
+          chartKey,
+          "fleet",
+          `profiles.${profile.profileId}.fleetChartKeys.${chartKey}`,
+          issues
+        );
+        if (!definition) continue;
+        const inputMetricRequests = definition.requiredMetricKeys
+          .map((metricKey) => fleetMetricRequests.find((request) => request.metricKey === metricKey))
+          .filter((request): request is PlannedMetricRequest => request !== undefined);
+        if (
+          definition.inputKind !== "metrics"
+          || inputMetricRequests.length !== definition.requiredMetricKeys.length
+        ) {
+          issues.push(issue(
+            `profiles.${profile.profileId}.fleetChartKeys.${chartKey}`,
+            "chart_input_mismatch",
+            `Fleet chart ${chartKey} has unresolved metric inputs.`
+          ));
+          continue;
+        }
         charts.push({
           requestId: requestId("chart", "fleet", group.equipmentType, chartKey),
           origin: "equipment_profile",
           chartKey,
           scope: fleetScope(group.equipmentType),
-          profileId: profile.profileId
+          profileId: profile.profileId,
+          inputMetricRequestIds: inputMetricRequests.map((request) => request.requestId),
+          definition: definitionReference(definition)
         });
       }
       for (const item of group.equipment) {
+        const equipmentMetricRequests: PlannedMetricRequest[] = [];
         for (const metricKey of profile.metricKeys) {
-          metrics.push({
+          const definition = metricDefinitionFor(
+            definitions,
+            metricKey,
+            "equipment",
+            `profiles.${profile.profileId}.metricKeys.${metricKey}`,
+            issues
+          );
+          if (!definition) continue;
+          const request: PlannedMetricRequest = {
             requestId: requestId("metric", "equipment", item.equipmentId, metricKey),
             metricKey,
             scope: equipmentScope(item),
-            profileId: profile.profileId
-          });
+            profileId: profile.profileId,
+            definition: definitionReference(definition)
+          };
+          metrics.push(request);
+          equipmentMetricRequests.push(request);
         }
         for (const chartKey of profile.chartKeys) {
+          const definition = chartDefinitionFor(
+            definitions,
+            chartKey,
+            "equipment",
+            `profiles.${profile.profileId}.chartKeys.${chartKey}`,
+            issues
+          );
+          if (!definition) continue;
+          const inputMetricRequests = definition.requiredMetricKeys
+            .map((metricKey) => equipmentMetricRequests.find((request) => request.metricKey === metricKey))
+            .filter((request): request is PlannedMetricRequest => request !== undefined);
+          if (
+            definition.inputKind !== "metrics"
+            || inputMetricRequests.length !== definition.requiredMetricKeys.length
+          ) {
+            issues.push(issue(
+              `profiles.${profile.profileId}.chartKeys.${chartKey}`,
+              "chart_input_mismatch",
+              `Equipment chart ${chartKey} has unresolved metric inputs.`
+            ));
+            continue;
+          }
           charts.push({
             requestId: requestId("chart", "equipment", item.equipmentId, chartKey),
             origin: "equipment_profile",
             chartKey,
             scope: equipmentScope(item),
-            profileId: profile.profileId
+            profileId: profile.profileId,
+            inputMetricRequestIds: inputMetricRequests.map((request) => request.requestId),
+            definition: definitionReference(definition)
           });
         }
       }
@@ -541,32 +740,76 @@ function planEvidence(
     || sectionEnabled(spec.sections, "equipment_analysis")
   ) {
     for (const item of equipment) {
+      const definition = findFaultDefinition(definitions, item.equipmentType);
+      if (!definition) {
+        issues.push(issue(
+          `equipment.${item.equipmentId}.equipmentType`,
+          "fault_definition_not_found",
+          `No deterministic fault definition exists for ${item.equipmentType}.`
+        ));
+        continue;
+      }
       faults.push({
         requestId: requestId("fault", item.equipmentId),
         equipmentId: item.equipmentId,
-        equipmentType: item.equipmentType
+        equipmentType: item.equipmentType,
+        definition: definitionReference(definition)
       });
     }
   }
   if (sectionEnabled(spec.sections, "fault_summary")) {
-    charts.push(
-      {
+    const distributionDefinition = chartDefinitionFor(
+      definitions,
+      "fault_distribution",
+      "system",
+      "fault_summary.fault_distribution",
+      issues
+    );
+    const timelineDefinition = chartDefinitionFor(
+      definitions,
+      "fault_timeline",
+      "system",
+      "fault_summary.fault_timeline",
+      issues
+    );
+    if (distributionDefinition) {
+      if (distributionDefinition.inputKind !== "faults") {
+        issues.push(issue(
+          "fault_summary.fault_distribution",
+          "chart_input_mismatch",
+          "Fault distribution chart must consume fault evidence."
+        ));
+      } else {
+      charts.push({
         requestId: requestId("chart", "fault_summary", "distribution"),
         origin: "fault_summary",
         chartKey: "fault_distribution",
         scope: { kind: "system" },
-        inputFaultRequestIds: faults.map((request) => request.requestId)
-      },
-      {
+        inputFaultRequestIds: faults.map((request) => request.requestId),
+        definition: definitionReference(distributionDefinition)
+      });
+      }
+    }
+    if (timelineDefinition) {
+      if (timelineDefinition.inputKind !== "faults") {
+        issues.push(issue(
+          "fault_summary.fault_timeline",
+          "chart_input_mismatch",
+          "Fault timeline chart must consume fault evidence."
+        ));
+      } else {
+      charts.push({
         requestId: requestId("chart", "fault_summary", "timeline"),
         origin: "fault_summary",
         chartKey: "fault_timeline",
         scope: { kind: "system" },
-        inputFaultRequestIds: faults.map((request) => request.requestId)
+        inputFaultRequestIds: faults.map((request) => request.requestId),
+        definition: definitionReference(timelineDefinition)
+      });
       }
-    );
+    }
   }
-  return { metrics, charts, dashboards, faults };
+  return { definitionsRevision, metrics, charts, dashboards, faults };
 }
 
 function allEvidenceRequestIds(evidence: ReportEvidencePlan): string[] {
@@ -735,6 +978,9 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
   validateEquipment(input.equipment, issues);
   const profilesByType = validateProfiles(input.profiles, issues);
   const resolvedSystemCharts = input.resolvedSystemCharts ?? [];
+  const resolvedDashboards = input.resolvedDashboards ?? [];
+  const evidenceDefinitions = input.evidenceDefinitions;
+  issues.push(...validateEvidenceDefinitionRegistry(evidenceDefinitions));
   if (sectionEnabled(input.spec.sections, "system_performance")) {
     const selectedMetricKeys = new Set(input.spec.kpiKeys);
     for (const [index, chart] of resolvedSystemCharts.entries()) {
@@ -758,6 +1004,23 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
       issues.push(issue("resolvedSystemCharts", "duplicate", `System chart key ${chartKey} is duplicated.`));
     }
   }
+  if (sectionEnabled(input.spec.sections, "selected_dashboards")) {
+    for (const [index, dashboard] of resolvedDashboards.entries()) {
+      if (!nonEmpty(dashboard.dashboardId)) {
+        issues.push(issue(`resolvedDashboards[${index}].dashboardId`, "required", "Dashboard ID is required."));
+      }
+      if (!nonEmpty(dashboard.dashboardRevision)) {
+        issues.push(issue(
+          `resolvedDashboards[${index}].dashboardRevision`,
+          "required",
+          "Dashboard revision is required."
+        ));
+      }
+    }
+    for (const dashboardId of duplicates(resolvedDashboards.map((dashboard) => dashboard.dashboardId))) {
+      issues.push(issue("resolvedDashboards", "duplicate", `Dashboard ${dashboardId} is duplicated.`));
+    }
+  }
   const requireEquipment = sectionEnabled(input.spec.sections, "equipment_analysis")
     || sectionEnabled(input.spec.sections, "fault_summary");
   const equipment = selectedEquipment(input.spec, input.equipment, requireEquipment, issues);
@@ -772,7 +1035,17 @@ export function buildReportPlan(input: BuildReportPlanInput): ReportValidationRe
   if (issues.length > 0) return { ok: false, issues };
 
   const sections = planSections(input.spec, groups);
-  const evidence = planEvidence(input.spec, equipment, groups, profilesByType, resolvedSystemCharts);
+  const evidence = planEvidence(
+    input.spec,
+    equipment,
+    groups,
+    profilesByType,
+    resolvedSystemCharts,
+    resolvedDashboards,
+    evidenceDefinitions,
+    issues
+  );
+  if (issues.length > 0) return { ok: false, issues };
   const analysis = {
     requests: planAnalysis(input.spec, groups, profilesByType, evidence, issues)
   };
