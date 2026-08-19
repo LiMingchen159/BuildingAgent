@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  REPORT_PLAN_SCHEMA_VERSION,
   REPORT_SPEC_SCHEMA_VERSION,
   createEquipmentIdentity,
   type EquipmentIdentity,
@@ -8,6 +9,11 @@ import {
   type ReportSpec
 } from "./contracts.js";
 import { buildReportPlan } from "./planner.js";
+import {
+  DEFAULT_ANALYSIS_DEFINITION_REGISTRY,
+  analysisDefinitionRegistryRevision,
+  type AnalysisDefinitionRegistry
+} from "./analysisDefinitions.js";
 import { evidenceDefinitionsFixture } from "./evidenceTestFixtures.js";
 
 const profiles: EquipmentProfile[] = [
@@ -112,7 +118,8 @@ function plan(
   equipment: EquipmentIdentity[],
   spec = reportSpec(),
   profileSet = profiles,
-  provenance = assetProvenance(equipment, profileSet)
+  provenance = assetProvenance(equipment, profileSet),
+  analysisDefinitions: AnalysisDefinitionRegistry = DEFAULT_ANALYSIS_DEFINITION_REGISTRY
 ) {
   return buildReportPlan({
     planId: "plan-2026-w23",
@@ -128,6 +135,7 @@ function plan(
     equipment,
     profiles: profileSet,
     evidenceDefinitions: evidenceDefinitionsFixture(profileSet),
+    analysisDefinitions,
     resolvedDashboards: spec.dashboardIds.map((dashboardId) => ({
       dashboardId,
       dashboardRevision: `fixture-revision:${dashboardId}`
@@ -183,7 +191,35 @@ describe("buildReportPlan", () => {
       "energy_dashboard"
     ]);
     expect(result.value.analysis.requests).toHaveLength(36);
+    expect(Object.fromEntries([
+      "executive_summary",
+      "key_findings",
+      "fault_summary",
+      "fleet_performance",
+      "equipment_performance",
+      "fault_diagnosis",
+      "recommendations"
+    ].map((analysisKind) => [
+      analysisKind,
+      result.value.analysis.requests.filter((request) => request.analysisKind === analysisKind).length
+    ]))).toEqual({
+      executive_summary: 1,
+      key_findings: 1,
+      fault_summary: 1,
+      fleet_performance: 2,
+      equipment_performance: 10,
+      fault_diagnosis: 10,
+      recommendations: 11
+    });
+    expect(result.value.schemaVersion).toBe(REPORT_PLAN_SCHEMA_VERSION);
+    expect(result.value.analysis.definitionsRevision).toBe(
+      analysisDefinitionRegistryRevision(DEFAULT_ANALYSIS_DEFINITION_REGISTRY)
+    );
     expect(result.value.analysis.requests.every((request) => request.evidenceRequestIds.length > 0)).toBe(true);
+    expect(result.value.analysis.requests.every((request) => (
+      request.definition.definitionId.startsWith(`analysis:${request.analysisKind}:`)
+      && request.definition.definitionVersion === "1"
+    ))).toBe(true);
     expect(result.value.analysis.requests).toContainEqual(expect.objectContaining({
       analysisKind: "fault_summary",
       scope: { kind: "system" }
@@ -195,7 +231,7 @@ describe("buildReportPlan", () => {
     expect(result.value.analysis.requests).toContainEqual(expect.objectContaining({
       analysisKind: "recommendations",
       scope: { kind: "equipment", equipmentId: "CH-01", equipmentType: "chiller" },
-      condition: "when_actionable_evidence"
+      condition: "when_evidence_available"
     }));
     expect(result.value.evidence.charts).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -299,6 +335,7 @@ describe("buildReportPlan", () => {
       equipment,
       profiles,
       evidenceDefinitions: evidenceDefinitionsFixture(profiles),
+      analysisDefinitions: DEFAULT_ANALYSIS_DEFINITION_REGISTRY,
       resolvedDashboards: [
         { dashboardId: "plant_overview", dashboardRevision: "fixture-revision:plant_overview" },
         { dashboardId: "energy_dashboard", dashboardRevision: "fixture-revision:energy_dashboard" }
@@ -514,6 +551,7 @@ describe("buildReportPlan", () => {
       equipment,
       profiles,
       evidenceDefinitions: evidenceDefinitionsFixture(profiles),
+      analysisDefinitions: DEFAULT_ANALYSIS_DEFINITION_REGISTRY,
       resolvedDashboards: [
         { dashboardId: "plant_overview", dashboardRevision: "fixture-revision:plant_overview" },
         { dashboardId: "energy_dashboard", dashboardRevision: "fixture-revision:energy_dashboard" }
@@ -572,6 +610,54 @@ describe("buildReportPlan", () => {
       ok: false,
       issues: expect.arrayContaining([
         expect.objectContaining({ code: "analysis_without_evidence" })
+      ])
+    });
+  });
+
+  it("rejects invalid or missing analysis definitions before returning a plan", () => {
+    const equipment = [identity("CH-01", "chiller", "Chiller 01")];
+    const duplicateDefinition: AnalysisDefinitionRegistry = {
+      schemaVersion: 1,
+      definitions: [
+        ...DEFAULT_ANALYSIS_DEFINITION_REGISTRY.definitions,
+        { ...DEFAULT_ANALYSIS_DEFINITION_REGISTRY.definitions[0]! }
+      ]
+    };
+    const invalid = plan(
+      equipment,
+      reportSpec(),
+      profiles,
+      assetProvenance(equipment),
+      duplicateDefinition
+    );
+    expect(invalid).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: expect.stringContaining("analysisDefinitions"), code: "duplicate_definition" }),
+        expect.objectContaining({ path: expect.stringContaining("analysisDefinitions"), code: "duplicate_analysis_definition" })
+      ])
+    });
+
+    const missingExecutiveSummary: AnalysisDefinitionRegistry = {
+      schemaVersion: 1,
+      definitions: DEFAULT_ANALYSIS_DEFINITION_REGISTRY.definitions.filter((definition) => (
+        definition.analysisKind !== "executive_summary"
+      ))
+    };
+    const missing = plan(
+      equipment,
+      reportSpec(),
+      profiles,
+      assetProvenance(equipment),
+      missingExecutiveSummary
+    );
+    expect(missing).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: "analysis.executive_summary.system",
+          code: "analysis_definition_not_found"
+        })
       ])
     });
   });

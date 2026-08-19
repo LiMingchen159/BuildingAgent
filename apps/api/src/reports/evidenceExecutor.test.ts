@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   REPORT_SPEC_SCHEMA_VERSION,
   createEquipmentIdentity,
+  type EvidencePackage,
   type EquipmentIdentity,
   type EquipmentProfile,
   type ReportAssetProvenance,
@@ -10,9 +11,14 @@ import {
   type ReportSpec
 } from "./contracts.js";
 import { discoverProjectReportAssets } from "./assetDiscovery.js";
+import { DEFAULT_ANALYSIS_DEFINITION_REGISTRY } from "./analysisDefinitions.js";
 import { evidenceDefinitionRegistryRevision } from "./evidenceDefinitions.js";
 import { evidenceDefinitionsFixture } from "./evidenceTestFixtures.js";
-import { executeReportEvidence } from "./evidenceExecutor.js";
+import {
+  canonicalReportHash,
+  executeReportEvidence,
+  validateEvidencePackageForPlan
+} from "./evidenceExecutor.js";
 import type {
   ChartEvidenceTool,
   DashboardEvidenceTool,
@@ -118,6 +124,7 @@ function fixturePlan(): { plan: ReportPlan; definitions: ReturnType<typeof evide
     equipment: [equipment],
     profiles: [profile],
     evidenceDefinitions: definitions,
+    analysisDefinitions: DEFAULT_ANALYSIS_DEFINITION_REGISTRY,
     resolvedSystemCharts: [{ chartKey: "system_efficiency", metricKeys: ["plant_cop"] }],
     resolvedDashboards: [{ dashboardId: "plant_overview", dashboardRevision: "dashboard-rev-7" }],
     assetRevision: "sha256:fixture-assets",
@@ -265,6 +272,15 @@ async function execute(
   });
 }
 
+function refreshEvidencePackageRevision(evidencePackage: EvidencePackage): void {
+  const { revisionHash: _revisionHash, ...withoutRevision } = evidencePackage;
+  evidencePackage.revisionHash = canonicalReportHash({
+    ...withoutRevision,
+    packageId: undefined,
+    generatedAt: undefined
+  });
+}
+
 describe("executeReportEvidence", () => {
   it("executes deterministic tools in dependency phases and assembles a traceable mixed-scope package", async () => {
     const { plan, definitions } = fixturePlan();
@@ -311,6 +327,194 @@ describe("executeReportEvidence", () => {
     ))).toBe(true);
     expect(result.value.revisionHash).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(result.value.planRevision).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("validates a generated package for its exact plan without mutating either input", async () => {
+    const { plan, definitions } = fixturePlan();
+    const { tools } = fakeTools();
+    const executed = await execute(plan, definitions, tools);
+    expect(executed.ok).toBe(true);
+    if (!executed.ok) return;
+    const originalPlan = structuredClone(plan);
+    const originalPackage = structuredClone(executed.value);
+
+    const validated = validateEvidencePackageForPlan(plan, executed.value);
+
+    expect(validated.ok).toBe(true);
+    expect(plan).toEqual(originalPlan);
+    expect(executed.value).toEqual(originalPackage);
+    if (validated.ok) {
+      expect(validated.value).toEqual(executed.value);
+      expect(validated.value).not.toBe(executed.value);
+    }
+  });
+
+  it("rejects rebound metadata, invalid revisions, and broken execution/result/evidence ownership", async () => {
+    const { plan, definitions } = fixturePlan();
+    const { tools } = fakeTools();
+    const executed = await execute(plan, definitions, tools);
+    expect(executed.ok).toBe(true);
+    if (!executed.ok) return;
+
+    const cases: Array<{
+      name: string;
+      expectedCode: string;
+      mutate: (candidatePlan: ReportPlan, candidatePackage: EvidencePackage) => void;
+      refreshRevision?: boolean;
+    }> = [
+      {
+        name: "legacy plan schema v3",
+        expectedCode: "unsupported_schema",
+        mutate: (candidatePlan) => { candidatePlan.schemaVersion = 3 as never; }
+      },
+      {
+        name: "legacy evidence schema v2",
+        expectedCode: "unsupported_schema",
+        mutate: (_candidatePlan, candidatePackage) => { candidatePackage.schemaVersion = 2 as never; },
+        refreshRevision: true
+      },
+      {
+        name: "plan ID rebound",
+        expectedCode: "plan_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => { candidatePackage.planId = "different-plan"; },
+        refreshRevision: true
+      },
+      {
+        name: "plan revision rebound",
+        expectedCode: "plan_revision_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => { candidatePackage.planRevision = "sha256:different-plan"; },
+        refreshRevision: true
+      },
+      {
+        name: "project rebound",
+        expectedCode: "project_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => { candidatePackage.projectId = "different-project"; },
+        refreshRevision: true
+      },
+      {
+        name: "asset revision rebound",
+        expectedCode: "asset_revision_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => { candidatePackage.assetRevision = "sha256:different-assets"; },
+        refreshRevision: true
+      },
+      {
+        name: "period rebound",
+        expectedCode: "period_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.period.endAt = "2026-08-17T16:00:00.000Z";
+        },
+        refreshRevision: true
+      },
+      {
+        name: "equipment identity rebound",
+        expectedCode: "equipment_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.equipment[0]!.fullName = "Altered Chiller Name";
+        },
+        refreshRevision: true
+      },
+      {
+        name: "invalid package revision",
+        expectedCode: "revision_hash_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.revisionHash = "sha256:invalid";
+        }
+      },
+      {
+        name: "missing planned execution",
+        expectedCode: "missing_execution",
+        mutate: (_candidatePlan, candidatePackage) => { candidatePackage.executions.shift(); },
+        refreshRevision: true
+      },
+      {
+        name: "duplicate execution",
+        expectedCode: "duplicate_execution",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.executions.push(structuredClone(candidatePackage.executions[0]!));
+        },
+        refreshRevision: true
+      },
+      {
+        name: "noncanonical execution order",
+        expectedCode: "execution_order_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => { candidatePackage.executions.reverse(); },
+        refreshRevision: true
+      },
+      {
+        name: "broken result ownership",
+        expectedCode: "invalid_result_cardinality",
+        mutate: (_candidatePlan, candidatePackage) => {
+          const execution = candidatePackage.executions.find((entry) => entry.requestKind === "metric")!;
+          execution.resultIds = [];
+        },
+        refreshRevision: true
+      },
+      {
+        name: "unretained evidence reference",
+        expectedCode: "unresolved_evidence_reference",
+        mutate: (_candidatePlan, candidatePackage) => {
+          const execution = candidatePackage.executions.find((entry) => entry.requestKind === "metric")!;
+          execution.evidence = [];
+        },
+        refreshRevision: true
+      },
+      {
+        name: "tampered execution query hash",
+        expectedCode: "query_hash_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.executions[0]!.provenance.queryHash = "sha256:different-query";
+        },
+        refreshRevision: true
+      },
+      {
+        name: "invalid typed evidence reference",
+        expectedCode: "invalid_evidence_reference",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.executions[0]!.evidence[0]!.sourceKind = "llm" as never;
+        },
+        refreshRevision: true
+      },
+      {
+        name: "unpinned execution definition",
+        expectedCode: "definition_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.executions[0]!.provenance.definition.definitionVersion = "different-version";
+        },
+        refreshRevision: true
+      },
+      {
+        name: "duplicate result collection entry",
+        expectedCode: "duplicate_result",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.metricResults.push(structuredClone(candidatePackage.metricResults[0]!));
+        },
+        refreshRevision: true
+      },
+      {
+        name: "result detached from its planned metric",
+        expectedCode: "result_plan_mismatch",
+        mutate: (_candidatePlan, candidatePackage) => {
+          candidatePackage.metricResults[0]!.metricKey = "different_metric";
+        },
+        refreshRevision: true
+      }
+    ];
+
+    for (const testCase of cases) {
+      const candidatePlan = structuredClone(plan);
+      const candidatePackage = structuredClone(executed.value);
+      testCase.mutate(candidatePlan, candidatePackage);
+      if (testCase.refreshRevision) refreshEvidencePackageRevision(candidatePackage);
+
+      const validated = validateEvidencePackageForPlan(candidatePlan, candidatePackage);
+
+      expect(validated.ok, testCase.name).toBe(false);
+      if (!validated.ok) {
+        expect(validated.issues, testCase.name).toEqual(expect.arrayContaining([
+          expect.objectContaining({ code: testCase.expectedCode })
+        ]));
+      }
+    }
   });
 
   it("keeps ordering and revision stable across completion order, package IDs, and generation times", async () => {
@@ -931,6 +1135,7 @@ describe("executeReportEvidence", () => {
       equipment: assets.value.equipment,
       profiles: assets.value.profiles,
       evidenceDefinitions: definitions,
+      analysisDefinitions: DEFAULT_ANALYSIS_DEFINITION_REGISTRY,
       resolvedSystemCharts: [
         { chartKey: "cooling_demand", metricKeys: ["cooling_energy"] },
         { chartKey: "energy_consumption", metricKeys: ["electricity"] },
