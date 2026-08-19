@@ -4,6 +4,7 @@ import {
   ANALYSIS_TOOL_DRAFT_SCHEMA_VERSION,
   ANALYSIS_TOOL_INPUT_SCHEMA_VERSION,
   EVIDENCE_PACKAGE_SCHEMA_VERSION,
+  REPORT_DOCUMENT_SCHEMA_VERSION,
   REPORT_PLAN_SCHEMA_VERSION,
   REPORT_SPEC_SCHEMA_VERSION,
   createEquipmentIdentity,
@@ -469,6 +470,7 @@ describe("evidence and renderer-neutral contracts", () => {
       blockId: "section-ch-01",
       title: equipmentResult.value.displayName,
       level: 2,
+      numbering: "numbered",
       blocks: [
         { kind: "kpi", blockId: "kpi-ch-01", title: "Performance KPIs", metricResultIds: [metric.resultId] },
         { kind: "analysis", blockId: "analysis-block-ch-01", title: "Performance Analysis", analysisResultId: analysis.analysisId }
@@ -478,6 +480,7 @@ describe("evidence and renderer-neutral contracts", () => {
     expect(evidencePackage.faultEvents[0]).not.toHaveProperty("diagnosis");
     expect(EVIDENCE_PACKAGE_SCHEMA_VERSION).toBe(3);
     expect(REPORT_PLAN_SCHEMA_VERSION).toBe(4);
+    expect(REPORT_DOCUMENT_SCHEMA_VERSION).toBe(1);
     expect(analysis.status).toBe("complete");
     if (analysis.status === "complete") {
       expect(analysis.segments).toContainEqual({ kind: "metric_ref", metricResultId: "metric-cop-01" });

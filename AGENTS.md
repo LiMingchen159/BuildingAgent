@@ -79,12 +79,12 @@ This permission is scoped to M008 report work; it is not permission for unrelate
 The active authorization for this branch is:
 
 - Milestone: `M008 - Generic recurring building performance reports`
-- Issue: `[M008-S4] Generate grounded report analysis`
-- GitHub issue: `#201`
-- Branch: `m008-s4-generate-grounded-analysis`
-- Scope: `AGENTS.md`, versioned report-analysis contracts and definitions, a narrow read-only B-Agent adapter, grounded analysis orchestration under `apps/api/src/reports/**`, and their directly corresponding tests
+- Issue: `[M008-S5] Assemble and render report documents`
+- GitHub issue: `#203`
+- Branch: `m008-s5-assemble-render-report-documents`
+- Scope: `AGENTS.md`, versioned report-document and generic ReportBlock contracts, deterministic document assembly, modular LaTeX templates/rendering, narrow report-artifact reading and safe PDF compiler boundaries under `apps/api/src/reports/**`, and their directly corresponding tests/assets
 
-ReportBlock assembly, report persistence, API routes, scheduling, UI integration, LaTeX/PDF rendering, deployment changes, generic Agent/provider infrastructure changes, and modifications to unrelated KPI/dashboard/FDD infrastructure are outside M008-S4 and require later issues and branches. M008-S4 B-Agent calls are read-only, must receive only request-authorized typed evidence, and must not dispatch tools, read chat/memory/repository context, or create or alter deterministic evidence.
+Report persistence, run history/download APIs, routes, scheduling, UI integration, server/CI LaTeX installation or deployment changes, B-Agent execution, and modifications to unrelated KPI/dashboard/plot/FDD infrastructure are outside M008-S5 and require later issues and branches. M008-S5 may only consume validated ReportPlan, EvidencePackage, AnalysisPackage, definition registries, and report artifacts; it must not recompute facts, invent names, dispatch agents, or enable raw LaTeX or shell escape.
 
 For every implementation issue:
 
