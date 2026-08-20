@@ -2,8 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App, { isCurrentEquipmentFirstFddCheck, summarizeFddFleetCoverage } from "./App";
-import type { DashboardRecord, FddAlgorithm, FddDeployabilityCheck, FddEquipmentAvailability } from "./api";
+import App, { currentEquipmentFirstFddTaskCheck, fddMetricGroupForTask, isCurrentEquipmentFirstFddCheck, summarizeFddFleetCoverage } from "./App";
+import type { DashboardRecord, DerivedMetricAsset, FddAlgorithm, FddDeployabilityCheck, FddEquipmentAvailability, FddLibraryResponse, ProjectFddTask } from "./api";
 import { DashboardView } from "./ui/DashboardView";
 
 beforeEach(() => {
@@ -555,6 +555,123 @@ describe("FDD fleet deployment coverage", () => {
       expect(summary.blockedEntityKeys, duplicatedIdentity).toEqual(["WCC_8"]);
       expect(summary.hasFullDeployableCoverage, duplicatedIdentity).toBe(false);
     }
+  });
+});
+
+describe("FleetGuard runtime deployment evidence", () => {
+  const algorithm: FddAlgorithm = {
+    id: "algorithm-1",
+    scope: "global_builtin",
+    algorithmKey: "chiller_ch_01_commanded_chiller_fails_to_start",
+    version: "1.0.0",
+    name: "CH-01 Commanded Chiller Fails to Start",
+    equipmentType: "chiller",
+    faultType: "operation",
+    method: "rule_based",
+    categoryKey: "operation",
+    categoryLabel: "Operation",
+    requiredPoints: [{
+      slot: "status",
+      label: "Status",
+      semantic: "Run status",
+      required: true,
+      quantityKind: "status",
+      unitRoleDescription: "Run status"
+    }],
+    outputs: [{ key: "fault_status", label: "Fault status", type: "boolean" }],
+    parameters: [],
+    formula: "fault = false",
+    logicSummary: "test",
+    deployableRuntime: true
+  };
+  const task = {
+    id: "task-fleetguard",
+    projectId: "project_element",
+    source: "global_library",
+    sharingScope: "global_community",
+    globalAlgorithmId: "algorithm-1",
+    algorithmSnapshot: algorithm,
+    status: "paused",
+    authorizationPolicy: "fleetguard-v1",
+    activeDeploymentReceiptId: "receipt-1",
+    createdAt: "2026-08-20T00:00:00.000Z",
+    updatedAt: "2026-08-20T00:00:00.000Z"
+  } as ProjectFddTask;
+  const metric = (projectId: string, taskId: string, entityId: string): DerivedMetricAsset => ({
+    instance: {
+      instanceId: `${projectId}:${taskId}:${entityId}`,
+      projectId,
+      metricKey: "chiller_ch_01_commanded_chiller_fails_to_start",
+      metricType: "fdd",
+      formulaVersion: "1.0.0",
+      displayName: entityId,
+      entityId,
+      metadata: { fddTaskId: taskId }
+    }
+  } as unknown as DerivedMetricAsset);
+
+  it("counts only exact same-project task metrics and never an old same-algorithm task", () => {
+    const exact = metric("project_element", task.id, "WCC_1");
+    const wrongProject = metric("project_other", task.id, "WCC_2");
+    const oldTask = metric("project_element", "task-old", "WCC_3");
+
+    expect(fddMetricGroupForTask(task, [wrongProject, oldTask])).toBeNull();
+    expect(fddMetricGroupForTask(task, [wrongProject, oldTask, exact])?.metrics).toEqual([exact]);
+  });
+
+  it("selects the newest task-bound library check and invalidates it after a parameter edit", () => {
+    const now = Date.now();
+    const availability: FddEquipmentAvailability = {
+      equipmentType: "chiller",
+      status: "available",
+      entityCount: 1,
+      entityKeys: ["WCC_1"]
+    };
+    const check = (status: "can_deploy" | "cannot_deploy", checkedAt: string): FddDeployabilityCheck => ({
+      algorithmId: algorithm.id,
+      projectTaskId: task.id,
+      algorithmVersion: algorithm.version,
+      checkPolicyVersion: "v4-homogeneous-fleet",
+      projectId: task.projectId,
+      status,
+      applicability: "applicable",
+      equipmentAvailability: availability,
+      equipmentInventorySignature: "inventory-current",
+      expectedEntityCount: 1,
+      pointCandidates: [],
+      deployableEntities: [],
+      ambiguousInputs: [],
+      rejectedCandidates: [],
+      missingPoints: [],
+      historyIssues: [],
+      checkedAt,
+      source: "manual",
+      projectDataSignature: "project-current"
+    });
+    const older = check("cannot_deploy", new Date(now - 60_000).toISOString());
+    const newer = check("can_deploy", new Date(now).toISOString());
+    const taskWithOldCheck = { ...task, deployabilityCheck: older };
+    const library: FddLibraryResponse = {
+      projectId: task.projectId,
+      algorithms: [algorithm],
+      checks: [newer],
+      tasks: [taskWithOldCheck],
+      equipmentAvailability: [availability],
+      equipmentInventorySignature: "inventory-current",
+      requestId: "request-1"
+    };
+
+    expect(currentEquipmentFirstFddTaskCheck(taskWithOldCheck, library)).toEqual(newer);
+    expect(currentEquipmentFirstFddTaskCheck({
+      ...taskWithOldCheck,
+      parameterValues: [{
+        key: "delay",
+        value: 5,
+        source: "user_override",
+        reason: "test",
+        updatedAt: new Date(now + 1_000).toISOString()
+      }]
+    }, library)).toBeUndefined();
   });
 });
 
@@ -2042,6 +2159,202 @@ describe("BuildingGPT Web flow", () => {
     expect(screen.getByRole("button", { name: /Chiller Low COP Detection Dashboard/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add algorithm/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add fdd/i })).not.toBeInTheDocument();
+  });
+
+  it("presents FleetGuard evidence, sends its authorization, and fails closed after malformed retest evidence", async () => {
+    const project = alphaProject;
+    const checkedAt = new Date().toISOString();
+    const entityKeys = Array.from({ length: 8 }, (_, index) => `WCC_${index + 1}`);
+    const algorithm = {
+      id: "fddalg_ch01_fleetguard_ui",
+      scope: "global_builtin",
+      algorithmKey: "chiller_ch_01_commanded_chiller_fails_to_start",
+      version: "1.0.0",
+      name: "CH-01 Commanded Chiller Fails to Start",
+      equipmentType: "chiller",
+      faultType: "operation",
+      method: "rule_based",
+      categoryKey: "operation",
+      categoryLabel: "Operation",
+      requiredPoints: [{
+        slot: "status",
+        label: "Run status",
+        semantic: "Chiller run status",
+        required: true,
+        quantityKind: "status",
+        unitRoleDescription: "Runtime gate"
+      }],
+      outputs: [{ key: "fault_status", label: "Fault status", type: "boolean" }],
+      parameters: [],
+      formula: "fault = false",
+      logicSummary: "FleetGuard UI test",
+      deployableRuntime: true
+    };
+    const taskId = "fddtask_fleetguard_ui";
+    const templateRef = { templateId: "template-ui", version: 2, signature: "template-signature" };
+    const signatures = {
+      algorithm: "algorithm-signature",
+      evaluator: "evaluator-signature",
+      inventory: "inventory-signature",
+      evidence: "evidence-signature",
+      template: templateRef.signature
+    };
+    const authorization = {
+      policyVersion: "fleetguard-v1",
+      planId: "plan-ui",
+      planSignature: "plan-signature",
+      rolloutRevision: 2,
+      parameterSignature: "parameter-signature",
+      taskId,
+      templateRef,
+      signatures
+    };
+    const fleetGuard = {
+      kind: "fleetguard_v1",
+      policyVersion: "fleetguard-v1",
+      state: "ready",
+      planId: "plan-ui",
+      planSignature: "plan-signature",
+      rolloutRevision: 2,
+      parameterSignature: "parameter-signature",
+      taskId,
+      templateRef,
+      signatures,
+      coverage: { expected: 8, bound: 8, dataReady: 8, authorized: 8 },
+      warnings: [],
+      authorization,
+      checkedAt
+    };
+    const check = {
+      algorithmId: algorithm.id,
+      projectTaskId: taskId,
+      algorithmVersion: algorithm.version,
+      checkPolicyVersion: "v4-homogeneous-fleet",
+      projectId: project.id,
+      status: "uncertain",
+      applicability: "applicable",
+      equipmentAvailability: { equipmentType: "chiller", status: "available", entityCount: 8, entityKeys },
+      equipmentInventorySignature: "inventory-ui",
+      expectedEntityCount: 8,
+      pointCandidates: [],
+      deployableEntities: [],
+      ambiguousInputs: [],
+      rejectedCandidates: [],
+      missingPoints: [],
+      historyIssues: [],
+      checkedAt,
+      source: "manual",
+      projectDataSignature: "project-signature",
+      fleetGuard
+    };
+    const task = {
+      id: taskId,
+      projectId: project.id,
+      source: "global_library",
+      sharingScope: "global_community",
+      globalAlgorithmId: algorithm.id,
+      algorithmSnapshot: algorithm,
+      // Mirrors the legacy server projection before it became policy-aware:
+      // v4 is uncertain even though FleetGuard is authoritatively Ready.
+      status: "cannot_deploy",
+      deployabilityCheck: { ...check, checkedAt: new Date(Date.parse(checkedAt) - 1_000).toISOString(), fleetGuard: { ...fleetGuard, checkedAt: new Date(Date.parse(checkedAt) - 1_000).toISOString() } },
+      createdAt: checkedAt,
+      updatedAt: checkedAt
+    };
+    const metric = (entityId: string) => ({
+      instance: {
+        instanceId: `metric-${entityId}`,
+        projectId: project.id,
+        definitionId: "definition-ui",
+        versionId: "version-ui",
+        metricKey: algorithm.algorithmKey,
+        metricType: "fdd",
+        entityId,
+        displayName: entityId,
+        formulaVersion: algorithm.version,
+        formula: algorithm.formula,
+        status: "active",
+        createdAt: checkedAt,
+        updatedAt: checkedAt,
+        dependencies: [],
+        metadata: { fddTaskId: taskId }
+      },
+      latest: null,
+      materialization: null,
+      linkedDashboards: []
+    });
+    const malformedCheck = {
+      ...check,
+      checkedAt: new Date(Date.parse(checkedAt) + 1_000).toISOString(),
+      fleetGuard: {
+        ...fleetGuard,
+        checkedAt: new Date(Date.parse(checkedAt) + 1_000).toISOString(),
+        coverage: { expected: 7, bound: 7, dataReady: 7, authorized: 7 }
+      }
+    };
+    const deploymentBodies: unknown[] = [];
+
+    installFetch((url, init) => {
+      if (url === "/api/login") return jsonResponse({ token: "seed-token-ada", user: { id: "user_ada", name: "Ada Lovelace" }, requestId: "req_login" });
+      if (url === "/api/session") return jsonResponse({ session: { userId: "user_ada", projectId: null, permissions: [] }, requestId: "req_session" });
+      if (url === "/api/projects") return jsonResponse({ projects: [project], limit: 50, requestId: "req_projects" });
+      if (url === `/api/projects/${project.id}/select`) return jsonResponse({ session: { userId: "user_ada", projectId: project.id, permissions: project.permissions }, requestId: "req_select" });
+      if (url === `/api/projects/${project.id}/chat` && init?.method !== "POST") return jsonResponse({ messages: [], limit: 50, requestId: "req_chat" });
+      if (url === `/api/projects/${project.id}/chat/active-streams`) return jsonResponse({ projectId: project.id, streams: [], requestId: "req_active_streams" });
+      if (url === `/api/projects/${project.id}/conversations` && init?.method !== "POST") return jsonResponse({ conversations: [], limit: 50, requestId: "req_conversations" });
+      if (url === "/api/registry") return jsonResponse(registryBody());
+      if (url === `/api/projects/${project.id}/management`) return jsonResponse(managementBody({ projectId: project.id }));
+      if (url === `/api/projects/${project.id}/knowledge-base`) return jsonResponse({ documents: [], totalCount: 0, requestId: "req_kb" });
+      if (url === `/api/projects/${project.id}/repository`) return jsonResponse({ artifacts: [], totalCount: 0, requestId: "req_repo" });
+      if (url === `/api/projects/${project.id}/dashboards`) return jsonResponse({ projectId: project.id, dashboards: [], totalCount: 0, requestId: "req_dashboards" });
+      if (url === `/api/projects/${project.id}/derived-metrics`) return jsonResponse({ metrics: [metric("WCC_1"), metric("WCC_2")], totalCount: 2, requestId: "req_metrics" });
+      if (url === `/api/projects/${project.id}/fdd-tasks`) return jsonResponse({ projectId: project.id, tasks: [task], totalCount: 1, requestId: "req_tasks" });
+      if (url === `/api/projects/${project.id}/fdd-library/${algorithm.id}/test`) {
+        return jsonResponse({ projectId: project.id, algorithm, check: malformedCheck, requestId: "req_test" });
+      }
+      if (url === `/api/projects/${project.id}/fdd-library/${algorithm.id}/deploy`) {
+        deploymentBodies.push(JSON.parse(String(init?.body)));
+        return apiError("expected_test_stop", "Stop after request capture.", 409);
+      }
+      if (url === `/api/projects/${project.id}/fdd-library`) {
+        return jsonResponse({
+          projectId: project.id,
+          algorithms: [algorithm],
+          checks: [check],
+          tasks: [task],
+          equipmentAvailability: [check.equipmentAvailability],
+          equipmentInventorySignature: "inventory-ui",
+          fleetGuardRollout: {
+            mode: "canary",
+            revision: 2,
+            algorithmKeys: [algorithm.algorithmKey],
+            templateRefs: [{ algorithmKey: algorithm.algorithmKey, ...templateRef }]
+          },
+          requestId: "req_library"
+        });
+      }
+      return apiError("not_found", `Unexpected test URL: ${url}`, 404);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.click(screen.getByRole("button", { name: /open fdd library/i }));
+
+    expect(await screen.findByText("Deployed 2/8")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: `Open ${algorithm.name} details` }));
+    const dialog = screen.getByRole("dialog", { name: `${algorithm.name} details` });
+    expect(within(dialog).getAllByText("Ready").length).toBeGreaterThan(0);
+    expect(dialog).not.toHaveTextContent(/cannot deploy/iu);
+    expect(within(dialog).getAllByText("8/8").length).toBeGreaterThanOrEqual(2);
+    expect(within(dialog).getAllByText("2/8").length).toBeGreaterThanOrEqual(1);
+    expect(dialog).not.toHaveTextContent(/\d+%/u);
+
+    await user.click(within(dialog).getByRole("button", { name: "Deploy" }));
+    await waitFor(() => expect(deploymentBodies).toEqual([{ authorization }]));
+    await user.click(within(dialog).getByRole("button", { name: "Test with project data" }));
+    await waitFor(() => expect(within(dialog).getAllByText("Blocked").length).toBeGreaterThan(0));
+    expect(within(dialog).getByRole("button", { name: "Deploy" })).toBeDisabled();
   });
 
   it("does not reload completed trend charts when unchanged dashboard objects are rerendered", async () => {
