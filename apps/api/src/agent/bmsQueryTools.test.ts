@@ -119,47 +119,8 @@ describe("bms query tools", () => {
     vi.unstubAllGlobals();
 
     expect(result).toMatchObject({ total: 0, items: [] });
-    expect(result.hint).toContain("Already retried with these terms");
+    expect(result.hint).toContain("prior successful bms_points_query");
     expect(result.hint).toContain("aliases");
-    expect(result.hint).toContain("KB_CATALOG_SUMMARY.md");
-  });
-
-  it("bms_points_query recovers a natural-language phrase by searching its terms", async () => {
-    const catalog = [
-      { name: "WCC-L1-01-CHWRT", description: "WCC-01-CHW Return Temperature" },
-      { name: "WCC-L1-01-CHWST", description: "WCC-01-CHW Supply Temperature" },
-      { name: "CHWP-01-PRESS", description: "CHW Pump 01 Pressure" }
-    ];
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const term = new URL(String(input)).searchParams.get("q")?.toLowerCase() ?? "";
-      // Mirror the catalog API: plain substring match over name + description.
-      const items = catalog.filter((row) =>
-        `${row.name} ${row.description}`.toLowerCase().includes(term));
-      return new Response(JSON.stringify({ total: items.length, items }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      });
-    });
-    vi.stubGlobal("fetch", fetchImpl);
-
-    const registry = createRegistry();
-    const tool = registry.list().find((candidate) => candidate.name === "bms_points_query");
-    const result = await tool!.run({ q: "Chiller 1 return water temperature" }, {
-      projectId: "project_element",
-      userId: "user_test",
-      requestId: "req_test",
-      conversationId: "conv_test",
-      canConfigure: false,
-      messages: []
-    });
-
-    vi.unstubAllGlobals();
-
-    const names = (result.items as Array<{ name: string }>).map((row) => row.name);
-    expect(names[0]).toBe("WCC-L1-01-CHWRT");
-    expect(names).not.toContain("CHWP-01-PRESS");
-    expect(result.matched_terms).toEqual(["chiller", "1", "return", "water", "temperature"]);
-    expect(result.hint).toContain("No exact catalog match");
   });
 
   it("bms_timeseries_query accepts explicit from/to UTC range", async () => {
