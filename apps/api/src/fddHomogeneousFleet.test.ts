@@ -114,12 +114,14 @@ function elementCollectorFetch(names: Set<string>) {
                   : "Run Status";
       const unit = query.includes("CHWST") || query.includes("LCW_Setpoint")
         ? "C"
+        : query.endsWith("_TLKW")
+          ? "kW"
         : query.endsWith("_TLKWH")
           ? "kWh"
           : query.endsWith("_KVA")
             ? "kVA"
             : undefined;
-      return new Response(JSON.stringify({ total: 1, items: [{ name: query, description, ...(unit ? { unit } : {}) }] }), {
+      return new Response(JSON.stringify({ total: 1, items: [{ name: query, object_ref: `//fixture/${query}`, description, ...(unit ? { unit } : {}) }] }), {
         status: 200,
         headers: { "content-type": "application/json" }
       });
@@ -155,6 +157,366 @@ function elementStoreWithRunningPowerGrounding() {
   };
   return store;
 }
+
+const WKGO_PROJECT_ID = "project_msxh8iar_dfs1hk";
+
+function writeWkgoFleetFixture(dataDir: string): Set<string> {
+  const kbDir = path.join(dataDir, WKGO_PROJECT_ID, "kb");
+  mkdirSync(kbDir, { recursive: true });
+  const pointFamilies = [
+    { suffix: "OPERATION_STATUS", brickClass: "On_Off_Status" },
+    { suffix: "POWER", brickClass: "Power_Sensor" },
+    { suffix: "TCHW_IN", brickClass: "Entering_Chilled_Water_Temperature_Sensor" },
+    { suffix: "TCHW_OUT", brickClass: "Leaving_Chilled_Water_Temperature_Sensor" },
+    { suffix: "TCW_IN", brickClass: "Entering_Condenser_Water_Temperature_Sensor" },
+    { suffix: "TCW_OUT", brickClass: "Leaving_Condenser_Water_Temperature_Sensor" },
+    { suffix: "CHILLED_WATER_FLOW", brickClass: "Chilled_Water_Flow_Sensor" },
+    { suffix: "CONDENSER_WATER_FLOW", brickClass: "Condenser_Water_Flow_Sensor" }
+  ];
+  const names = new Set<string>();
+  const ttl = [
+    "@prefix brick: <https://brickschema.org/schema/Brick#> .",
+    "@prefix wkgo: <urn:test:wkgo#> .",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+    ...Array.from({ length: 6 }, (_, index) => {
+      const number = String(index + 1).padStart(2, "0");
+      const entity = `WKGO_CHILLER_${number}`;
+      const facts = [`wkgo:${entity} a brick:Chiller ; rdfs:label "WKGO Chiller ${index + 1}" .`];
+      for (const family of pointFamilies) {
+        const name = `${entity}_${family.suffix}`;
+        names.add(name);
+        facts.push(`wkgo:${name} a brick:${family.brickClass} ; rdfs:label "${name}" ; brick:isPointOf wkgo:${entity} .`);
+      }
+      return facts.join("\n");
+    })
+  ].join("\n");
+  writeFileSync(path.join(kbDir, "brick_model.ttl"), ttl, "utf8");
+  return names;
+}
+
+function wkgoCollectorFetch(names: Set<string>, options: {
+  conflictingSameRefPoint?: { pointName: string; mismatchFirst: boolean };
+  duplicateExactPointNames?: Set<string>;
+  equipmentNameForPoint?: (pointName: string) => string | undefined;
+  incompleteExactPointNames?: Set<string>;
+  objectRefForPoint?: (pointName: string) => string;
+  reportedTotalForPoint?: (pointName: string, returnedCount: number) => number;
+} = {}) {
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/api/v1/points") {
+      const query = url.searchParams.get("q") ?? "";
+      if (!names.has(query)) {
+        return new Response(JSON.stringify({ total: 0, items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      const unit = /_(?:TCHW|TCW)_(?:IN|OUT)$/u.test(query) ? "C" : query.endsWith("_OPERATION_STATUS") ? "1" : undefined;
+      const objectRef = options.objectRefForPoint?.(query) ?? `wkgo://fixture/${query}`;
+      const item = {
+        name: query,
+        object_ref: objectRef,
+        description: `${query} exact fixture point`,
+        ...(options.equipmentNameForPoint?.(query) ? { equipment_name: options.equipmentNameForPoint(query) } : {}),
+        ...(unit ? { unit } : {})
+      };
+      const mismatch = { ...item, unit: "kVA" };
+      const items = options.conflictingSameRefPoint?.pointName === query
+        ? options.conflictingSameRefPoint.mismatchFirst ? [mismatch, item] : [item, mismatch]
+        : options.incompleteExactPointNames?.has(query)
+          ? [item, { name: query, description: `${query} duplicate without object ref` }]
+          : options.duplicateExactPointNames?.has(query)
+            ? [item, { ...item, object_ref: `${objectRef}-duplicate` }]
+            : [item];
+      return new Response(JSON.stringify({
+        total: options.reportedTotalForPoint?.(query, items.length) ?? items.length,
+        items
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    if (url.pathname === "/api/v1/readings") {
+      const objectRef = url.searchParams.get("object_ref") ?? "";
+      const name = url.searchParams.get("name") ?? objectRef.replace(/^wkgo:\/\/fixture\//u, "");
+      if (name === "WKGO_CHILLER_02_OPERATION_STATUS") {
+        return new Response(JSON.stringify({ total: 0, items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      const boundaryProbe = url.searchParams.has("to");
+      return new Response(JSON.stringify({
+        total: 100,
+        items: [{
+          ts: boundaryProbe ? "2023-04-01T00:00:00.000Z" : "2023-05-10T00:00:00.000Z",
+          name,
+          value_num: name.endsWith("_POWER") ? 120 : 1
+        }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ total: 0, items: [] }), { status: 404, headers: { "content-type": "application/json" } });
+  });
+}
+
+async function prepareWkgoFixture(options: Parameters<typeof wkgoCollectorFetch>[1] = {}) {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "ba-wkgo-corruption-fdd-"));
+  const names = writeWkgoFleetFixture(dataDir);
+  const store = createSeedStore();
+  store.projects.push({ id: WKGO_PROJECT_ID, name: "WKGO" });
+  store.memberships.push({ userId: "user_ada", projectId: WKGO_PROJECT_ID, permissions: ["chat:read", "chat:write"] });
+  store.knowledgeBaseByProject[WKGO_PROJECT_ID] = [];
+  const app = buildServer({
+    store,
+    fetch: wkgoCollectorFetch(names, options) as typeof fetch,
+    env: {
+      BUILDING_AGENT_DATA_DIR: dataDir,
+      BMS_DATABASE_API_URL: "http://collector.test",
+      USE_MOCK_BMS_CLIENT: "1",
+      DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+    }
+  });
+  await app.inject({ method: "POST", url: `/api/projects/${WKGO_PROJECT_ID}/select`, headers });
+  const source = await app.inject({
+    method: "POST",
+    url: "/api/bms/sources",
+    headers,
+    payload: {
+      project_id: WKGO_PROJECT_ID,
+      building_id: WKGO_PROJECT_ID,
+      name: "WKGO fixture collector",
+      vendor_type: "bms_database",
+      protocol_type: "bms_database_api",
+      base_url: "http://collector.test",
+      host: null,
+      port: null,
+      auth_type: "none",
+      read_only: true,
+      config: {}
+    }
+  });
+  expect(source.statusCode, source.body).toBe(200);
+  return { app, store, dataDir };
+}
+
+describe("WKGO evidence-backed missing-unit deployability", () => {
+  it("makes the nine missing-unit algorithms Ready while preserving the CH04/40/41 blockers", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-wkgo-missing-unit-fdd-"));
+    const names = writeWkgoFleetFixture(dataDir);
+    const store = createSeedStore();
+    store.projects.push({ id: WKGO_PROJECT_ID, name: "WKGO" });
+    store.memberships.push({ userId: "user_ada", projectId: WKGO_PROJECT_ID, permissions: ["chat:read", "chat:write"] });
+    store.knowledgeBaseByProject[WKGO_PROJECT_ID] = [];
+    const app = buildServer({
+      store,
+      fetch: wkgoCollectorFetch(names) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        USE_MOCK_BMS_CLIENT: "1",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    try {
+      await app.inject({ method: "POST", url: `/api/projects/${WKGO_PROJECT_ID}/select`, headers });
+      const source = await app.inject({
+        method: "POST",
+        url: "/api/bms/sources",
+        headers,
+        payload: {
+          project_id: WKGO_PROJECT_ID,
+          building_id: WKGO_PROJECT_ID,
+          name: "WKGO fixture collector",
+          vendor_type: "bms_database",
+          protocol_type: "bms_database_api",
+          base_url: "http://collector.test",
+          host: null,
+          port: null,
+          auth_type: "none",
+          read_only: true,
+          config: {}
+        }
+      });
+      expect(source.statusCode, source.body).toBe(200);
+      const missingUnitReady = [
+        "chiller_ch_12_insufficient_chw_flow",
+        "chiller_ch_13_excessive_chw_flow",
+        "chiller_ch_14_low_chw_delta_t",
+        "chiller_ch_15_high_chw_delta_t",
+        "chiller_ch_24_insufficient_cw_flow",
+        "chiller_ch_25_excessive_cw_flow",
+        "chiller_ch_45_chw_flow_sensor_fault",
+        "chiller_ch_48_cw_flow_sensor_fault",
+        "chiller_ch_51_heat_balance_sensor_consistency"
+      ];
+      for (const algorithmKey of missingUnitReady) {
+        const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === algorithmKey);
+        expect(algorithm, algorithmKey).toBeTruthy();
+        if (!algorithm) continue;
+        const tested = await app.inject({
+          method: "POST",
+          url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${algorithm.id}/test`,
+          headers
+        });
+        expect(tested.statusCode, `${algorithmKey}: ${tested.body}`).toBe(200);
+        const check = tested.json().check as {
+          status: string;
+          warnings?: Array<{ code: string; entityKey?: string; slot?: string; pointName?: string }>;
+          deployableEntities: Array<{
+            status: string;
+            selectedMappings: Array<{ slot: string; pointName: string; unit?: string }>;
+          }>;
+        };
+        expect(check.status, `${algorithmKey}: ${JSON.stringify(check)}`).toBe("can_deploy");
+        expect(check.deployableEntities, algorithmKey).toHaveLength(6);
+        expect(check.deployableEntities.every((entity) => entity.status === "can_deploy"), algorithmKey).toBe(true);
+        expect(check.warnings?.length, algorithmKey).toBe(algorithmKey.endsWith("heat_balance_sensor_consistency") ? 18 : 6);
+        expect(check.warnings?.every((warning) => warning.code === "engineering_unit_missing"), algorithmKey).toBe(true);
+        for (const entity of check.deployableEntities) {
+          for (const mapping of entity.selectedMappings.filter((entry) => /_(?:POWER|FLOW)$/u.test(entry.pointName))) {
+            expect(mapping, `${algorithmKey}: ${mapping.pointName}`).not.toHaveProperty("unit");
+          }
+        }
+      }
+
+      const ch04 = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_04_running_no_cooling_output");
+      expect(ch04).toBeTruthy();
+      if (ch04) {
+        const tested = await app.inject({ method: "POST", url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${ch04.id}/test`, headers });
+        expect(tested.json().check.status).toBe("cannot_deploy");
+        expect(tested.json().check.warnings).toBeUndefined();
+        expect(tested.json().check.deployableEntities).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            entityKey: "WKGO_CHILLER_02",
+            status: "cannot_deploy",
+            historyIssues: expect.arrayContaining([expect.stringContaining("history coverage is unverified")])
+          })
+        ]));
+      }
+
+      for (const algorithmKey of [
+        "chiller_ch_40_low_chw_setpoint",
+        "chiller_ch_41_high_chw_setpoint"
+      ]) {
+        const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === algorithmKey);
+        expect(algorithm, algorithmKey).toBeTruthy();
+        if (!algorithm) continue;
+        const tested = await app.inject({ method: "POST", url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${algorithm.id}/test`, headers });
+        expect(tested.json().check.status, algorithmKey).toBe("cannot_deploy");
+        expect(tested.json().check.deployableEntities).toEqual(expect.arrayContaining([
+          expect.objectContaining({ status: "cannot_deploy", missingPoints: expect.arrayContaining([expect.stringContaining("setpoint")]) })
+        ]));
+      }
+
+      for (const algorithmKey of [
+        "chiller_ch_43_chw_supply_temp_sensor_fault",
+        "chiller_ch_44_chw_return_temp_sensor_fault"
+      ]) {
+        const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === algorithmKey);
+        expect(algorithm, algorithmKey).toBeTruthy();
+        if (!algorithm) continue;
+        const tested = await app.inject({ method: "POST", url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${algorithm.id}/test`, headers });
+        expect(tested.json().check, algorithmKey).toMatchObject({ status: "can_deploy", expectedEntityCount: 6 });
+        expect(tested.json().check.warnings, algorithmKey).toBeUndefined();
+      }
+    } finally {
+      await app.close();
+    }
+  }, 20_000);
+
+  it("blocks duplicate or incomplete exact-name rows independently of response order", async () => {
+    const duplicatedPoint = "WKGO_CHILLER_06_CHILLED_WATER_FLOW";
+    for (const options of [
+      { duplicateExactPointNames: new Set([duplicatedPoint]) },
+      { conflictingSameRefPoint: { pointName: duplicatedPoint, mismatchFirst: true } },
+      { conflictingSameRefPoint: { pointName: duplicatedPoint, mismatchFirst: false } },
+      { incompleteExactPointNames: new Set([duplicatedPoint]) },
+      { reportedTotalForPoint: (pointName: string, returnedCount: number) => pointName === duplicatedPoint ? returnedCount + 1 : returnedCount }
+    ]) {
+      const { app, store } = await prepareWkgoFixture(options);
+      try {
+        const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_12_insufficient_chw_flow");
+        expect(algorithm).toBeTruthy();
+        if (!algorithm) continue;
+        const tested = await app.inject({
+          method: "POST",
+          url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${algorithm.id}/test`,
+          headers
+        });
+        expect(tested.statusCode, tested.body).toBe(200);
+        expect(tested.json().check.status).toBe("cannot_deploy");
+        expect(tested.json().check.warnings).toBeUndefined();
+        expect(tested.json().check.deployableEntities).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            entityKey: "WKGO_CHILLER_06",
+            status: "cannot_deploy",
+            missingPoints: expect.arrayContaining(["CHW flow rate"])
+          })
+        ]));
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
+  it("blocks every affected entity when one object reference is reused across the fleet", async () => {
+    const { app, store, dataDir } = await prepareWkgoFixture({
+      objectRefForPoint: (pointName) => /WKGO_CHILLER_(?:01|02)_CHILLED_WATER_FLOW$/u.test(pointName)
+        ? "wkgo://fixture/shared-chilled-water-flow"
+        : `wkgo://fixture/${pointName}`
+    });
+    try {
+      const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_12_insufficient_chw_flow");
+      expect(algorithm).toBeTruthy();
+      if (!algorithm) return;
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${algorithm.id}/test`,
+        headers
+      });
+      expect(tested.statusCode, tested.body).toBe(200);
+      expect(tested.json().check.status).toBe("cannot_deploy");
+      expect(tested.json().check.warnings).toBeUndefined();
+      for (const entityKey of ["WKGO_CHILLER_01", "WKGO_CHILLER_02"]) {
+        expect(tested.json().check.deployableEntities).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            entityKey,
+            status: "cannot_deploy",
+            missingPoints: expect.arrayContaining(["CHW flow rate"])
+          })
+        ]));
+      }
+      const deployed = await app.inject({
+        method: "POST",
+        url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${algorithm.id}/deploy`,
+        headers
+      });
+      expect(deployed.statusCode).toBe(422);
+      expect(new DerivedMetricStore(dataDir).listProjectMetrics(WKGO_PROJECT_ID)).toHaveLength(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not let catalog ownership metadata override the Brick equipment owner", async () => {
+    const conflictedPoint = "WKGO_CHILLER_06_CHILLED_WATER_FLOW";
+    const { app, store } = await prepareWkgoFixture({
+      equipmentNameForPoint: (pointName) => pointName === conflictedPoint ? "WKGO_CHILLER_05" : undefined
+    });
+    try {
+      const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_12_insufficient_chw_flow");
+      expect(algorithm).toBeTruthy();
+      if (!algorithm) return;
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/${WKGO_PROJECT_ID}/fdd-library/${algorithm.id}/test`,
+        headers
+      });
+      expect(tested.statusCode, tested.body).toBe(200);
+      expect(tested.json().check.status).not.toBe("can_deploy");
+      expect(tested.json().check.deployableEntities).toEqual(expect.arrayContaining([
+        expect.objectContaining({ entityKey: "WKGO_CHILLER_06", status: expect.not.stringMatching(/^can_deploy$/u) })
+      ]));
+    } finally {
+      await app.close();
+    }
+  });
+});
 
 describe("Element homogeneous chiller FDD deployment", () => {
   it("maps CH-03 by one point-family template and deploys all 8 chillers atomically", async () => {
@@ -219,7 +581,7 @@ describe("Element homogeneous chiller FDD deployment", () => {
     const check = tested.json().check;
     expect(check).toMatchObject({
       status: "can_deploy",
-      checkPolicyVersion: "v4-homogeneous-fleet",
+      checkPolicyVersion: "v5-evidence-backed-missing-unit",
       mappingStrategy: "homogeneous_template",
       expectedEntityCount: 8,
       requiredRuntimeSlots: ["chiller_command", "chiller_status", "chiller_alarm", "chiller_running_power"],

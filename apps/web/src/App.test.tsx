@@ -355,7 +355,7 @@ describe("equipment-first FDD check guard", () => {
   const currentCheck = (overrides: Partial<FddDeployabilityCheck> = {}): FddDeployabilityCheck => ({
     algorithmId: algorithm.id,
     algorithmVersion: algorithm.version,
-    checkPolicyVersion: "v4-homogeneous-fleet",
+    checkPolicyVersion: "v5-evidence-backed-missing-unit",
     projectId: "project_alpha",
     status: "can_deploy",
     applicability: "applicable",
@@ -384,8 +384,9 @@ describe("equipment-first FDD check guard", () => {
     nowMs
   );
 
-  it("accepts only a fresh v4 homogeneous-fleet check for the current authoritative inventory", () => {
+  it("accepts only a fresh v5 evidence-backed check for the current authoritative inventory", () => {
     expect(accepted(currentCheck())).toBe(true);
+    expect(accepted(currentCheck({ checkPolicyVersion: "v4-homogeneous-fleet" }))).toBe(false);
     expect(accepted(currentCheck({ checkPolicyVersion: "v3-equipment-first" }))).toBe(false);
     expect(accepted(currentCheck({ checkPolicyVersion: "v2-observed-history" }))).toBe(false);
     expect(accepted(currentCheck({ checkedAt: "2026-08-17T07:59:59.999Z" }))).toBe(false);
@@ -465,7 +466,7 @@ describe("FDD fleet deployment coverage", () => {
   ): FddDeployabilityCheck => ({
     algorithmId: "fddalg_chiller_ch_03",
     algorithmVersion: "3.0.0",
-    checkPolicyVersion: "v4-homogeneous-fleet",
+    checkPolicyVersion: "v5-evidence-backed-missing-unit",
     mappingStrategy: "homogeneous_template",
     templateEntityKey: "WCC_1",
     expectedEntityCount: 8,
@@ -1851,7 +1852,7 @@ describe("BuildingGPT Web flow", () => {
 
   it("shows curated FDD rules across six equipment types and blocks spec-only deployment", async () => {
     const project = alphaProject;
-    const now = "2026-08-11T00:00:00.000Z";
+    const now = new Date().toISOString();
     const equipmentInventorySignature = "inventory-facts-v3-test";
     const fddAlgorithm = (algorithmKey: string, name: string, equipmentType = "chiller", sourcePaperId?: string, deployableRuntime = true) => ({
       id: `fddalg_${algorithmKey}`,
@@ -1881,6 +1882,13 @@ describe("BuildingGPT Web flow", () => {
       ...(deployableRuntime ? {} : { definitionStatus: "implementation_ready" })
     });
     const ch01 = fddAlgorithm("chiller_ch_01_commanded_chiller_fails_to_start", "CH-01 Commanded Chiller Fails to Start");
+    const wkgoReadyAlgorithms = [
+      ch01,
+      ...Array.from({ length: 16 }, (_, index) => {
+        const ruleNumber = String(index + 2).padStart(2, "0");
+        return fddAlgorithm(`chiller_ch_${ruleNumber}_wkgo_ready_rule`, `CH-${ruleNumber} WKGO Ready Rule`);
+      })
+    ];
     const ch51 = {
       ...fddAlgorithm("chiller_ch_51_heat_balance_sensor_consistency", "CH-51 Heat Balance Sensor Consistency Fault"),
       categoryKey: "sensor",
@@ -1893,6 +1901,55 @@ describe("BuildingGPT Web flow", () => {
     const fcu01 = fddAlgorithm("fcu_fdd_01", "FCU-01 FCU Fails to Run on Command", "fcu", "docx:FCU_FDD_Library.docx:sha", false);
     const pump01 = fddAlgorithm("pump_fdd_01", "PMP-01 Pump Fails to Run on Command", "pump", "docx:Pump_FDD_Library.docx:sha", false);
     const ct01 = fddAlgorithm("cooling_tower_fdd_01", "CT-01 Cooling Tower Fails to Run on Command", "cooling_tower", "docx:Cooling_Tower_FDD_Library.docx:sha", false);
+    const chillerEntityKeys = ["CH1", "CH2", "CH3", "CH4", "CH5", "CH6"];
+    const projectCheck = (
+      algorithm: ReturnType<typeof fddAlgorithm>,
+      status: "can_deploy" | "cannot_deploy",
+      warnings?: Array<{ code: string; message: string; entityKey?: string; slot?: string; pointName?: string }>
+    ) => ({
+      algorithmId: algorithm.id,
+      algorithmVersion: algorithm.version,
+      checkPolicyVersion: "v5-evidence-backed-missing-unit",
+      projectId: project.id,
+      status,
+      applicability: "applicable",
+      equipmentAvailability: { equipmentType: "chiller", status: "available", entityCount: chillerEntityKeys.length, entityKeys: chillerEntityKeys },
+      equipmentInventorySignature,
+      expectedEntityCount: chillerEntityKeys.length,
+      requiredRuntimeSlots: ["running_status"],
+      mappingStrategy: "homogeneous_template",
+      templateEntityKey: chillerEntityKeys[0],
+      pointCandidates: algorithm.id === ch01.id ? [{
+        slot: "running_status",
+        pointName: "CH1_Run_Status",
+        entityKey: "CH1",
+        objectRef: "WKGO/CH1-RUN",
+        unitCompatibility: "unknown",
+        unitEvidence: "missing_engineering_unit",
+        dimensionReason: "Engineering unit is missing; structural and history evidence passed.",
+        confidence: 0.91,
+        reason: "Exact same-equipment binding with observed history."
+      }] : [],
+      deployableEntities: chillerEntityKeys.map((entityKey, index) => ({
+        entityKey,
+        status: status === "cannot_deploy" && index === chillerEntityKeys.length - 1 ? "cannot_deploy" : "can_deploy",
+        selectedMappings: status === "cannot_deploy" && index === chillerEntityKeys.length - 1
+          ? []
+          : [{ slot: "running_status", pointName: `${entityKey}_Run_Status`, objectRef: `WKGO/${entityKey}-RUN` }],
+        ambiguousInputs: [],
+        missingPoints: status === "cannot_deploy" && index === chillerEntityKeys.length - 1 ? ["running_status"] : [],
+        historyIssues: [],
+        confidence: status === "cannot_deploy" && index === chillerEntityKeys.length - 1 ? 0 : 1
+      })),
+      ambiguousInputs: [],
+      rejectedCandidates: [],
+      missingPoints: status === "cannot_deploy" ? ["running_status"] : [],
+      historyIssues: [],
+      ...(warnings ? { warnings } : {}),
+      checkedAt: now,
+      source: "auto",
+      projectDataSignature: `project-data-signature-${algorithm.id}`
+    });
     const oldTask = {
       id: "fddtask_old",
       projectId: project.id,
@@ -1941,9 +1998,9 @@ describe("BuildingGPT Web flow", () => {
       if (url === `/api/projects/${project.id}/fdd-library`) {
         return jsonResponse({
           projectId: project.id,
-          algorithms: [oldAhu, oldChiller, ct01, pump01, fcu01, vav01, ahu01, ch51, ch01],
+          algorithms: [oldAhu, oldChiller, ct01, pump01, fcu01, vav01, ahu01, ch51, ...wkgoReadyAlgorithms],
           equipmentAvailability: [
-            { equipmentType: "chiller", status: "available", entityCount: 6, entityKeys: ["CH1", "CH2", "CH3", "CH4", "CH5", "CH6"] },
+            { equipmentType: "chiller", status: "available", entityCount: 6, entityKeys: chillerEntityKeys },
             { equipmentType: "ahu", status: "not_available", entityCount: 0, reason: "No AHU entities were found in the project model." },
             { equipmentType: "vav", status: "unknown", entityCount: 0, reason: "The authoritative equipment inventory has not loaded." },
             { equipmentType: "fcu", status: "not_available", entityCount: 0 },
@@ -1951,24 +2008,22 @@ describe("BuildingGPT Web flow", () => {
             { equipmentType: "cooling_tower", status: "not_available", entityCount: 0 }
           ],
           equipmentInventorySignature,
-          checks: [{
-            algorithmId: ch01.id,
-            algorithmVersion: ch01.version,
-            checkPolicyVersion: "v2-observed-history",
-            projectId: project.id,
-            status: "can_deploy",
-            applicability: "applicable",
-            equipmentAvailability: { equipmentType: "chiller", status: "available", entityCount: 6, entityKeys: ["CH1", "CH2", "CH3", "CH4", "CH5", "CH6"] },
-            equipmentInventorySignature,
-            pointCandidates: [],
-            ambiguousInputs: [],
-            rejectedCandidates: [],
-            missingPoints: [],
-            historyIssues: [],
-            checkedAt: now,
-            source: "auto",
-            projectDataSignature: "project-data-signature"
-          }],
+          checks: [
+            projectCheck(ch01, "can_deploy", [{
+              code: "missing_engineering_unit",
+              message: "CH1 running_status has no engineering unit; structural and history evidence passed.",
+              entityKey: "CH1",
+              slot: "running_status",
+              pointName: "CH1_Run_Status"
+            }]),
+            ...wkgoReadyAlgorithms.slice(1).map((algorithm) => projectCheck(algorithm, "can_deploy")),
+            projectCheck(ch51, "cannot_deploy", [{
+              code: "missing_engineering_unit",
+              message: "CH6 has a metadata warning, but its required point is still missing.",
+              entityKey: "CH6",
+              slot: "running_status"
+            }])
+          ],
           tasks: [oldTask],
           requestId: "req_fdd_library"
         });
@@ -1991,13 +2046,24 @@ describe("BuildingGPT Web flow", () => {
     expect(screen.getByText("6 assets detected")).toBeInTheDocument();
     expect(screen.getByText("Evaluators implemented")).toBeInTheDocument();
     expect(screen.getByText("Deployable now")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Deploy CH-01 Commanded Chiller Fails to Start/i })).toBeDisabled();
+    const librarySummary = screen.getByRole("region", { name: "FDD library summary" });
+    expect(within(librarySummary).getByText("Deployable now").parentElement).toHaveTextContent("17");
+    expect(screen.getByText(/1 evidence warning · CH1 running_status has no engineering unit/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Deploy CH-01 Commanded Chiller Fails to Start/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /Open CH-01 Commanded Chiller Fails to Start details/i }));
+    const ch01Dialog = screen.getByRole("dialog", { name: /CH-01 Commanded Chiller Fails to Start details/i });
+    expect(within(ch01Dialog).getByText("Evidence warning")).toBeInTheDocument();
+    expect(within(ch01Dialog).getByText(/CH1 running_status has no engineering unit/i)).toBeInTheDocument();
+    expect(within(ch01Dialog).queryByText("91%")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
     const categoryTabList = screen.getByRole("tablist", { name: "Chiller fault categories" });
     const categoryTabs = within(categoryTabList).getAllByRole("tab");
     expect(categoryTabs).toHaveLength(2);
     expect(within(categoryTabList).getByRole("tab", { name: /Operation/i })).toHaveAttribute("aria-selected", "true");
     await user.click(within(categoryTabList).getByRole("tab", { name: /Sensor/i }));
     expect(screen.getAllByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i }).length).toBeGreaterThan(0);
+    expect(screen.getByText("5/6 deployable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Deploy CH-51 Heat Balance Sensor Consistency Fault/i })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i })).not.toBeInTheDocument();
     const sensorTab = within(categoryTabList).getByRole("tab", { name: /Sensor/i });
     sensorTab.focus();

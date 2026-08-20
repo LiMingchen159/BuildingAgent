@@ -2768,6 +2768,19 @@ function fddCheckWorkflowLabel(check: FddDeployabilityCheck): string {
   return `${check.source} · BuildingGPT Skill · ${modeLabel}`;
 }
 
+function fddEvidenceWarningSummary(check: FddDeployabilityCheck | undefined): {
+  count: number;
+  firstMessage: string;
+} | null {
+  const warnings = check?.warnings ?? [];
+  const first = warnings[0];
+  if (!first) return null;
+  return {
+    count: warnings.length,
+    firstMessage: first.message
+  };
+}
+
 function fddTaskStatusTone(status: ProjectFddTask["status"]): "neutral" | "success" | "warning" | "danger" | "info" {
   if (status === "running" || status === "ready") return "success";
   if (status === "checking") return "info";
@@ -2900,7 +2913,7 @@ function latestFddCheckForAlgorithm(checks: FddDeployabilityCheck[], algorithm: 
     .sort((left, right) => Date.parse(right.checkedAt) - Date.parse(left.checkedAt))[0];
 }
 
-const FDD_EQUIPMENT_FIRST_POLICY_VERSION = "v4-homogeneous-fleet";
+const FDD_EQUIPMENT_FIRST_POLICY_VERSION = "v5-evidence-backed-missing-unit";
 
 function fddTargetEquipmentType(
   algorithm: Pick<FddAlgorithm, "equipmentType" | "requiredPoints">
@@ -3754,6 +3767,7 @@ function FddTaskDetailPanel({
 
   const algorithm = task.algorithmSnapshot;
   const check = task.deployabilityCheck;
+  const evidenceWarningSummary = fddEvidenceWarningSummary(check);
   const currentCheck = currentEquipmentFirstFddTaskCheck(task, library);
   const requiredPointBySlot = new Map(algorithm.requiredPoints.map((point) => [point.slot, point]));
   const requiredSlotKeys = fddRequiredRuntimeSlots(check, algorithm);
@@ -3927,6 +3941,11 @@ function FddTaskDetailPanel({
             {coverage.blockedCount > 0 ? <span>{coverage.blockedCount} blocked or uncertain; Deploy all remains disabled until every inventory entity passes.</span> : null}
             {check?.missingPoints.length ? <span>Missing: {check.missingPoints.join(", ")}</span> : null}
             {check?.historyIssues.length ? <span>History: {check.historyIssues.join(", ")}</span> : null}
+            {evidenceWarningSummary ? (
+              <span className="fdd-evidence-warning-inline">
+                Evidence {evidenceWarningSummary.count === 1 ? "warning" : `warnings (${evidenceWarningSummary.count})`}: {evidenceWarningSummary.firstMessage}
+              </span>
+            ) : null}
           </div>
         </section> : null}
 
@@ -4011,7 +4030,7 @@ function FddTaskDetailPanel({
                         </>
                       ) : (
                         <>
-                          <small><span aria-hidden="true" />{entity ? `${entity.selectedMappings.length}/${requiredSlots.size} inputs · ${Math.round(entity.confidence * 100)}%` : "No mapping result"}</small>
+                          <small><span aria-hidden="true" />{entity ? `${entity.selectedMappings.length}/${requiredSlots.size} inputs matched` : "No mapping result"}</small>
                           <Button type="button" size="sm" variant="secondary" onClick={() => onTestTask(task.id)}>Retest</Button>
                         </>
                       )}
@@ -4258,6 +4277,7 @@ function FddLibraryPanel({
     const reasons = fddEntityBlockerText(selectedCheckedEntityByKey.get(entityKey), selectedRuntimeSlotKeys);
     return `${entityKey}: ${reasons.join("; ")}`;
   });
+  const selectedEvidenceWarningSummary = fddEvidenceWarningSummary(selectedCheck);
 
   useEffect(() => {
     if (!library?.projectId || panelProjectRef.current === library.projectId) return;
@@ -4544,6 +4564,7 @@ function FddLibraryPanel({
                             Boolean(deployedTask || deployedMetricGroup)
                           );
                           const fullFleetDeployable = check?.status === "can_deploy" && rowCoverage.hasFullDeployableCoverage;
+                          const evidenceWarningSummary = fddEvidenceWarningSummary(check);
                           const algorithmProgress = deploymentProgress?.algorithmId === algorithm.id ? deploymentProgress : null;
                           const rowClassName = activeEquipmentUnavailable || activeEquipmentUnknown
                             ? "is-not-applicable"
@@ -4569,9 +4590,16 @@ function FddLibraryPanel({
                               <td>{requiredSlots.length}</td>
                               <td><Badge tone={fddDefinitionTone(algorithm)}>{fddDefinitionLabel(algorithm)}</Badge></td>
                               <td>
-                                <Badge tone={activeEquipmentUnavailable ? "neutral" : activeEquipmentUnknown ? "warning" : fullFleetDeployable ? "success" : check ? "warning" : "neutral"}>
-                                  {activeEquipmentUnavailable ? "Not applicable" : activeEquipmentUnknown ? "Equipment availability unknown" : check ? `${rowCoverage.deployableCount}/${rowCoverage.inventoryCount} deployable` : "Not checked"}
-                                </Badge>
+                                <div className="fdd-data-check-cell">
+                                  <Badge tone={activeEquipmentUnavailable ? "neutral" : activeEquipmentUnknown ? "warning" : fullFleetDeployable ? "success" : check ? "warning" : "neutral"}>
+                                    {activeEquipmentUnavailable ? "Not applicable" : activeEquipmentUnknown ? "Equipment availability unknown" : check ? `${rowCoverage.deployableCount}/${rowCoverage.inventoryCount} deployable` : "Not checked"}
+                                  </Badge>
+                                  {evidenceWarningSummary ? (
+                                    <small className="fdd-evidence-warning-inline" title={evidenceWarningSummary.firstMessage}>
+                                      {evidenceWarningSummary.count === 1 ? "1 evidence warning" : `${evidenceWarningSummary.count} evidence warnings`} · {evidenceWarningSummary.firstMessage}
+                                    </small>
+                                  ) : null}
+                                </div>
                               </td>
                               <td><Badge tone={algorithm.deployableRuntime ? "success" : "neutral"}>{fddRuntimeLabel(algorithm)}</Badge></td>
                               <td>
@@ -4787,6 +4815,13 @@ function FddLibraryPanel({
                     <span>{selectedBlockedEntityReasons.join(" · ") || `${selectedCoverage.blockedCount} inventory entities lack complete mappings.`}</span>
                   </div>
                 ) : null}
+                {selectedEvidenceWarningSummary ? (
+                  <div className="fdd-evidence-warning-card" role="note">
+                    <strong>{selectedEvidenceWarningSummary.count === 1 ? "Evidence warning" : `Evidence warnings (${selectedEvidenceWarningSummary.count})`}</strong>
+                    <span>{selectedEvidenceWarningSummary.firstMessage}</span>
+                    <small>This is a metadata warning only. It does not change the deterministic Ready or Blocked result.</small>
+                  </div>
+                ) : null}
                 <p className="kpi-muted">Point matching includes an observed first-to-latest history-span check. It does not prove sample continuity, engineering-unit conversion, or evaluator execution.</p>
                 {selectedCheck.missingPoints.length > 0 || selectedCheck.historyIssues.length > 0 ? (
                   <div className="fdd-issue-chip-list">
@@ -4814,7 +4849,7 @@ function FddLibraryPanel({
                       <div className="fdd-mapping-chip" key={`${candidate.slot}:${candidate.pointName}`}>
                         <strong>{candidate.slot}</strong>
                         <span>{candidate.pointName}</span>
-                        <small>{[candidate.entityKey, `${Math.round(candidate.confidence * 100)}%`, candidate.unit].filter(Boolean).join(" · ")}</small>
+                        <small>{[candidate.entityKey, candidate.unit].filter(Boolean).join(" · ")}</small>
                       </div>
                     ))}
                   </div>
@@ -4826,7 +4861,7 @@ function FddLibraryPanel({
                     {selectedAmbiguousSlots.map((entry) => (
                       <div className="fdd-ambiguous-card" key={entry.slot}>
                         <strong>{entry.label}</strong>
-                        <span>{entry.candidates.map((candidate) => `${candidate.pointName}${candidate.unit ? ` (${candidate.unit})` : ""} · ${Math.round(candidate.confidence * 100)}%`).join("; ")}</span>
+                        <span>{entry.candidates.map((candidate) => `${candidate.pointName}${candidate.unit ? ` (${candidate.unit})` : ""}`).join("; ")}</span>
                       </div>
                     ))}
                   </div>

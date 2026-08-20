@@ -9577,6 +9577,21 @@ p {
   border-bottom: 0;
 }
 
+.fdd-data-check-cell {
+  align-items: flex-start;
+  display: grid;
+  gap: 0.28rem;
+  max-width: 18rem;
+}
+
+.fdd-evidence-warning-inline {
+  color: #92400e;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .fdd-library-algorithm-link {
   background: transparent;
   border: 0;
@@ -9844,6 +9859,27 @@ p {
 .fdd-ambiguous-card {
   background: #fffbeb;
   border-color: rgba(245, 158, 11, 0.32);
+}
+
+.fdd-evidence-warning-card {
+  background: #fffbeb;
+  border: 1px solid rgba(245, 158, 11, 0.36);
+  border-radius: 0.55rem;
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.58rem 0.68rem;
+}
+
+.fdd-evidence-warning-card strong {
+  color: #92400e;
+  font-size: 0.78rem;
+}
+
+.fdd-evidence-warning-card span,
+.fdd-evidence-warning-card small {
+  color: #78350f;
+  font-size: 0.74rem;
+  line-height: 1.4;
 }
 
 .fdd-issue-chip-list {
