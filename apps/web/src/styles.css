@@ -4070,6 +4070,15 @@ p {
   padding: 0 var(--space-2);
 }
 
+.dashboard-fdd-analysis-generated {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  font-size: var(--font-size-xs);
+  min-height: 1.7rem;
+  white-space: nowrap;
+}
+
 .dashboard-fdd-analysis-meta {
   display: flex;
   flex-wrap: wrap;

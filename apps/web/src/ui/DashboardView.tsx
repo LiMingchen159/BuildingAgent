@@ -15,6 +15,8 @@ const FDD_ANALYSIS_TITLE = "Fault Cause Analysis";
 const FDD_ANALYSIS_RANGE_LABEL = "Last 7 days";
 const FDD_TRENDS_TITLE = "Chiller Trends";
 const FDD_ATTRIBUTION_ANALYSIS_CACHE_PREFIX = "building-agent.fdd-attribution-analysis.v3";
+/** How often the widget re-checks whether the local calendar day has rolled over. */
+const FDD_ANALYSIS_DAY_CHECK_INTERVAL_MS = 5 * 60_000;
 
 interface DashboardSpecMutation {
   title: string;
@@ -2073,10 +2075,6 @@ function buildFddAttributionGenerationSummary(params: {
   };
 }
 
-function fddAttributionGenerationKey(summary: Record<string, unknown> | null): string {
-  return summary ? JSON.stringify(summary) : "";
-}
-
 function fddAttributionLocalDayKey(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -2097,7 +2095,24 @@ function fddAttributionCachePart(value: string): string {
   return value.replace(/[^a-z0-9_-]+/giu, "_").replace(/^_+|_+$/gu, "").slice(0, 80) || "unknown";
 }
 
-function fddAttributionDailyCacheKey(projectId: string, widgetId: string, series: ChartSeries[]): string {
+function fddAttributionCacheScopePrefix(projectId: string, widgetId: string): string {
+  return [
+    FDD_ATTRIBUTION_ANALYSIS_CACHE_PREFIX,
+    fddAttributionCachePart(projectId),
+    fddAttributionCachePart(widgetId)
+  ].join(":");
+}
+
+/**
+ * The key deliberately covers only the analysis scope and the local day, never sample
+ * values, so live polling cannot invalidate it and one analysis serves the whole day.
+ */
+export function fddAttributionDailyCacheKey(
+  projectId: string,
+  widgetId: string,
+  series: ChartSeries[],
+  localDay: string
+): string {
   const scope = series.map((entry) => ({
     pointName: entry.pointName,
     label: entry.label,
@@ -2107,35 +2122,91 @@ function fddAttributionDailyCacheKey(projectId: string, widgetId: string, series
     fddParameters: entry.fddParameters ?? []
   }));
   return [
-    FDD_ATTRIBUTION_ANALYSIS_CACHE_PREFIX,
-    fddAttributionCachePart(projectId),
-    fddAttributionCachePart(widgetId),
-    fddAttributionLocalDayKey(),
+    fddAttributionCacheScopePrefix(projectId, widgetId),
+    localDay,
     fddAttributionCacheHash(JSON.stringify(scope))
   ].join(":");
 }
 
-function readFddAttributionAnalysisCache(cacheKey: string): string | null {
+interface FddAttributionCacheEntry {
+  content: string;
+  generatedAt: string | null;
+}
+
+function readFddAttributionAnalysisCache(cacheKey: string): FddAttributionCacheEntry | null {
   try {
     const raw = window.localStorage.getItem(cacheKey);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { content?: unknown };
+    const parsed = JSON.parse(raw) as { content?: unknown; generatedAt?: unknown };
     const content = typeof parsed.content === "string" ? parsed.content.trim() : "";
-    return content && isUsableGeneratedFddAnalysis(content) ? content : null;
+    if (!content || !isUsableGeneratedFddAnalysis(content)) return null;
+    return {
+      content,
+      generatedAt: typeof parsed.generatedAt === "string" ? parsed.generatedAt : null
+    };
   } catch {
     return null;
   }
 }
 
-function writeFddAttributionAnalysisCache(cacheKey: string, content: string): void {
+function writeFddAttributionAnalysisCache(cacheKey: string, scopePrefix: string, content: string, generatedAt: string): void {
   try {
-    window.localStorage.setItem(cacheKey, JSON.stringify({
-      content,
-      generatedAt: new Date().toISOString()
-    }));
+    window.localStorage.setItem(cacheKey, JSON.stringify({ content, generatedAt }));
   } catch {
     // Storage can be unavailable in private browsing or quota-limited sessions.
   }
+  // Drop this widget's earlier days so the cache cannot grow without bound.
+  try {
+    const stale: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key || key === cacheKey) continue;
+      if (key.startsWith(`${scopePrefix}:`)) stale.push(key);
+    }
+    for (const key of stale) {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Pruning is best-effort.
+  }
+}
+
+export type FddAnalysisAction = "clear" | "use-cache" | "generate" | "wait";
+
+/**
+ * Decides what the analysis effect should do for the current render.
+ *
+ * "wait" is what stops the widget from re-asking BuildingGPT: once a request has gone
+ * out for a cache key, live data refreshes must not start another one, even while the
+ * first is still in flight or came back unusable.
+ */
+export function decideFddAnalysisAction(params: {
+  hasFaultEvidence: boolean;
+  forced: boolean;
+  cacheKey: string;
+  hasCachedContent: boolean;
+  lastRequestedKey: string | null;
+}): FddAnalysisAction {
+  if (!params.hasFaultEvidence) return "clear";
+  if (params.forced) return "generate";
+  if (params.hasCachedContent) return "use-cache";
+  if (params.lastRequestedKey === params.cacheKey) return "wait";
+  return "generate";
+}
+
+/** Tracks the local calendar day so a cache key built from it rolls over at midnight. */
+function useLocalDayKey(): string {
+  const [day, setDay] = useState(() => fddAttributionLocalDayKey());
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setDay((current) => {
+        const next = fddAttributionLocalDayKey();
+        return next === current ? current : next;
+      });
+    }, FDD_ANALYSIS_DAY_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  return day;
 }
 
 function isUsableGeneratedFddAnalysis(content: string): boolean {
@@ -2256,7 +2327,7 @@ function FddAnalysisHighlightedCopy({
   );
 }
 
-function FddAttributionAnalysisWidget({
+export function FddAttributionAnalysisWidget({
   token,
   projectId,
   widgetId,
@@ -2283,6 +2354,7 @@ function FddAttributionAnalysisWidget({
   const windowMinutes = fddAttributionWindowMinutes(outputSeries);
   const [generationNonce, setGenerationNonce] = useState(0);
   const [generatedAnalysis, setGeneratedAnalysis] = useState<string | null>(null);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [generationLoading, setGenerationLoading] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const generationSummary = useMemo(() => buildFddAttributionGenerationSummary({
@@ -2294,29 +2366,62 @@ function FddAttributionAnalysisWidget({
     weightedFaultRate,
     windowMinutes
   }), [activeTotal, faultTotal, groups, inputCount, series, weightedFaultRate, windowMinutes]);
-  const generationKey = useMemo(() => fddAttributionGenerationKey(generationSummary), [generationSummary]);
-  const dailyCacheKey = useMemo(() => fddAttributionDailyCacheKey(projectId, widgetId, series), [projectId, series, widgetId]);
+  const localDay = useLocalDayKey();
+  const cacheScopePrefix = useMemo(() => fddAttributionCacheScopePrefix(projectId, widgetId), [projectId, widgetId]);
+  const dailyCacheKey = useMemo(
+    () => fddAttributionDailyCacheKey(projectId, widgetId, series, localDay),
+    [localDay, projectId, series, widgetId]
+  );
+  const hasFaultEvidence = generationSummary !== null;
+  // The request must carry the newest evidence, but reading it through a ref keeps the
+  // 60s live-value polling out of the effect's dependencies.
+  const generationSummaryRef = useRef(generationSummary);
+  const requestedCacheKeyRef = useRef<string | null>(null);
   const overallSummaryText = useMemo(
     () => fddOverallSummaryText(groups, rows, activeTotal, faultTotal, weightedFaultRate),
     [activeTotal, faultTotal, groups, rows, weightedFaultRate]
   );
   const displayedAnalysisText = generatedAnalysis ?? (generationLoading ? undefined : analysisText);
+  const generatedAtLabel = generatedAt ? `${formatHktDateTime(generatedAt)} HKT` : null;
 
   useEffect(() => {
-    if (!generationSummary || !generationKey) {
+    generationSummaryRef.current = generationSummary;
+  }, [generationSummary]);
+
+  useEffect(() => {
+    const forced = generationNonce > 0;
+    const cached = hasFaultEvidence && !forced ? readFddAttributionAnalysisCache(dailyCacheKey) : null;
+    const action = decideFddAnalysisAction({
+      hasFaultEvidence,
+      forced,
+      cacheKey: dailyCacheKey,
+      hasCachedContent: cached !== null,
+      lastRequestedKey: requestedCacheKeyRef.current
+    });
+
+    if (action === "clear") {
+      requestedCacheKeyRef.current = null;
       setGeneratedAnalysis(null);
+      setGeneratedAt(null);
       setGenerationLoading(false);
       setGenerationError(null);
       return undefined;
     }
-    const forceGeneration = generationNonce > 0;
-    const cachedAnalysis = forceGeneration ? null : readFddAttributionAnalysisCache(dailyCacheKey);
-    if (cachedAnalysis) {
-      setGeneratedAnalysis(cachedAnalysis);
+    if (action === "use-cache") {
+      requestedCacheKeyRef.current = dailyCacheKey;
+      setGeneratedAnalysis(cached?.content ?? null);
+      setGeneratedAt(cached?.generatedAt ?? null);
       setGenerationLoading(false);
       setGenerationError(null);
       return undefined;
     }
+    if (action === "wait") {
+      return undefined;
+    }
+
+    const summary = generationSummaryRef.current;
+    if (!summary) return undefined;
+    requestedCacheKeyRef.current = dailyCacheKey;
     let active = true;
     setGenerationLoading(true);
     setGenerationError(null);
@@ -2326,7 +2431,7 @@ function FddAttributionAnalysisWidget({
       {
         widgetTitle: FDD_ANALYSIS_TITLE,
         rangeLabel: FDD_ANALYSIS_RANGE_LABEL,
-        summary: generationSummary
+        summary
       }
     ).then((response) => {
       if (!active) return;
@@ -2334,10 +2439,12 @@ function FddAttributionAnalysisWidget({
         setGenerationError(fddGenerationErrorText(response));
         return;
       }
-      const content = response.ok ? response.content?.trim() : "";
+      const content = response.content?.trim() ?? "";
       if (content && isUsableGeneratedFddAnalysis(content)) {
+        const generatedAtIso = new Date().toISOString();
         setGeneratedAnalysis(content);
-        writeFddAttributionAnalysisCache(dailyCacheKey, content);
+        setGeneratedAt(generatedAtIso);
+        writeFddAttributionAnalysisCache(dailyCacheKey, cacheScopePrefix, content, generatedAtIso);
         setGenerationError(null);
       } else {
         setGenerationError(`BuildingGPT returned an incomplete analysis (request ${response.requestId}).`);
@@ -2350,16 +2457,17 @@ function FddAttributionAnalysisWidget({
     }).finally(() => {
       if (active) {
         setGenerationLoading(false);
-        if (forceGeneration) setGenerationNonce(0);
+        if (forced) setGenerationNonce(0);
       }
     });
     return () => {
       active = false;
     };
-  }, [dailyCacheKey, generationKey, generationNonce, generationSummary, projectId, token]);
+  }, [cacheScopePrefix, dailyCacheKey, generationNonce, hasFaultEvidence, projectId, token]);
 
   function handleRefresh() {
     setGeneratedAnalysis(null);
+    setGeneratedAt(null);
     setGenerationNonce((current) => current + 1);
     onRefresh();
   }
@@ -2368,7 +2476,13 @@ function FddAttributionAnalysisWidget({
     <div className="dashboard-fdd-analysis-widget">
       <div className="dashboard-widget-toolbar dashboard-drag-cancel">
         <span className="dashboard-fdd-analysis-range">{FDD_ANALYSIS_RANGE_LABEL}</span>
-        <button className="dashboard-widget-icon-button" onClick={handleRefresh} title="Refresh fault cause analysis" type="button">
+        {generatedAtLabel ? <span className="dashboard-fdd-analysis-generated">Analysed {generatedAtLabel}</span> : null}
+        <button
+          className="dashboard-widget-icon-button"
+          onClick={handleRefresh}
+          title="Re-run the fault cause analysis now. It refreshes automatically once a day."
+          type="button"
+        >
           Refresh
         </button>
       </div>
