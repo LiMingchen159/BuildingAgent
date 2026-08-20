@@ -27,6 +27,12 @@ import type { ProcessRegistry } from "./processRegistry.js";
 import { chartSanityViolation, executeCodeInjectedHeader } from "./chartStyle.js";
 import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
+import {
+  bmsPointSearchMissHint,
+  planBmsPointSearch,
+  rankBmsPointCandidates,
+  type BmsCatalogItem
+} from "./bmsPointSearch.js";
 import { bmsCollectorBaseUrl } from "../bmsCollectorUrl.js";
 import { fetchTimeseries, type BmsTimeseriesRow } from "../bmsTimeseries.js";
 import { DASHBOARD_GRID_COLUMNS, DASHBOARD_LAYOUT_VERSION, dashboardPath, parseDashboardMutationInput } from "../dashboards.js";
@@ -2033,7 +2039,7 @@ export function createGenericToolRegistry(
         parameters: {
           type: "object",
           properties: {
-            q: { type: "string", description: "Search keyword, e.g. WCC_3 or WCC_3_Chilled_Water_Temp" },
+            q: { type: "string", description: "Point name, name fragment, or a plain-language description such as \"Chiller 1 return water temperature\". Phrases that do not match exactly are retried term by term and returned as ranked candidates." },
             limit: { type: "number", description: "Max rows (default 50, max 200)" }
           },
           required: ["q"]
@@ -2046,7 +2052,20 @@ export function createGenericToolRegistry(
         }
         const limit = Math.min(Math.max(1, Math.floor(numArg(args, "limit", 50))), 200);
         const base = bmsCollectorBaseUrl();
-        const url = `${base}/api/v1/points?${new URLSearchParams({ q, limit: String(limit) }).toString()}`;
+        const pointsUrl = (term: string) =>
+          `${base}/api/v1/points?${new URLSearchParams({ q: term, limit: String(limit) }).toString()}`;
+        const url = pointsUrl(q);
+        // Recovery probes are best-effort: a failing probe must not sink the primary answer.
+        const probeCatalog = async (term: string): Promise<BmsCatalogItem[]> => {
+          try {
+            const response = await fetch(pointsUrl(term), { headers: { accept: "application/json" } });
+            if (!response.ok) return [];
+            const payload = (await response.json()) as { items?: BmsCatalogItem[] };
+            return payload.items ?? [];
+          } catch {
+            return [];
+          }
+        };
         try {
           const response = await fetch(url, { headers: { accept: "application/json" } });
           if (!response.ok) {
@@ -2055,17 +2074,25 @@ export function createGenericToolRegistry(
           const payload = (await response.json()) as { total?: number; items?: unknown[] };
           const total = payload.total ?? 0;
           const items = payload.items ?? [];
-          return {
-            total,
-            items,
-            base_url: base,
-            ...(total === 0
-              ? {
-                  hint:
-                    "No catalog matches for this query. Reuse exact `name` values from a prior successful bms_points_query in this turn; do not retry with aliases (TLKW, kW, human labels)."
-                }
-              : {})
-          };
+          if (total > 0) {
+            return { total, items, base_url: base };
+          }
+          // The catalog only does substring matching, so a natural-language phrase
+          // misses even when its individual terms are present. Widen once, then rank.
+          const plan = planBmsPointSearch(q);
+          const gathered = (await Promise.all(plan.probes.map(probeCatalog))).flat();
+          const ranked = rankBmsPointCandidates(gathered, plan.terms, limit);
+          if (ranked.length > 0) {
+            return {
+              total: ranked.length,
+              items: ranked,
+              base_url: base,
+              matched_terms: plan.terms,
+              hint:
+                `No exact catalog match for "${q}". These candidates were found by searching its individual terms and are ranked by how many of them appear in the point name or description. Pick the right one, then reuse its exact \`name\` for bms_live_read.`
+            };
+          }
+          return { total: 0, items: [], base_url: base, hint: bmsPointSearchMissHint(q, plan.probes) };
         } catch (error) {
           return { error: error instanceof Error ? error.message : "bms_points_query_failed", base_url: base };
         }
