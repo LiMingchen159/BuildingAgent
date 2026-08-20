@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FleetGuardPlanInput } from "@building-agent/fdd-deployment-planner";
 import { cloneStore, createSeedStore } from "../seed.js";
 import { ensureStoreFddLibrary, type FddAlgorithm } from "./library.js";
+import { fleetGuardEvaluatorRegistration } from "./runtimeRegistry.js";
 import {
   applyCurrentFddFleetTemplateToPlannerInput,
   createFddFleetTemplateBindings,
@@ -43,6 +44,8 @@ function createDraft(value = fixture()) {
 }
 
 function plannerInput(algorithm: FddAlgorithm, algorithmSignature: string, evaluatorSignature: string): FleetGuardPlanInput {
+  const evaluator = fleetGuardEvaluatorRegistration(algorithm.algorithmKey);
+  if (!evaluator) throw new Error("Missing FleetGuard evaluator registration fixture");
   return {
     algorithm: {
       id: algorithm.id,
@@ -57,9 +60,10 @@ function plannerInput(algorithm: FddAlgorithm, algorithmSignature: string, evalu
       }))
     },
     evaluator: {
-      id: algorithm.algorithmKey,
-      requiredVersion: algorithm.version,
-      status: "available"
+      id: evaluator.evaluatorId,
+      requiredVersion: evaluator.evaluatorVersion,
+      status: "available",
+      registeredVersion: evaluator.evaluatorVersion
     },
     inventory: {
       status: "present",

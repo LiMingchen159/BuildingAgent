@@ -7,6 +7,11 @@ import type {
   LegacyV4FleetCandidateEvidence
 } from "@building-agent/fdd-deployment-planner";
 import { fddEngineeringUnitIsAccepted } from "./equipmentEvidence.js";
+import {
+  fddEvaluatorRegistrationCanonicalSignature,
+  fleetGuardEvaluatorRegistration
+} from "./runtimeRegistry.js";
+import type { FddAlgorithm } from "./library.js";
 
 export const FDD_BINDING_PROPOSER_EVIDENCE_ADAPTER_VERSION = "fleetguard-v4-shadow-adapter-v1";
 
@@ -57,13 +62,22 @@ function hash(value: unknown): string {
 
 export function fddFleetGuardAlgorithmEvidenceSignature(input: {
   projectId: string;
-  algorithm: FddAlgorithmRequirement;
+  algorithm: FddAlgorithmRequirement & Partial<FddAlgorithm>;
 }): string {
   const requiredPoints = input.algorithm.requiredPoints
-    .filter((point) => point.required)
     .slice()
     .sort((left, right) => compareText(left.slot.trim(), right.slot.trim()));
-  return hash([input.projectId.trim(), input.algorithm.id, input.algorithm.version, requiredPoints]);
+  return hash({
+    projectId: input.projectId.trim(),
+    algorithm: {
+      // Treat the complete algorithm record as the deploy contract. This
+      // intentionally catches formula/default/runtime edits even when a
+      // producer incorrectly forgets to bump `version`; future fields are
+      // covered automatically as well.
+      ...input.algorithm,
+      requiredPoints
+    }
+  });
 }
 
 export function fddFleetGuardEvaluatorEvidenceSignature(input: {
@@ -71,11 +85,14 @@ export function fddFleetGuardEvaluatorEvidenceSignature(input: {
   evaluatorId: string;
   evaluatorAvailable: boolean;
 }): string {
+  const registration = fleetGuardEvaluatorRegistration(input.evaluatorId);
   return hash([
     input.projectId.trim(),
     input.evaluatorId.trim(),
     input.evaluatorAvailable,
-    "unversioned_registry"
+    registration
+      ? fddEvaluatorRegistrationCanonicalSignature(registration)
+      : "missing_versioned_registration"
   ]);
 }
 
@@ -105,19 +122,34 @@ function observationFor(input: {
   requirements: FddAlgorithmRequirement["requiredPoints"];
   minHistoryDays: number;
   exactBrickFacts: FddBindingProposerBrickPointFact[];
+  fleetConsensusQuantityKind?: FddAlgorithmRequirement["requiredPoints"][number]["quantityKind"];
 }): FleetGuardPlanInput["lookups"][number]["observations"][number] {
   const exactBrickFacts = input.exactBrickFacts;
   const exactBrickFact = exactBrickFacts.length === 1 ? exactBrickFacts[0] : undefined;
   const requiredKinds = [...new Set(input.requirements.map((requirement) => requirement.quantityKind))];
-  const quantityVerified = Boolean(
+  const quantityVerifiedByLocalFact = Boolean(
     exactBrickFact
     && requiredKinds.length === 1
     && requiredKinds[0] !== "unknown"
     && input.requirements.every((requirement) => exactBrickFact.matchedRoleSlots.includes(requirement.slot.trim()))
   );
+  const quantityVerifiedByCandidate = input.candidate.unitCompatibility === "match";
+  const quantityVerified = quantityVerifiedByLocalFact || Boolean(
+    exactBrickFact
+    && requiredKinds.length === 1
+    && requiredKinds[0] !== "unknown"
+    && input.fleetConsensusQuantityKind === requiredKinds[0]
+    // Consensus repairs a Brick/description classification outlier only when
+    // this exact point still has a local deterministic dimension match. It
+    // must never promote an otherwise unknown quantity into authorization.
+    && quantityVerifiedByCandidate
+  );
   const acceptableUnitSets = input.requirements.map((requirement) => requirement.acceptableUnits ?? []);
   const unitNotRequired = acceptableUnitSets.every((units) => units.length === 0);
-  const directBrickUnit = exactBrickFact?.unit?.trim();
+  const structuralUnit = exactBrickFact?.unit?.trim()
+    ?? (input.candidate.unitEvidenceSource === "catalog" || input.candidate.unitEvidenceSource === "brick"
+      ? input.candidate.unit?.trim()
+      : undefined);
   const historyDays = input.candidate.historyDays;
   return {
     entityKey: input.entityKey,
@@ -135,12 +167,12 @@ function observationFor(input: {
     },
     unit: unitNotRequired
       ? { status: "not_required" }
-      : directBrickUnit
+      : structuralUnit
         ? {
-            status: acceptableUnitSets.every((units) => units.length > 0 && fddEngineeringUnitIsAccepted(directBrickUnit, units))
+            status: acceptableUnitSets.every((units) => units.length > 0 && fddEngineeringUnitIsAccepted(structuralUnit, units))
               ? "match"
               : "mismatch",
-            unit: directBrickUnit
+            unit: structuralUnit
           }
         : { status: "unknown" },
     history: input.minHistoryDays <= 0
@@ -148,9 +180,21 @@ function observationFor(input: {
       : typeof historyDays === "number" && Number.isFinite(historyDays)
         ? {
             status: historyDays >= input.minHistoryDays ? "sufficient" : "insufficient",
-            observedDays: historyDays
+            // Keep authorization signatures stable as wall-clock probes move.
+            // Only threshold-relevant evidence is part of the frozen plan.
+            observedDays: historyDays >= input.minHistoryDays
+              ? input.minHistoryDays
+              : Math.max(0, Math.floor(historyDays))
           }
-        : { status: "unknown" }
+        : { status: "unknown" },
+    ...(!quantityVerifiedByLocalFact && quantityVerified && exactBrickFact
+      ? {
+          metadata: {
+            brickClass: exactBrickFact.brickClass,
+            brickClassStatus: "mismatch" as const
+          }
+        }
+      : {})
   };
 }
 
@@ -229,6 +273,30 @@ export function buildFleetGuardShadowInputFromV4Evidence(
     family,
     requiredPoints.filter((point) => rolesByFamily.get(family)?.has(point.slot.trim()))
   ]));
+  const consensusQuantityByFamily = new Map<string, FddAlgorithmRequirement["requiredPoints"][number]["quantityKind"]>();
+  for (const family of allFamilies) {
+    const requirements = requirementsByFamily.get(family) ?? [];
+    const kinds = [...new Set(requirements.map((requirement) => requirement.quantityKind))];
+    const consensusKind = kinds[0];
+    if (kinds.length !== 1 || !consensusKind || consensusKind === "unknown") continue;
+    let locallyVerified = 0;
+    for (const member of members) {
+      const matches = candidateGroups.get(`${member}|${family}`) ?? [];
+      if (matches.length !== 1) continue;
+      const facts = brickFactsByEntityPoint.get(
+        `${member}|${matches[0]!.candidate.pointName.trim().toLowerCase()}`
+      ) ?? [];
+      if (
+        facts.length === 1
+        && requirements.every((requirement) => facts[0]!.matchedRoleSlots.includes(requirement.slot.trim()))
+      ) locallyVerified += 1;
+    }
+    // Fleet consensus may repair one metadata-only outlier, never two. Exact
+    // identity, ownership, unit and history are still verified per entity.
+    if (locallyVerified >= Math.max(2, members.length - 1)) {
+      consensusQuantityByFamily.set(family, consensusKind);
+    }
+  }
   for (const member of members) {
     for (const family of allFamilies) {
         const rawMatches = candidateGroups.get(`${member}|${family}`) ?? [];
@@ -260,7 +328,10 @@ export function buildFleetGuardShadowInputFromV4Evidence(
             familyKey: family,
             requirements,
             minHistoryDays: Math.max(0, ...requirements.map((point) => point.historyRequirement?.minDays ?? 0)),
-            exactBrickFacts
+            exactBrickFacts,
+            ...(consensusQuantityByFamily.has(family)
+              ? { fleetConsensusQuantityKind: consensusQuantityByFamily.get(family)! }
+              : {})
           })]
         });
     }
@@ -272,6 +343,7 @@ export function buildFleetGuardShadowInputFromV4Evidence(
       && members.length === 0
         ? "absent"
         : "unknown";
+  const evaluatorRegistration = fleetGuardEvaluatorRegistration(input.evaluatorId);
   const signatures = {
     algorithm: fddFleetGuardAlgorithmEvidenceSignature({ projectId, algorithm: input.algorithm }),
     evaluator: fddFleetGuardEvaluatorEvidenceSignature({
@@ -292,7 +364,15 @@ export function buildFleetGuardShadowInputFromV4Evidence(
         objectRef: entry.candidate.objectRef?.trim(),
         unit: entry.candidate.unit?.trim(),
         unitCompatibility: entry.candidate.unitCompatibility,
-        historyDays: entry.candidate.historyDays
+        historyEvidence: (() => {
+          const minimum = requiredPoints.find((point) => point.slot.trim() === entry.candidate.slot.trim())?.historyRequirement?.minDays ?? 0;
+          const observed = entry.candidate.historyDays;
+          if (minimum <= 0) return { status: "not_required" };
+          if (typeof observed !== "number" || !Number.isFinite(observed)) return { status: "unknown" };
+          return observed >= minimum
+            ? { status: "sufficient", observedDays: minimum }
+            : { status: "insufficient", observedDays: Math.max(0, Math.floor(observed)) };
+        })()
       })),
       { brickFacts: brickFacts.map((fact) => ({
         subjectKey: fact.subjectKey,
@@ -318,11 +398,12 @@ export function buildFleetGuardShadowInputFromV4Evidence(
       }))
     },
     evaluator: {
-      id: input.evaluatorId,
-      requiredVersion: input.algorithm.version,
-      status: input.evaluatorAvailable ? "available" : "missing",
-      // The current runtime registry is boolean-only. Leaving the registered
-      // version absent is intentionally fail-closed until a versioned registry exists.
+      id: evaluatorRegistration?.evaluatorId ?? input.evaluatorId,
+      requiredVersion: evaluatorRegistration?.evaluatorVersion ?? "versioned-registration-required",
+      status: input.evaluatorAvailable && evaluatorRegistration ? "available" : "missing",
+      ...(input.evaluatorAvailable && evaluatorRegistration
+        ? { registeredVersion: evaluatorRegistration.evaluatorVersion }
+        : {})
     },
     inventory: {
       status: inventoryStatus,

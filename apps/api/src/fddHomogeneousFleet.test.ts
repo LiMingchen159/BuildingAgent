@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -6,6 +6,8 @@ import { DerivedMetricStore } from "./derivedMetrics.js";
 import { buildServer } from "./server.js";
 import { createSeedStore } from "./seed.js";
 import { ensureStoreFddLibrary } from "./fddLibrary.js";
+import { createFddFleetTemplateBindings } from "./fdd/fleetTemplates.js";
+import { createFddFleetGuardRolloutBindings } from "./fdd/fleetGuardRollout.js";
 import type { ChatProvider } from "./providers.js";
 
 const token = "seed-token-ada";
@@ -91,6 +93,7 @@ type ElementCollectorOptions = {
   includeObjectRefs?: boolean;
   pointUnitOverrides?: Record<string, string>;
   sharedObjectRefPoints?: Set<string>;
+  duplicateExactPoints?: Set<string>;
   historyFailurePoints?: Set<string>;
   historyTimeoutPoints?: Set<string>;
 };
@@ -137,9 +140,18 @@ function elementCollectorFetch(names: Set<string>, options: ElementCollectorOpti
               ? "kVA"
               : undefined);
       const objectRef = elementPointObjectRef(query, options);
+      const items = [{ name: query, description, ...(unit ? { unit } : {}), ...(objectRef ? { object_ref: objectRef } : {}) }];
+      if (options.duplicateExactPoints?.has(query)) {
+        items.push({
+          name: query,
+          description,
+          ...(unit ? { unit } : {}),
+          ...(objectRef ? { object_ref: `${objectRef}_DUPLICATE` } : {})
+        });
+      }
       return new Response(JSON.stringify({
-        total: 1,
-        items: [{ name: query, description, ...(unit ? { unit } : {}), ...(objectRef ? { object_ref: objectRef } : {}) }]
+        total: items.length,
+        items
       }), {
         status: 200,
         headers: { "content-type": "application/json" }
@@ -178,6 +190,28 @@ function elementCollectorFetch(names: Set<string>, options: ElementCollectorOpti
   });
 }
 
+function elementCollectorFetchWithMaterializerReadings(names: Set<string>, options: ElementCollectorOptions = {}) {
+  const catalogFetch = elementCollectorFetch(names, options);
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/api/v1/readings" && url.searchParams.has("from")) {
+      const objectRef = url.searchParams.get("object_ref");
+      const name = url.searchParams.get("name")
+        ?? (objectRef?.startsWith("//Elements/") ? objectRef.slice("//Elements/".length) : undefined)
+        ?? "unknown";
+      return new Response(JSON.stringify({
+        total: 1,
+        items: [{
+          ts: url.searchParams.get("to") ?? url.searchParams.get("from"),
+          name,
+          value_num: name.endsWith("_TLKW") ? 120 : 1
+        }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return catalogFetch(input, init);
+  });
+}
+
 function elementStoreWithRunningPowerGrounding() {
   const store = createSeedStore();
   store.projectGroundingByProject = {
@@ -192,6 +226,53 @@ function elementStoreWithRunningPowerGrounding() {
     }]
   };
   return store;
+}
+
+function enableCh01FleetGuardCanary(store: ReturnType<typeof createSeedStore>) {
+  ensureStoreFddLibrary(store);
+  const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_01_commanded_fails_to_start");
+  if (!algorithm) throw new Error("Missing CH-01 fixture algorithm");
+  const templates = createFddFleetTemplateBindings(store, {
+    now: () => "2026-08-20T00:00:00.000Z",
+    nextId: (() => {
+      let id = 0;
+      return () => `canary-${++id}`;
+    })()
+  });
+  const draft = templates.create({
+    projectId: "project_element",
+    actorId: "user_buildinggpt_admin",
+    requestId: "test-create-template",
+    input: {
+      algorithmId: algorithm.id,
+      reason: "Freeze Element CH-01 point families for the canary.",
+      roles: [
+        { role: "chiller_command", familyKey: "chiller_start_stop" },
+        { role: "chiller_status", familyKey: "run_status" },
+        { role: "chiller_power", familyKey: "tlkw" }
+      ]
+    }
+  });
+  const locked = templates.update({
+    projectId: "project_element",
+    templateId: draft.templateId,
+    actorId: "user_buildinggpt_admin",
+    requestId: "test-lock-template",
+    input: {
+      action: "lock",
+      baseVersion: draft.version,
+      baseSignature: draft.signature,
+      reason: "Authorize the confirmed 8x8 Element mapping."
+    }
+  });
+  const rollout = createFddFleetGuardRolloutBindings(store, {
+    now: () => "2026-08-20T00:00:01.000Z"
+  }).update("project_element", "user_buildinggpt_admin", {
+    baseRevision: 0,
+    mode: "canary",
+    algorithmKeys: [algorithm.algorithmKey]
+  });
+  return { algorithm, locked, rollout };
 }
 
 function frozenFleetPlan(check: Record<string, unknown>) {
@@ -219,6 +300,827 @@ function frozenFleetPlan(check: Record<string, unknown>) {
     entities
   };
 }
+
+describe("FleetGuard CH-01 Element canary", () => {
+  it("keeps CH-03 future-only and blocked until its supplemental role contract is versioned in a locked template", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-ch03-future-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const enabled = enableCh01FleetGuardCanary(store);
+    const ch03 = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_03_abnormal_shutdown");
+    if (!ch03) throw new Error("Missing CH-03 fixture algorithm");
+    createFddFleetGuardRolloutBindings(store).update("project_element", "user_buildinggpt_admin", {
+      baseRevision: enabled.rollout.revision,
+      mode: "canary",
+      algorithmKeys: [enabled.algorithm.algorithmKey, ch03.algorithmKey]
+    });
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const app = buildServer({
+      store,
+      fetch: elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides }) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const tested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${ch03.id}/test`,
+      headers
+    });
+    expect(tested.statusCode).toBe(200);
+    expect(tested.json().check.fleetGuard).toMatchObject({ state: "blocked", coverage: { authorized: 0 } });
+    expect(tested.json().check.fleetGuard.authorization).toBeUndefined();
+    await app.close();
+  });
+
+  it("authorizes a prospective plan and atomically deploys one receipt plus all eight exact runtimes", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-canary-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm, locked } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const fetchMock = elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides });
+    const app = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+
+    const tested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    expect(tested.statusCode).toBe(200);
+    const fleetGuard = tested.json().check.fleetGuard;
+    expect(fleetGuard).toMatchObject({
+      kind: "fleetguard_v1",
+      state: "ready",
+      templateRef: { templateId: locked.templateId, version: locked.version, signature: locked.signature },
+      coverage: { expected: 8, bound: 8, dataReady: 8, authorized: 8 }
+    });
+    expect(fleetGuard.authorization.taskId).toBeUndefined();
+
+    const deployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: fleetGuard.authorization }
+    });
+    expect(deployed.statusCode).toBe(200);
+    expect(deployed.json().deployment).toMatchObject({
+      expectedEntityCount: 8,
+      deployedEntityCount: 8,
+      authorizationPolicy: "fleetguard-v1"
+    });
+    const task = deployed.json().task;
+    expect(task).toMatchObject({
+      status: "running",
+      authorizationPolicy: "fleetguard-v1",
+      activeDeploymentReceiptId: deployed.json().deployment.receiptId
+    });
+
+    const metrics = new DerivedMetricStore(dataDir);
+    const receipts = metrics.listFddDeploymentReceipts("project_element", task.id);
+    const instances = metrics.listProjectMetrics("project_element")
+      .filter((instance) => instance.metricKey === algorithm.algorithmKey);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      receiptId: task.activeDeploymentReceiptId,
+      taskId: task.id,
+      templateRef: { templateId: locked.templateId, version: locked.version, signature: locked.signature }
+    });
+    expect(receipts[0]?.entities).toHaveLength(8);
+    expect(instances).toHaveLength(8);
+    for (const instance of instances) {
+      expect(instance.metadata).toMatchObject({
+        fddTaskId: task.id,
+        fddAuthorizationPolicy: "fleetguard-v1",
+        fddFleetGuardReceiptId: task.activeDeploymentReceiptId
+      });
+      expect(instance.dependencies).toHaveLength(3);
+      for (const dependency of instance.dependencies) {
+        expect(dependency.sourceId).toMatch(/^WCC_\d{2}__(?:command|status|power)$/u);
+        expect(dependency.pointName).toBeUndefined();
+        expect(dependency.objectRef).toMatch(/^\/\/Elements\//u);
+        expect(dependency.metadata).toMatchObject({ fddFleetGuardReceiptId: task.activeDeploymentReceiptId });
+      }
+    }
+    await app.close();
+  });
+
+  it("blocks the whole fleet when an exact point name resolves to two object references", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-duplicate-exact-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const app = buildServer({
+      store,
+      fetch: elementCollectorFetch(names, {
+        includeObjectRefs: true,
+        pointUnitOverrides,
+        duplicateExactPoints: new Set(["WCC_8_TLKW"])
+      }) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const tested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    expect(tested.statusCode).toBe(200);
+    expect(tested.json().check.fleetGuard).toMatchObject({
+      state: "blocked",
+      coverage: { authorized: 0 },
+      primaryBlocker: { code: "lookup_conflict", entityKey: "WCC_8", role: "chiller_power" }
+    });
+    expect(tested.json().check.fleetGuard.authorization).toBeUndefined();
+    const metrics = new DerivedMetricStore(dataDir);
+    expect(metrics.listProjectMetrics("project_element")).toEqual([]);
+    expect(metrics.listFddDeploymentReceipts("project_element")).toEqual([]);
+    await app.close();
+  });
+
+  it("binds existing-task overrides into the token and rejects a parameter race without any deploy writes", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-parameters-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const app = buildServer({
+      store,
+      fetch: elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides }) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const prospective = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    const firstDeploy = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: prospective.json().check.fleetGuard.authorization }
+    });
+    expect(firstDeploy.statusCode).toBe(200);
+    const taskId = firstDeploy.json().task.id as string;
+    const firstReceiptId = firstDeploy.json().deployment.receiptId as string;
+    expect(firstDeploy.json().task.parameterValues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "power_on_threshold_kw", value: 0.1, source: "buildinggpt_recommended" }),
+      expect.objectContaining({ key: "window_minutes", value: 5, source: "buildinggpt_recommended" })
+    ]));
+
+    const firstOverride = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/parameters`,
+      headers,
+      payload: { parameters: [{ key: "power_on_threshold_kw", value: 0.5 }] }
+    });
+    expect(firstOverride.statusCode).toBe(200);
+    const testedExisting = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/test`,
+      headers
+    });
+    const staleToken = testedExisting.json().task.deployabilityCheck.fleetGuard.authorization;
+    expect(staleToken.taskId).toBe(taskId);
+    expect(staleToken.parameterSignature).not.toBe(prospective.json().check.fleetGuard.authorization.parameterSignature);
+
+    const racedOverride = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/parameters`,
+      headers,
+      payload: { parameters: [{ key: "power_on_threshold_kw", value: 0.7 }] }
+    });
+    expect(racedOverride.statusCode).toBe(200);
+    const storeBeforeRejectedDeploy = JSON.stringify(store);
+    const metrics = new DerivedMetricStore(dataDir);
+    const metricsBefore = metrics.listProjectMetrics("project_element");
+    const receiptsBefore = metrics.listFddDeploymentReceipts("project_element", taskId);
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/deploy`,
+      headers,
+      payload: { authorization: staleToken }
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json().error.code).toBe("parameter_signature_mismatch");
+    expect(JSON.stringify(store)).toBe(storeBeforeRejectedDeploy);
+    expect(metrics.listProjectMetrics("project_element")).toEqual(metricsBefore);
+    expect(metrics.listFddDeploymentReceipts("project_element", taskId)).toEqual(receiptsBefore);
+
+    const retested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/test`,
+      headers
+    });
+    const currentToken = retested.json().task.deployabilityCheck.fleetGuard.authorization;
+    const redeployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/deploy`,
+      headers,
+      payload: { authorization: currentToken }
+    });
+    expect(redeployed.statusCode).toBe(200);
+    expect(redeployed.json().task.parameterValues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "power_on_threshold_kw", value: 0.7, source: "user_override" })
+    ]));
+    const receipts = metrics.listFddDeploymentReceipts("project_element", taskId);
+    expect(receipts).toHaveLength(2);
+    expect(receipts[0]).toMatchObject({ supersedesReceiptId: firstReceiptId });
+    await app.close();
+  });
+
+  it.each(["eighth runtime", "receipt insert"] as const)(
+    "rolls back every SQLite and SeedStore write when the %s stage fails",
+    async (failureStage) => {
+      const dataDir = mkdtempSync(path.join(tmpdir(), `ba-element-fleetguard-rollback-${failureStage.replace(/\s/gu, "-")}-`));
+      const names = writeElementFleetFixture(dataDir);
+      const store = elementStoreWithRunningPowerGrounding();
+      const { algorithm } = enableCh01FleetGuardCanary(store);
+      const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+        `WCC_${index + 1}_TLKW`,
+        "kW"
+      ]));
+      let injectFailure = false;
+      const app = buildServer({
+        store,
+        fetch: elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides }) as typeof fetch,
+        env: {
+          BUILDING_AGENT_DATA_DIR: dataDir,
+          BMS_DATABASE_API_URL: "http://collector.test",
+          BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+          DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+        },
+        fddTestHooks: {
+          beforeRegisterMetric: ({ entityId }) => {
+            if (injectFailure && failureStage === "eighth runtime" && entityId === "WCC_8") {
+              throw new Error("simulated-eighth-runtime-failure");
+            }
+          },
+          afterInsertFleetGuardReceipt: () => {
+            if (injectFailure && failureStage === "receipt insert") {
+              throw new Error("simulated-post-receipt-failure");
+            }
+          }
+        }
+      });
+      await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+        headers
+      });
+      const storeBefore = JSON.stringify(store);
+      injectFailure = true;
+      const rejected = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+        headers,
+        payload: { authorization: tested.json().check.fleetGuard.authorization }
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json().error.code).toBe("fdd_fleetguard_atomic_commit_failed");
+      expect(JSON.stringify(store)).toBe(storeBefore);
+      const metrics = new DerivedMetricStore(dataDir);
+      expect(metrics.listProjectMetrics("project_element")).toEqual([]);
+      expect(metrics.listMaterializations()).toEqual([]);
+      expect(metrics.listFddDeploymentReceipts("project_element")).toEqual([]);
+      await app.close();
+    }
+  );
+
+  it("rejects a missing token before scanning and bypasses cached evidence at the deploy boundary", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-fresh-boundary-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const fetchMock = elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides });
+    const app = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    fetchMock.mockClear();
+    const storeBeforeMissingToken = JSON.stringify(store);
+    const missing = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers
+    });
+    expect(missing.statusCode).toBe(409);
+    expect(missing.json().error.code).toBe("fdd_fleetguard_authorization_required");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(store)).toBe(storeBeforeMissingToken);
+
+    const tested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    expect(tested.json().check.fleetGuard.state).toBe("ready");
+    // A poisoned cached card must not be consulted by deployment.
+    const cached = store.fddChecksByProject?.project_element?.[0];
+    if (!cached?.fleetGuard) throw new Error("Missing cached FleetGuard check");
+    cached.fleetGuard.state = "blocked";
+    cached.fleetGuard.coverage.authorized = 0;
+    const deployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: tested.json().check.fleetGuard.authorization }
+    });
+    expect(deployed.statusCode).toBe(200);
+    expect(deployed.json().deployment).toMatchObject({ deployedEntityCount: 8 });
+    await app.close();
+  });
+
+  it("fails closed with zero writes when the eighth exact point disappears after Test", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-point-race-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const app = buildServer({
+      store,
+      fetch: elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides }) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const tested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    names.delete("WCC_8_TLKW");
+    const storeBefore = JSON.stringify(store);
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: tested.json().check.fleetGuard.authorization }
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json().error.code).toBe("plan_not_ready");
+    expect(JSON.stringify(store)).toBe(storeBefore);
+    const metrics = new DerivedMetricStore(dataDir);
+    expect(metrics.listProjectMetrics("project_element")).toEqual([]);
+    expect(metrics.listFddDeploymentReceipts("project_element")).toEqual([]);
+    await app.close();
+  });
+
+  it("rejects stale rollout, template, and synchronous algorithm races with no partial SQLite commit", async () => {
+    const setup = async (suffix: string, beforeInsert?: (algorithm: ReturnType<typeof enableCh01FleetGuardCanary>["algorithm"]) => void) => {
+      const dataDir = mkdtempSync(path.join(tmpdir(), `ba-element-fleetguard-stale-${suffix}-`));
+      const names = writeElementFleetFixture(dataDir);
+      const store = elementStoreWithRunningPowerGrounding();
+      const enabled = enableCh01FleetGuardCanary(store);
+      const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+        `WCC_${index + 1}_TLKW`,
+        "kW"
+      ]));
+      let inject = false;
+      const app = buildServer({
+        store,
+        fetch: elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides }) as typeof fetch,
+        env: {
+          BUILDING_AGENT_DATA_DIR: dataDir,
+          BMS_DATABASE_API_URL: "http://collector.test",
+          BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+          DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+        },
+        fddTestHooks: {
+          beforeInsertFleetGuardReceipt: () => {
+            if (inject) beforeInsert?.(enabled.algorithm);
+          }
+        }
+      });
+      await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${enabled.algorithm.id}/test`,
+        headers
+      });
+      inject = true;
+      return { app, dataDir, store, ...enabled, token: tested.json().check.fleetGuard.authorization };
+    };
+
+    const rolloutRace = await setup("rollout");
+    createFddFleetGuardRolloutBindings(rolloutRace.store).update(
+      "project_element",
+      "user_buildinggpt_admin",
+      {
+        baseRevision: rolloutRace.rollout.revision,
+        mode: "canary",
+        algorithmKeys: [rolloutRace.algorithm.algorithmKey]
+      }
+    );
+    const rolloutStoreBefore = JSON.stringify(rolloutRace.store);
+    const staleRollout = await rolloutRace.app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${rolloutRace.algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: rolloutRace.token }
+    });
+    expect(staleRollout.statusCode).toBe(409);
+    expect(staleRollout.json().error.code).toBe("rollout_revision_mismatch");
+    expect(JSON.stringify(rolloutRace.store)).toBe(rolloutStoreBefore);
+    expect(new DerivedMetricStore(rolloutRace.dataDir).listProjectMetrics("project_element")).toEqual([]);
+    await rolloutRace.app.close();
+
+    const templateRace = await setup("template");
+    createFddFleetTemplateBindings(templateRace.store).update({
+      projectId: "project_element",
+      templateId: templateRace.locked.templateId,
+      actorId: "user_buildinggpt_admin",
+      requestId: "stale-template-after-test",
+      input: {
+        action: "unlock",
+        baseVersion: templateRace.locked.version,
+        baseSignature: templateRace.locked.signature,
+        reason: "Simulate a template head change after Test."
+      }
+    });
+    const templateStoreBefore = JSON.stringify(templateRace.store);
+    const staleTemplate = await templateRace.app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${templateRace.algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: templateRace.token }
+    });
+    expect(staleTemplate.statusCode).toBe(409);
+    expect(staleTemplate.json().error.code).toBe("template_mismatch");
+    expect(JSON.stringify(templateRace.store)).toBe(templateStoreBefore);
+    const templateMetrics = new DerivedMetricStore(templateRace.dataDir);
+    expect(templateMetrics.listProjectMetrics("project_element")).toEqual([]);
+    expect(templateMetrics.listFddDeploymentReceipts("project_element")).toEqual([]);
+    await templateRace.app.close();
+
+    const algorithmRace = await setup("algorithm", (algorithm) => {
+      algorithm.version = `${algorithm.version}-raced`;
+    });
+    const originalVersion = algorithmRace.algorithm.version;
+    const rejectedAlgorithm = await algorithmRace.app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithmRace.algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: algorithmRace.token }
+    });
+    expect(rejectedAlgorithm.statusCode).toBe(409);
+    expect(rejectedAlgorithm.json().error.code).toBe("fdd_fleetguard_atomic_commit_failed");
+    algorithmRace.algorithm.version = originalVersion.replace(/-raced$/u, "");
+    const algorithmMetrics = new DerivedMetricStore(algorithmRace.dataDir);
+    expect(algorithmMetrics.listProjectMetrics("project_element")).toEqual([]);
+    expect(algorithmMetrics.listFddDeploymentReceipts("project_element")).toEqual([]);
+    await algorithmRace.app.close();
+
+    const contractRace = await setup("algorithm-contract", (algorithm) => {
+      const parameter = algorithm.parameters[0];
+      if (!parameter || typeof parameter.defaultValue !== "number") {
+        throw new Error("Missing numeric CH-01 default parameter");
+      }
+      parameter.defaultValue += 1;
+    });
+    const rejectedContract = await contractRace.app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${contractRace.algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: contractRace.token }
+    });
+    expect(rejectedContract.statusCode).toBe(409);
+    expect(rejectedContract.json().error.code).toBe("fdd_fleetguard_atomic_commit_failed");
+    const contractMetrics = new DerivedMetricStore(contractRace.dataDir);
+    expect(contractMetrics.listProjectMetrics("project_element")).toEqual([]);
+    expect(contractMetrics.listFddDeploymentReceipts("project_element")).toEqual([]);
+    await contractRace.app.close();
+  });
+
+  it("revalidates one historical receipt once per materializer batch and stops all eight on structural corruption", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-runtime-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm, locked } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const fetchMock = elementCollectorFetchWithMaterializerReadings(names, { includeObjectRefs: true, pointUnitOverrides });
+    let runMaterializer: (() => Promise<void>) | undefined;
+    const app = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      },
+      fddTestHooks: {
+        onMaterializerReady: (run) => {
+          runMaterializer = run;
+        }
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const tested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    const deployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: tested.json().check.fleetGuard.authorization }
+    });
+    expect(deployed.statusCode).toBe(200);
+    const taskId = deployed.json().task.id as string;
+    const metrics = new DerivedMetricStore(dataDir);
+    const instances = metrics.listProjectMetrics("project_element")
+      .filter((instance) => instance.metricKey === algorithm.algorithmKey);
+    expect(instances).toHaveLength(8);
+
+    // The mutable head may advance; runtime remains pinned to receipt v2.
+    createFddFleetTemplateBindings(store).update({
+      projectId: "project_element",
+      templateId: locked.templateId,
+      actorId: "user_buildinggpt_admin",
+      requestId: "runtime-unlock-current-head",
+      input: {
+        action: "unlock",
+        baseVersion: locked.version,
+        baseSignature: locked.signature,
+        reason: "Draft the next template without rebinding the deployed receipt."
+      }
+    });
+    const brickPath = path.join(dataDir, "project_element", "kb", "brick_model.ttl");
+    writeFileSync(
+      brickPath,
+      readFileSync(brickPath, "utf8").replace(
+        "test:WCC_08__power a brick:Electric_Power_Sensor",
+        "test:WCC_08__power a brick:Temperature_Sensor"
+      ),
+      "utf8"
+    );
+    for (const instance of instances) {
+      metrics.configureMaterialization({
+        instanceId: instance.instanceId,
+        enabled: true,
+        nextRunAt: "1970-01-01T00:00:00.000Z"
+      });
+    }
+    fetchMock.mockClear();
+    expect(runMaterializer).toBeTypeOf("function");
+    await runMaterializer?.();
+    const commandCatalogScans = fetchMock.mock.calls
+      .map(([request]) => new URL(String(request)))
+      .filter((url) => url.pathname === "/api/v1/points" && url.searchParams.get("q") === "WCC_1_Chiller_Start_Stop");
+    expect(commandCatalogScans).toHaveLength(1);
+    expect(instances.map((instance) => metrics.readMaterialization(instance.instanceId)?.lastError))
+      .toEqual(Array.from({ length: 8 }, () => undefined));
+    expect(instances.map((instance) => metrics.readMaterialization(instance.instanceId)?.enabled))
+      .toEqual(Array.from({ length: 8 }, () => true));
+    expect(store.fddTasksByProject?.project_element?.find((task) => task.id === taskId)?.status).toBe("running");
+
+    names.delete("WCC_8_TLKW");
+    for (const instance of instances) {
+      metrics.configureMaterialization({
+        instanceId: instance.instanceId,
+        enabled: true,
+        nextRunAt: "1970-01-01T00:00:00.000Z"
+      });
+    }
+    fetchMock.mockClear();
+    await runMaterializer?.();
+    expect(instances.map((instance) => metrics.readMaterialization(instance.instanceId))).toEqual(
+      Array.from({ length: 8 }, () => expect.objectContaining({
+        enabled: false,
+        status: "authorization_required"
+      }))
+    );
+    expect(store.fddTasksByProject?.project_element?.find((task) => task.id === taskId)?.status).toBe("cannot_deploy");
+    await app.close();
+  });
+
+  it.each([
+    {
+      signal: "objectRef",
+      corrupt: (options: ElementCollectorOptions) => options.sharedObjectRefPoints?.add("WCC_8_TLKW")
+    },
+    {
+      signal: "unit",
+      corrupt: (options: ElementCollectorOptions) => {
+        if (options.pointUnitOverrides) options.pointUnitOverrides.WCC_8_TLKW = "C";
+      }
+    },
+    {
+      signal: "history",
+      corrupt: (options: ElementCollectorOptions) => options.historyFailurePoints?.add("WCC_8_TLKW")
+    }
+  ])("stops all eight when one receipt binding's $signal evidence changes", async ({ corrupt }) => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-runtime-signal-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm } = enableCh01FleetGuardCanary(store);
+    const options: ElementCollectorOptions = {
+      includeObjectRefs: true,
+      pointUnitOverrides: Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+        `WCC_${index + 1}_TLKW`,
+        "kW"
+      ])),
+      sharedObjectRefPoints: new Set<string>(),
+      historyFailurePoints: new Set<string>()
+    };
+    const fetchMock = elementCollectorFetchWithMaterializerReadings(names, options);
+    let runMaterializer: (() => Promise<void>) | undefined;
+    const app = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      },
+      fddTestHooks: {
+        onMaterializerReady: (run) => {
+          runMaterializer = run;
+        }
+      }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const tested = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    const deployed = await app.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: tested.json().check.fleetGuard.authorization }
+    });
+    expect(deployed.statusCode).toBe(200);
+    const taskId = deployed.json().task.id as string;
+    const metrics = new DerivedMetricStore(dataDir);
+    const instances = metrics.listProjectMetrics("project_element")
+      .filter((instance) => instance.metricKey === algorithm.algorithmKey);
+    expect(instances).toHaveLength(8);
+
+    corrupt(options);
+    for (const instance of instances) {
+      metrics.configureMaterialization({
+        instanceId: instance.instanceId,
+        enabled: true,
+        nextRunAt: "1970-01-01T00:00:00.000Z"
+      });
+    }
+    await runMaterializer?.();
+    expect(instances.map((instance) => metrics.readMaterialization(instance.instanceId))).toEqual(
+      Array.from({ length: 8 }, () => expect.objectContaining({
+        enabled: false,
+        status: "authorization_required"
+      }))
+    );
+    expect(store.fddTasksByProject?.project_element?.find((task) => task.id === taskId)?.status).toBe("cannot_deploy");
+    await app.close();
+  });
+
+  it("recovers a committed task pointer on boot but never revives a receipt superseded by v4", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-boot-recovery-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const fetchMock = elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides });
+    const commonEnv = {
+      BUILDING_AGENT_DATA_DIR: dataDir,
+      BMS_DATABASE_API_URL: "http://collector.test",
+      DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+    };
+    const first = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: { ...commonEnv, BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary" },
+      fddTestHooks: {
+        beforeFleetGuardStorePersist: () => {
+          throw new Error("simulated-seedstore-flush-failure");
+        }
+      }
+    });
+    await first.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const tested = await first.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+      headers
+    });
+    const deployed = await first.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+      headers,
+      payload: { authorization: tested.json().check.fleetGuard.authorization }
+    });
+    expect(deployed.statusCode).toBe(200);
+    const taskId = deployed.json().task.id as string;
+    const receiptId = deployed.json().deployment.receiptId as string;
+    await first.close();
+
+    // Simulate a crash after SQLite commit but before the SeedStore pointer was
+    // durably flushed.
+    store.fddTasksByProject!.project_element = [];
+    const recoveredServer = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: commonEnv
+    });
+    const recovered = store.fddTasksByProject?.project_element?.find((task) => task.id === taskId);
+    expect(recovered).toMatchObject({
+      status: "running",
+      authorizationPolicy: "fleetguard-v1",
+      activeDeploymentReceiptId: receiptId
+    });
+    const metrics = new DerivedMetricStore(dataDir);
+    expect(metrics.listFddDeploymentReceipts("project_element", taskId)).toHaveLength(1);
+    expect(metrics.listProjectMetrics("project_element")
+      .filter((instance) => instance.metricKey === algorithm.algorithmKey)
+      .map((instance) => metrics.readMaterialization(instance.instanceId)?.enabled))
+      .toEqual(Array.from({ length: 8 }, () => true));
+
+    const v4Redeploy = await recoveredServer.inject({
+      method: "POST",
+      url: `/api/projects/project_element/fdd-tasks/${taskId}/deploy`,
+      headers
+    });
+    expect(v4Redeploy.statusCode).toBe(200);
+    expect(v4Redeploy.json().task.authorizationPolicy).toBe("v4");
+    expect(v4Redeploy.json().task.activeDeploymentReceiptId).toBeUndefined();
+    await recoveredServer.close();
+
+    const finalServer = buildServer({ store, fetch: fetchMock as typeof fetch, env: commonEnv });
+    const finalTask = store.fddTasksByProject?.project_element?.find((task) => task.id === taskId);
+    expect(finalTask?.authorizationPolicy).toBe("v4");
+    expect(finalTask?.activeDeploymentReceiptId).toBeUndefined();
+    expect(metrics.listFddDeploymentReceipts("project_element", taskId)).toHaveLength(1);
+    await finalServer.close();
+  });
+});
 
 describe("Element homogeneous chiller FDD deployment", () => {
   it("maps CH-03 by one point-family template and deploys all 8 chillers atomically", async () => {

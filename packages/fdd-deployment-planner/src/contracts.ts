@@ -47,6 +47,8 @@ export interface FddPointCandidate {
   entityKey?: string;
   objectRef?: string;
   unit?: string;
+  /** Provenance is required before FleetGuard may treat a unit as structural evidence. */
+  unitEvidenceSource?: "catalog" | "brick" | "description_inference";
   unitCompatibility: FddUnitCompatibility;
   dimensionReason: string;
   rejectionReason?: string;

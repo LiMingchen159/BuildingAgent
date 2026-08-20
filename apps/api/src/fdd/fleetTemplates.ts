@@ -2,7 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import type { FleetGuardPlanInput, FleetGuardRoleFamilyEvidence } from "@building-agent/fdd-deployment-planner";
 import type { SeedStore } from "../seed.js";
 import type { FddAlgorithm } from "./library.js";
-import { isExecutableFddAlgorithm } from "./runtimeRegistry.js";
+import {
+  fleetGuardEvaluatorRegistration,
+  isExecutableFddAlgorithm
+} from "./runtimeRegistry.js";
 import {
   fddFleetGuardAlgorithmEvidenceSignature,
   fddFleetGuardEvaluatorEvidenceSignature
@@ -28,6 +31,7 @@ export interface FddFleetTemplateCompatibilitySnapshot {
   };
   evaluator: {
     id: string;
+    version?: string;
     signature: string;
   };
 }
@@ -268,6 +272,14 @@ function compatibilitySnapshot(
       "The algorithm does not have a compatible executable evaluator."
     );
   }
+  const registration = fleetGuardEvaluatorRegistration(algorithm.algorithmKey);
+  if (!registration) {
+    throw new FddFleetTemplateError(
+      422,
+      "fdd_fleet_template_incompatible",
+      "The algorithm does not have a versioned FleetGuard evaluator registration."
+    );
+  }
   return {
     equipmentType: algorithm.equipmentType,
     algorithm: {
@@ -277,7 +289,8 @@ function compatibilitySnapshot(
       signature: fddFleetGuardAlgorithmEvidenceSignature({ projectId, algorithm })
     },
     evaluator: {
-      id: algorithm.algorithmKey,
+      id: registration.evaluatorId,
+      version: registration.evaluatorVersion,
       signature: fddFleetGuardEvaluatorEvidenceSignature({
         projectId,
         evaluatorId: algorithm.algorithmKey,
@@ -433,6 +446,35 @@ function templateMatchesPlannerInput(version: FddFleetTemplateVersion, input: Fl
 }
 
 /**
+ * Apply one immutable template version to a frozen evidence snapshot.
+ *
+ * Runtime revalidation deliberately uses this helper instead of the mutable
+ * template head: an already deployed receipt is bound to the exact historical
+ * version that authorized it. Incompatible or draft versions remain
+ * non-authorizing and therefore make FleetGuard block.
+ */
+export function applyFddFleetTemplateVersionToPlannerInput(
+  version: FddFleetTemplateVersion,
+  input: FleetGuardPlanInput
+): FleetGuardPlanInput {
+  const next = clone(input);
+  next.roleFamilies = next.roleFamilies.filter((entry) => entry.source !== "locked_template");
+  next.signatures = { ...next.signatures, template: version.signature };
+  if (version.state !== "locked" || !templateMatchesPlannerInput(version, next)) return next;
+
+  const templateVersion = `${version.templateId}@${version.version}`;
+  const evidence: FleetGuardRoleFamilyEvidence[] = version.roles.map((role) => ({
+    role: role.role,
+    familyKey: role.familyKey,
+    status: "verified",
+    source: "locked_template",
+    templateVersion
+  }));
+  next.roleFamilies = [...next.roleFamilies, ...evidence];
+  return next;
+}
+
+/**
  * Pure future-snapshot adapter. It never writes the store or mutates its input,
  * and it cannot alter existing v4 checks, tasks, metrics, or materializations.
  */
@@ -445,20 +487,7 @@ export function applyCurrentFddFleetTemplateToPlannerInput(
   next.roleFamilies = next.roleFamilies.filter((entry) => entry.source !== "locked_template");
   const head = currentFddFleetTemplateHead(store, projectId, input.algorithm.id);
   if (!head) return next;
-
-  next.signatures = { ...next.signatures, template: head.signature };
-  if (head.state !== "locked" || !templateMatchesPlannerInput(head, next)) return next;
-
-  const templateVersion = `${head.templateId}@${head.version}`;
-  const evidence: FleetGuardRoleFamilyEvidence[] = head.roles.map((role) => ({
-    role: role.role,
-    familyKey: role.familyKey,
-    status: "verified",
-    source: "locked_template",
-    templateVersion
-  }));
-  next.roleFamilies = [...next.roleFamilies, ...evidence];
-  return next;
+  return applyFddFleetTemplateVersionToPlannerInput(head, next);
 }
 
 export function createFddFleetTemplateBindings(

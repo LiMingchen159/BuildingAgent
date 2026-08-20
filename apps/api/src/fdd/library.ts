@@ -101,6 +101,9 @@ export interface ProjectFddTask {
   status: FddTaskStatus;
   deployabilityCheck?: FddDeployabilityCheck;
   parameterValues?: FddTaskParameterValue[];
+  /** Optional additive policy mirror; the immutable SQLite receipt is authoritative. */
+  authorizationPolicy?: "v4" | "fleetguard-v1";
+  activeDeploymentReceiptId?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -6,3 +6,5 @@ export * from "./bindingProposerTools.js";
 export * from "./bindingProposerProvider.js";
 export * from "./bindingProposerEvidenceAdapter.js";
 export * from "./fleetTemplates.js";
+export * from "./fleetGuardRollout.js";
+export * from "./fleetGuardAuthorization.js";

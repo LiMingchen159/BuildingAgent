@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
-import { DerivedMetricStore } from "./derivedMetrics.js";
+import { DerivedMetricStore, type FddDeploymentReceipt } from "./derivedMetrics.js";
 import { createGenericToolRegistry } from "./agent/genericTools.js";
 import { AgentMemoryStore } from "./agent/memory.js";
 
@@ -11,7 +11,92 @@ function tempDir(): string {
   return mkdtempSync(path.join(tmpdir(), "ba-derived-metrics-"));
 }
 
+function receiptFixture(instanceId: string): FddDeploymentReceipt {
+  const receiptId = "receipt-1";
+  const taskId = "task-1";
+  const algorithm = { id: "algorithm-1", key: "chiller_ch_01_commanded_fails_to_start", version: "v13" };
+  return {
+    receiptId,
+    projectId: "project_element",
+    taskId,
+    policyVersion: "fleetguard-v1",
+    planId: "plan-1",
+    planSignature: `fgplan-sha256-v1-${"a".repeat(64)}`,
+    structuralPlanSignature: `fgstruct-sha256-v1-${"b".repeat(64)}`,
+    rolloutRevision: 1,
+    templateRef: { templateId: "template-1", version: 2, signature: "template-signature" },
+    algorithm,
+    evaluator: { id: "chiller-commanded-fails-to-start", version: "ch01-command-state-v1" },
+    signatures: {
+      algorithm: "algorithm-signature",
+      evaluator: "evaluator-signature",
+      inventory: "inventory-signature",
+      evidence: "evidence-signature",
+      template: "template-signature"
+    },
+    entities: [{
+      entityKey: "WCC_1",
+      instanceId,
+      bindings: [{ role: "chiller_power", familyKey: "tlkw", pointId: "WCC_01__power", objectRef: "//Elements/WCC_1_TLKW", unit: "kW" }]
+    }],
+    parameterSignature: "parameter-signature",
+    taskSnapshot: {
+      id: taskId,
+      projectId: "project_element",
+      source: "global_library",
+      sharingScope: "global_community",
+      algorithmSnapshot: { ...algorithm, algorithmKey: algorithm.key, parameters: [], requiredPoints: [] },
+      status: "running",
+      authorizationPolicy: "fleetguard-v1",
+      activeDeploymentReceiptId: receiptId,
+      createdAt: "2026-08-20T00:00:00.000Z",
+      updatedAt: "2026-08-20T00:00:00.000Z"
+    },
+    deployedAt: "2026-08-20T00:00:00.000Z",
+    deployedBy: "admin"
+  };
+}
+
 describe("DerivedMetricStore", () => {
+  it("keeps FleetGuard receipts insert-only and returns detached clones", () => {
+    const store = new DerivedMetricStore(tempDir());
+    const receipt = receiptFixture("instance-1");
+    const inserted = store.insertFddDeploymentReceipt(receipt);
+    inserted.entities[0]!.bindings[0]!.objectRef = "//mutated";
+    const read = store.getFddDeploymentReceipt(receipt.receiptId)!;
+    expect(read.entities[0]!.bindings[0]!.objectRef).toBe("//Elements/WCC_1_TLKW");
+    read.entities[0]!.bindings[0]!.objectRef = "//also-mutated";
+    expect(store.getFddDeploymentReceipt(receipt.receiptId)?.entities[0]!.bindings[0]!.objectRef)
+      .toBe("//Elements/WCC_1_TLKW");
+    expect(() => store.insertFddDeploymentReceipt(receipt)).toThrow();
+    expect(store.listFddDeploymentReceipts("project_element", "task-1")).toHaveLength(1);
+  });
+
+  it("rolls receipt, metric, dependency, and materialization rows back together", () => {
+    const store = new DerivedMetricStore(tempDir());
+    expect(() => store.runInTransaction(() => {
+      const registered = store.registerMetric({
+        projectId: "project_element",
+        metricKey: "chiller_ch_01_commanded_fails_to_start",
+        entityId: "WCC_1",
+        formula: "fault",
+        dependencies: [{
+          role: "chiller_power",
+          sourceType: "raw_point",
+          sourceId: "WCC_01__power",
+          objectRef: "//Elements/WCC_1_TLKW",
+          unit: "kW"
+        }]
+      }).instance;
+      store.configureMaterialization({ instanceId: registered.instanceId, enabled: true, formulaKind: "fdd_rule" });
+      store.insertFddDeploymentReceipt(receiptFixture(registered.instanceId));
+      throw new Error("rollback-all");
+    })).toThrowError("rollback-all");
+    expect(store.listProjectMetrics("project_element")).toEqual([]);
+    expect(store.listMaterializations()).toEqual([]);
+    expect(store.listFddDeploymentReceipts("project_element", "task-1")).toEqual([]);
+  });
+
   it("registers project-scoped metric instances once and reuses duplicates", () => {
     const store = new DerivedMetricStore(tempDir());
     const first = store.registerMetric({
