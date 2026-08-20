@@ -16,6 +16,8 @@ export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" |
 export type FddDefinitionStatus = "implementation_ready" | "requires_configuration" | "requires_review";
 export type FddDefinitionParameterResolution = "source_default" | "source_expression" | "site_required";
 export type FddUnitCompatibility = "match" | "convertible" | "mismatch" | "unknown";
+export type FddCandidateEvidenceSource = "exact_brick_point" | "exact_family_point" | "catalog_metadata";
+export type FddUnitEvidence = "verified_compatible" | "missing_engineering_unit" | "quantity_unverified" | "known_mismatch";
 export type FddParameterType = "number" | "boolean" | "select";
 export type FddParameterValue = string | number | boolean;
 export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended" | "user_override";
@@ -23,7 +25,7 @@ export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended"
 // Cached deployability checks are persisted in the project store. Bump this
 // contract whenever the evidence required for `can_deploy` changes so a check
 // produced by older, weaker validation cannot authorize a deployment.
-export const FDD_DEPLOYABILITY_POLICY_VERSION = "v4-homogeneous-fleet";
+export const FDD_DEPLOYABILITY_POLICY_VERSION = "v5-evidence-backed-missing-unit";
 
 export interface FddEquipmentAvailability {
   equipmentType: FddEquipmentType;
@@ -130,11 +132,21 @@ export interface FddPointCandidate {
   objectRef?: string;
   unit?: string;
   unitCompatibility: FddUnitCompatibility;
+  evidenceSource?: FddCandidateEvidenceSource;
+  unitEvidence?: FddUnitEvidence;
   dimensionReason: string;
   rejectionReason?: string;
   confidence: number;
   reason: string;
   historyDays?: number;
+}
+
+export interface FddDeployabilityWarning {
+  code: string;
+  message: string;
+  entityKey?: string;
+  slot?: string;
+  pointName?: string;
 }
 
 export interface FddPointMapping {
@@ -186,6 +198,7 @@ export interface FddEntityDeployability {
   ambiguousInputs: FddAmbiguousInput[];
   missingPoints: string[];
   historyIssues: string[];
+  warnings?: FddDeployabilityWarning[];
   confidence: number;
 }
 
@@ -211,6 +224,7 @@ export interface FddDeployabilityCheck {
   rejectedCandidates: FddPointCandidate[];
   missingPoints: string[];
   historyIssues: string[];
+  warnings?: FddDeployabilityWarning[];
   checkedAt: string;
   source: FddCheckSource;
   projectDataSignature: string;
@@ -1206,6 +1220,41 @@ function fddCandidateUnitEvidenceRank(candidate: FddPointCandidate): number {
   return 0;
 }
 
+export function fddCandidateHasStructuralAuthorizationEvidence(candidate: FddPointCandidate): boolean {
+  return (candidate.evidenceSource === "exact_brick_point" || candidate.evidenceSource === "exact_family_point")
+    && Boolean(candidate.entityKey?.trim())
+    && Boolean(candidate.objectRef?.trim());
+}
+
+export function fddCandidateHasEvidenceBackedMissingUnit(candidate: FddPointCandidate): boolean {
+  return candidate.unitCompatibility === "unknown"
+    && candidate.unitEvidence === "missing_engineering_unit"
+    && fddCandidateHasStructuralAuthorizationEvidence(candidate);
+}
+
+export function fddEngineeringUnitMissingWarning(
+  candidate: FddPointCandidate,
+  entityKey?: string
+): FddDeployabilityWarning {
+  const resolvedEntityKey = entityKey ?? candidate.entityKey;
+  return {
+    code: "engineering_unit_missing",
+    message: `Engineering unit is missing for ${candidate.pointName}; the exact structural quantity and historical evidence were verified, but no unit was guessed or persisted.`,
+    ...(resolvedEntityKey ? { entityKey: resolvedEntityKey } : {}),
+    slot: candidate.slot,
+    pointName: candidate.pointName
+  };
+}
+
+export function sortFddDeployabilityWarnings(warnings: FddDeployabilityWarning[]): FddDeployabilityWarning[] {
+  return warnings.slice().sort((left, right) =>
+    (left.entityKey ?? "").localeCompare(right.entityKey ?? "")
+    || (left.slot ?? "").localeCompare(right.slot ?? "")
+    || (left.pointName ?? "").localeCompare(right.pointName ?? "")
+    || left.code.localeCompare(right.code)
+  );
+}
+
 export function sortFddPointCandidatesForRequiredPoint(
   point: FddRequiredPoint,
   candidates: FddPointCandidate[]
@@ -1267,6 +1316,7 @@ export function evaluateFddDeployability(input: {
   const historyIssues: string[] = input.historyIssues ? [...input.historyIssues] : [];
   const selectedMappings: FddPointMapping[] = [];
   const ambiguousInputs: FddAmbiguousInput[] = [];
+  const warnings: FddDeployabilityWarning[] = [];
   let uncertain = false;
   const usedPointKeys = new Set<string>();
 
@@ -1308,7 +1358,15 @@ export function evaluateFddDeployability(input: {
       continue;
     }
     const closeAlternatives = fddAmbiguousAlternativesForPoint(point, best, candidates.slice(1));
-    if (closeAlternatives.length > 0 || best.confidence < 0.68 || best.unitCompatibility === "unknown") {
+    const hasStructuralEvidence = fddCandidateHasStructuralAuthorizationEvidence(best);
+    const missingUnitIsOnlyWarning = closeAlternatives.length === 0
+      && best.confidence >= 0.68
+      && fddCandidateHasEvidenceBackedMissingUnit(best);
+    if (closeAlternatives.length > 0
+      || best.confidence < 0.68
+      || !hasStructuralEvidence
+      || best.unitCompatibility === "mismatch"
+      || (best.unitCompatibility === "unknown" && !missingUnitIsOnlyWarning)) {
       uncertain = true;
       ambiguousInputs.push({
         slot: point.slot,
@@ -1317,10 +1375,16 @@ export function evaluateFddDeployability(input: {
       });
     }
     const minDays = point.historyRequirement?.minDays ?? 0;
+    let historyVerified = true;
     if (minDays > 0 && typeof best.historyDays !== "number") {
       historyIssues.push(`${point.label} history coverage is unverified; requires ${minDays}d.`);
+      historyVerified = false;
     } else if (typeof best.historyDays === "number" && best.historyDays < minDays) {
       historyIssues.push(`${point.label} has ${best.historyDays}d history; requires ${minDays}d.`);
+      historyVerified = false;
+    }
+    if (missingUnitIsOnlyWarning && historyVerified) {
+      warnings.push(fddEngineeringUnitMissingWarning(best, input.exampleEntityKey));
     }
     selectedMappings.push({
       slot: point.slot,
@@ -1355,6 +1419,7 @@ export function evaluateFddDeployability(input: {
     rejectedCandidates: input.rejectedCandidates ?? [],
     missingPoints,
     historyIssues,
+    ...(status === "can_deploy" && warnings.length > 0 ? { warnings: sortFddDeployabilityWarnings(warnings) } : {}),
     checkedAt: input.checkedAt ?? new Date().toISOString(),
     source: input.source,
     projectDataSignature: input.projectDataSignature

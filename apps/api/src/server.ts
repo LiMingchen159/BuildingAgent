@@ -126,13 +126,18 @@ import {
   evaluateFddDeployability,
   FDD_DEPLOYABILITY_POLICY_VERSION,
   fddAmbiguousAlternativesForPoint,
+  fddCandidateHasEvidenceBackedMissingUnit,
+  fddCandidateHasStructuralAuthorizationEvidence,
+  fddEngineeringUnitMissingWarning,
   fddPointMappingsAreDistinct,
   latestFddCheck,
   normalizeFddCreateInput,
   sortFddPointCandidatesForRequiredPoint,
+  sortFddDeployabilityWarnings,
   type FddAlgorithm,
   type FddCheckSource,
   type FddCheckAgentWorkflow,
+  type FddCandidateEvidenceSource,
   type FddDeployabilityCheck,
   type FddEntityDeployability,
   type FddEquipmentAvailability,
@@ -2323,6 +2328,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const fetchProxy = options.fetch ?? fetch;
   const fddHistoryProbeCache = new Map<string, { expiresAt: number; promise: Promise<number | undefined> }>();
   const fddCatalogQueryCache = new Map<string, { expiresAt: number; promise: Promise<Record<string, unknown>[]> }>();
+  const truncatedFddCatalogResults = new WeakSet<Record<string, unknown>[]>();
   const automaticFddCheckRuns = new Map<string, Promise<void>>();
   const fddTaskAuthorizationRefreshRuns = new Map<string, Promise<boolean>>();
   const derivedMetricMaterializationRuns = new Map<string, Promise<void>>();
@@ -3357,6 +3363,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
   }
 
+  function fddUniqueExactCatalogItem(
+    items: Record<string, unknown>[],
+    expectedPointName: string
+  ): Record<string, unknown> | null {
+    if (truncatedFddCatalogResults.has(items)) return null;
+    const normalizedExpectedName = normalizeFddEntityAlias(expectedPointName);
+    const exactItems = items.filter((item) =>
+      normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizedExpectedName
+    );
+    if (exactItems.length !== 1 || !fddPointObjectRef(exactItems[0]!)) return null;
+    return exactItems[0]!;
+  }
+
+  function fddCatalogItemHasExpectedOwnership(
+    item: Record<string, unknown>,
+    expectedEntityKey: string,
+    context: FddEntityContext
+  ): boolean {
+    const explicitOwner = [
+      item.equipment_name,
+      item.equipmentName,
+      item.equipment_key,
+      item.equipmentKey,
+      item.entity_key,
+      item.entityKey,
+      item.equipment_ref,
+      item.equipmentRef
+    ].find((value): value is string => typeof value === "string" && Boolean(value.trim()));
+    if (!explicitOwner) return true;
+    return normalizeFddEntityAlias(canonicalFddEntityKey(explicitOwner, context))
+      === normalizeFddEntityAlias(canonicalFddEntityKey(expectedEntityKey, context));
+  }
+
   function rawFddCandidateEntityKey(pointName: string, context?: FddEntityContext): string | undefined {
     const normalized = pointName.trim();
     if (context) {
@@ -3516,13 +3555,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     point: FddAlgorithm["requiredPoints"][number],
     item: Record<string, unknown>,
     pointName: string
-  ): { unitCompatibility: FddUnitCompatibility; dimensionReason: string; rejectionReason?: string } {
+  ): {
+    unitCompatibility: FddUnitCompatibility;
+    unitEvidence: NonNullable<FddPointCandidate["unitEvidence"]>;
+    dimensionReason: string;
+    rejectionReason?: string;
+  } {
     const actualKind = inferFddCandidateQuantityKind(item, pointName);
     const expectedKind = point.quantityKind ?? "unknown";
     const unit = fddPointUnit(item);
     if (expectedKind === "unknown" || actualKind === "unknown") {
       return {
         unitCompatibility: "unknown",
+        unitEvidence: "quantity_unverified",
         dimensionReason: `Expected ${expectedKind}; catalog metadata ${unit ? `unit ${unit}` : "has no decisive unit"} gives ${actualKind}.`
       };
     }
@@ -3531,6 +3576,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       if (point.acceptableUnits?.length && !unit) {
         return {
           unitCompatibility: "unknown",
+          unitEvidence: "missing_engineering_unit",
           dimensionReason: `Formula input expects ${expectedKind}, and Brick/catalog semantics indicate ${actualKind}, but the engineering unit is unknown.${acceptableUnitText}`
         };
       }
@@ -3538,18 +3584,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         const rejectionReason = `Formula input "${point.label}" accepts ${point.acceptableUnits.join(", ")}, but the candidate unit is ${unit}; no unit conversion is declared.`;
         return {
           unitCompatibility: "mismatch",
+          unitEvidence: "known_mismatch",
           dimensionReason: rejectionReason,
           rejectionReason
         };
       }
       return {
         unitCompatibility: "match",
+        unitEvidence: "verified_compatible",
         dimensionReason: `Formula input expects ${expectedKind}; catalog metadata indicates ${actualKind}.${acceptableUnitText}`
       };
     }
     const rejectionReason = `Formula input "${point.label}" requires ${expectedKind}, but candidate metadata indicates ${actualKind}.`;
     return {
       unitCompatibility: "mismatch",
+      unitEvidence: "known_mismatch",
       dimensionReason: rejectionReason,
       rejectionReason
     };
@@ -3567,8 +3616,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           signal: AbortSignal.timeout(1500)
         });
         if (!response.ok) return [];
-        const payload = await response.json() as { items?: unknown[] };
-        return Array.isArray(payload.items) ? payload.items.filter(isRecordValue) : [];
+        const payload = await response.json() as { items?: unknown[]; total?: unknown };
+        const items = Array.isArray(payload.items) ? payload.items.filter(isRecordValue) : [];
+        if (typeof payload.total === "number" && payload.total > items.length) truncatedFddCatalogResults.add(items);
+        return items;
       } catch {
         return [];
       }
@@ -3579,9 +3630,26 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
   function fddBrickPointMatchesRequiredPoint(point: FddAlgorithm["requiredPoints"][number], fact: FddBrickPointFact): boolean {
     const factText = `${fact.pointName} ${fact.brickClass}`.replace(/[-_]/gu, " ").toLowerCase();
+    const factClassText = fact.brickClass.replace(/[-_]/gu, " ").toLowerCase();
+    const factNameText = fact.pointName.replace(/[-_]/gu, " ").toLowerCase();
     const pointText = `${point.slot} ${point.label} ${point.semantic}`.replace(/[-_]/gu, " ").toLowerCase();
     const actualKind = inferFddCandidateQuantityKind({ semantic_class: fact.brickClass, ...(fact.unit ? { unit: fact.unit } : {}) }, fact.pointName);
     if (point.quantityKind !== "unknown" && actualKind !== point.quantityKind) return false;
+    // Quantity alone is not a formula role. A temperature Sensor cannot stand
+    // in for a Setpoint (or vice versa), and a water-temperature point cannot
+    // stand in for outdoor-air temperature merely because both use degrees.
+    const expectsSetpoint = /\bsetpoint\b/u.test(pointText);
+    const factClassIsSensor = /\bsensor\b/u.test(factClassText);
+    const factIsSetpoint = /\bsetpoint\b/u.test(factClassText)
+      || (!factClassIsSensor && /\bsetpoint\b/u.test(factNameText));
+    if (expectsSetpoint !== factIsSetpoint && (expectsSetpoint || factIsSetpoint)) return false;
+    const expectsOutdoorAir = /\b(?:outside|outdoor) air\b|\boat\b/u.test(pointText);
+    const factIsWaterTemperature = /\b(?:chilled|condenser) water\b|\b(?:chw|cw)\b/u.test(factClassText);
+    const factIsOutdoorAir = /\b(?:outside|outdoor) air\b|\boat\b/u.test(factClassText)
+      || (!factIsWaterTemperature && /\b(?:outside|outdoor) air\b|\boat\b/u.test(factNameText));
+    if (expectsOutdoorAir && factIsWaterTemperature) return false;
+    if (expectsOutdoorAir && !factIsOutdoorAir) return false;
+    if (factIsOutdoorAir && /\b(?:chilled|condenser) water\b|\b(?:chw|cw)\b/u.test(pointText)) return false;
     // Status is a dimension, not a formula role. Keep command, operating
     // status, alarm, flow proof, and power proof in separate candidate pools
     // so a single Run_Status can never satisfy all CH-03 dependencies.
@@ -3606,27 +3674,6 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return true;
   }
 
-  function fddExplicitPowerUnitEvidence(
-    point: FddAlgorithm["requiredPoints"][number],
-    fact: FddBrickPointFact,
-    item: Record<string, unknown>
-  ): { unit: string; reason: string } | null {
-    if (point.quantityKind !== "power" || fact.unit || fddPointUnit(item)) return null;
-    if (!/(?:^|_)Power_Sensor$/u.test(fact.brickClass)) return null;
-    const text = [
-      fact.pointName,
-      item.description,
-      item.semantic_class,
-      item.brick_class
-    ].filter((value): value is string => typeof value === "string").join(" ");
-    if (/kwh|kilowatt[\s_-]*hour|percent|percentage|%/iu.test(text)) return null;
-    if (!/(?:^|[_-])TLKW(?:$|[_-])|\bmotor\s+kilowatts?\b|\bkilowatts?\b/iu.test(text)) return null;
-    return {
-      unit: "kW",
-      reason: "Engineering unit inferred as kW only from explicit TLKW/Motor Kilowatts catalog wording and Brick Power_Sensor semantics."
-    };
-  }
-
   async function addFddBrickPointCandidates(input: {
     algorithm: FddAlgorithm;
     point: FddAlgorithm["requiredPoints"][number];
@@ -3643,17 +3690,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     let verified = false;
     await mapWithConcurrency(matchingFacts, 8, async (fact) => {
       const items = await fetchFddCatalogItems(input.base, fact.pointName, 8);
-      const exactItem = items.find((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(fact.pointName));
-      if (!exactItem) return;
+      const exactItem = fddUniqueExactCatalogItem(items, fact.pointName);
+      if (!exactItem || !fddCatalogItemHasExpectedOwnership(exactItem, fact.entityKey, input.context)) return;
       verified = true;
-      const explicitPowerUnit = fddExplicitPowerUnitEvidence(input.point, fact, exactItem);
       const semanticItem = {
         ...exactItem,
         name: fact.pointName,
-        equipment_name: fact.entityKey,
         semantic_class: fact.brickClass,
         brick_class: fact.brickClass,
-        ...(fact.unit ? { unit: fact.unit } : explicitPowerUnit ? { unit: explicitPowerUnit.unit } : {})
+        ...(fact.unit ? { unit: fact.unit } : {})
       };
       addFddPointCandidateFromItem({
         algorithm: input.algorithm,
@@ -3663,9 +3708,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         context: input.context,
         candidates: input.candidates,
         seen: input.seen,
-        reason: `Verified exact BMS point from Brick class ${fact.brickClass}.${explicitPowerUnit ? ` ${explicitPowerUnit.reason}` : ""}`,
+        reason: `Verified exact BMS point from Brick class ${fact.brickClass}.`,
         minConfidence: 0.5,
         confidenceOverride: 0.96,
+        evidenceSource: "exact_brick_point",
         entityKeyOverride: fact.entityKey
       });
     });
@@ -3683,6 +3729,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     reason: string;
     minConfidence?: number;
     confidenceOverride?: number;
+    evidenceSource?: FddCandidateEvidenceSource;
     entityKeyOverride?: string;
   }): void {
     const pointName = fddPointName(input.item);
@@ -3711,6 +3758,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       ...(objectRef ? { objectRef } : {}),
       ...(unit ? { unit } : {}),
       unitCompatibility: unitCheck.unitCompatibility,
+      unitEvidence: unitCheck.unitEvidence,
+      evidenceSource: input.evidenceSource ?? "catalog_metadata",
       dimensionReason: unitCheck.dimensionReason,
       ...(unitCheck.rejectionReason ? { rejectionReason: unitCheck.rejectionReason } : {}),
       confidence,
@@ -3817,8 +3866,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         // from the same template family can short-circuit this lookup.
         if (alreadyHasExactFamilyPoint) continue;
         const items = await fetchFddCatalogItems(input.base, targetPointName, 8);
-        const exactItem = items.find((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(targetPointName));
-        if (!exactItem) continue;
+        const exactItem = fddUniqueExactCatalogItem(items, targetPointName);
+        if (!exactItem || !fddCatalogItemHasExpectedOwnership(exactItem, targetEntity, input.context)) continue;
         addFddPointCandidateFromItem({
           algorithm: input.algorithm,
           point,
@@ -3829,7 +3878,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           seen: input.seen,
           reason: `Completed same-class entity candidate from Knowledge Base entity aliases and verified exact BMS point "${targetPointName}".`,
           minConfidence: 0.5,
-          confidenceOverride: Math.max(0.74, Math.min(0.94, candidate.confidence - 0.02))
+          confidenceOverride: Math.max(0.74, Math.min(0.94, candidate.confidence - 0.02)),
+          evidenceSource: "exact_family_point",
+          entityKeyOverride: targetEntity
         });
       }
     }
@@ -4170,6 +4221,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const ambiguousInputs: FddEntityDeployability["ambiguousInputs"] = [];
     const missingPoints: string[] = [];
     const historyIssues: string[] = [];
+    const warnings: NonNullable<FddEntityDeployability["warnings"]> = [];
     const selectedConfidences: number[] = [];
     const usedPointNames = new Set<string>();
     const usedObjectRefs = new Set<string>();
@@ -4191,7 +4243,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         continue;
       }
       const closeAlternatives = fddAmbiguousAlternativesForPoint(point, best, slotCandidates.slice(1));
-      if (closeAlternatives.length > 0 || best.confidence < 0.68 || best.unitCompatibility === "unknown") {
+      const hasStructuralEvidence = fddCandidateHasStructuralAuthorizationEvidence(best);
+      const missingUnitIsOnlyWarning = closeAlternatives.length === 0
+        && best.confidence >= 0.68
+        && fddCandidateHasEvidenceBackedMissingUnit(best);
+      if (closeAlternatives.length > 0
+        || best.confidence < 0.68
+        || !hasStructuralEvidence
+        || best.unitCompatibility === "mismatch"
+        || (best.unitCompatibility === "unknown" && !missingUnitIsOnlyWarning)) {
         uncertain = true;
         ambiguousInputs.push({
           slot: point.slot,
@@ -4200,10 +4260,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         });
       }
       const minDays = point.historyRequirement?.minDays ?? 0;
+      let historyVerified = true;
       if (minDays > 0 && typeof best.historyDays !== "number") {
         historyIssues.push(`${point.label} history coverage is unverified; requires ${minDays}d.`);
+        historyVerified = false;
       } else if (typeof best.historyDays === "number" && best.historyDays < minDays) {
         historyIssues.push(`${point.label} has ${best.historyDays}d history; requires ${minDays}d.`);
+        historyVerified = false;
+      }
+      if (missingUnitIsOnlyWarning && historyVerified) {
+        warnings.push(fddEngineeringUnitMissingWarning(best, entityKey));
       }
       selectedConfidences.push(best.confidence);
       selectedMappings.push(fddPointMappingFromCandidate(best));
@@ -4243,6 +4309,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       ambiguousInputs,
       missingPoints,
       historyIssues,
+      ...(status === "can_deploy" && warnings.length > 0 ? { warnings: sortFddDeployabilityWarnings(warnings) } : {}),
       confidence
     };
   }
@@ -4258,9 +4325,22 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     mappingStrategy: "entity_independent" | "homogeneous_template";
     templateEntityKey?: string;
   } {
+    const entityKeysByObjectRef = new Map<string, Set<string>>();
+    for (const candidate of candidates) {
+      if (!candidate.entityKey || !candidate.objectRef) continue;
+      const objectRef = candidate.objectRef.trim().toLowerCase();
+      const entityKey = normalizeFddEntityAlias(canonicalFddEntityKey(candidate.entityKey, context));
+      entityKeysByObjectRef.set(objectRef, new Set([...(entityKeysByObjectRef.get(objectRef) ?? []), entityKey]));
+    }
+    const crossEntityObjectRefs = new Set(
+      [...entityKeysByObjectRef.entries()]
+        .filter(([, entityKeys]) => entityKeys.size > 1)
+        .map(([objectRef]) => objectRef)
+    );
     const byEntity = new Map<string, FddPointCandidate[]>();
     for (const candidate of candidates) {
       if (!candidate.entityKey) continue;
+      if (candidate.objectRef && crossEntityObjectRefs.has(candidate.objectRef.trim().toLowerCase())) continue;
       const canonical = canonicalFddEntityKey(candidate.entityKey, context);
       byEntity.set(canonical, [...(byEntity.get(canonical) ?? []), candidate]);
     }
@@ -4341,15 +4421,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const entities = expectedEntityKeys.length > 0
       ? expectedEntityKeys.map((entityKey) => entitiesByKey.get(entityKey))
       : [...entitiesByKey.values()];
+    const fleetObjectRefs = new Set<string>();
     return entities.every((entity) => {
       if (!entity) return false;
       if (entity.status !== "can_deploy") return false;
       const requiredMappings = entity.selectedMappings.filter((mapping) => requiredSlots.includes(mapping.slot));
       if (requiredMappings.length !== requiredSlots.length) return false;
       const mappedSlots = new Set(requiredMappings.map((mapping) => mapping.slot));
-      return mappedSlots.size === requiredSlots.length
-        && fddPointMappingsAreDistinct(requiredMappings)
-        && requiredSlots.every((slot) => mappedSlots.has(slot));
+      if (mappedSlots.size !== requiredSlots.length
+        || !fddPointMappingsAreDistinct(requiredMappings)
+        || !requiredSlots.every((slot) => mappedSlots.has(slot))) return false;
+      const objectRefs = requiredMappings.map((mapping) => mapping.objectRef?.trim().toLowerCase());
+      if (objectRefs.some((objectRef) => !objectRef)) return false;
+      if (objectRefs.some((objectRef) => fleetObjectRefs.has(objectRef!))) return false;
+      for (const objectRef of objectRefs) fleetObjectRefs.add(objectRef!);
+      return true;
     });
   }
 
@@ -4518,6 +4604,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       : hasUncertainEntity
         ? "uncertain"
         : check.status;
+    const fleetWarnings = check.status === "can_deploy"
+      ? sortFddDeployabilityWarnings(
+          deployability.entities
+            .filter((entity) => entity.status === "can_deploy")
+            .flatMap((entity) => entity.warnings ?? [])
+        )
+      : [];
+    if (fleetWarnings.length > 0) check.warnings = fleetWarnings;
+    else delete check.warnings;
     check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
     persistFddDeployabilityCheck(projectId, check, projectTaskId);
     return check;

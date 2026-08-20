@@ -381,6 +381,7 @@ export interface FddPointCandidate {
   confidence: number;
   reason: string;
   historyDays?: number;
+  unitEvidence?: "missing_engineering_unit";
 }
 
 export interface FddPointMapping {
@@ -404,6 +405,14 @@ export interface FddEntityDeployability {
   missingPoints: string[];
   historyIssues: string[];
   confidence: number;
+}
+
+export interface FddDeployabilityWarning {
+  code: string;
+  message: string;
+  entityKey?: string;
+  slot?: string;
+  pointName?: string;
 }
 
 export interface FddEquipmentAvailability {
@@ -457,6 +466,7 @@ export interface FddDeployabilityCheck {
   rejectedCandidates: FddPointCandidate[];
   missingPoints: string[];
   historyIssues: string[];
+  warnings?: FddDeployabilityWarning[];
   checkedAt: string;
   source: "auto" | "manual";
   projectDataSignature: string;
@@ -2275,7 +2285,25 @@ function parseFddPointCandidate(value: unknown): FddPointCandidate | null {
     unitCompatibility,
     dimensionReason: typeof value.dimensionReason === "string" ? value.dimensionReason : "No unit dimension metadata was provided.",
     ...(typeof value.rejectionReason === "string" ? { rejectionReason: value.rejectionReason } : {}),
-    ...(typeof value.historyDays === "number" ? { historyDays: value.historyDays } : {})
+    ...(typeof value.historyDays === "number" ? { historyDays: value.historyDays } : {}),
+    ...(value.unitEvidence === "missing_engineering_unit" ? { unitEvidence: value.unitEvidence } : {})
+  };
+}
+
+function parseFddDeployabilityWarning(value: unknown): FddDeployabilityWarning | null {
+  if (!isRecord(value)
+    || typeof value.code !== "string"
+    || !value.code.trim()
+    || typeof value.message !== "string"
+    || !value.message.trim()) {
+    return null;
+  }
+  return {
+    code: value.code,
+    message: value.message,
+    ...(typeof value.entityKey === "string" ? { entityKey: value.entityKey } : {}),
+    ...(typeof value.slot === "string" ? { slot: value.slot } : {}),
+    ...(typeof value.pointName === "string" ? { pointName: value.pointName } : {})
   };
 }
 
@@ -2377,6 +2405,9 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
   const requiredRuntimeSlots = Array.isArray(value.requiredRuntimeSlots)
     ? value.requiredRuntimeSlots.filter((entry): entry is string => typeof entry === "string")
     : undefined;
+  const warnings = Array.isArray(value.warnings)
+    ? value.warnings.map((entry) => parseFddDeployabilityWarning(entry)).filter((entry): entry is FddDeployabilityWarning => entry !== null)
+    : undefined;
   const equipmentAvailability = value.equipmentAvailability === undefined
     ? undefined
     : parseFddEquipmentAvailability(value.equipmentAvailability);
@@ -2387,6 +2418,7 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
   if (Array.isArray(value.rejectedCandidates) && rejectedCandidates.length !== value.rejectedCandidates.length) return null;
   if (Array.isArray(value.deployableEntities) && deployableEntities?.length !== value.deployableEntities.length) return null;
   if (Array.isArray(value.requiredRuntimeSlots) && requiredRuntimeSlots?.length !== value.requiredRuntimeSlots.length) return null;
+  if (Array.isArray(value.warnings) && warnings?.length !== value.warnings.length) return null;
   if (value.equipmentAvailability !== undefined && !equipmentAvailability) return null;
   if (value.mappingStrategy !== undefined
     && value.mappingStrategy !== "entity_independent"
@@ -2426,6 +2458,7 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
     rejectedCandidates,
     missingPoints: value.missingPoints.filter((entry): entry is string => typeof entry === "string"),
     historyIssues: value.historyIssues.filter((entry): entry is string => typeof entry === "string"),
+    ...(warnings ? { warnings } : {}),
     checkedAt: value.checkedAt,
     source: value.source,
     projectDataSignature: value.projectDataSignature,
