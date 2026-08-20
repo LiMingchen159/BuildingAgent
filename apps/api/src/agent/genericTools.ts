@@ -729,8 +729,11 @@ function expandDerivedComparisonWidgets(widgets: Array<Record<string, unknown>>)
       return [widget];
     }
     const requestedFamilyKeys = new Set(bindings.map((binding) => dashboardComparisonFamily(binding).key));
-    const selectedFamilies = sortedFamilies.filter((family) => requestedFamilyKeys.has(family.key));
-    const familiesToRender = selectedFamilies.length > 0 ? selectedFamilies : sortedFamilies;
+    const familiesToRender = sortedFamilies.filter((family) => requestedFamilyKeys.has(family.key));
+    // Families are only harvested from per-equipment live/stat widgets, so a comparison of a
+    // metric that has no such widget matches nothing. Rendering the other families instead would
+    // silently rebind the widget to a metric the caller never asked to compare.
+    if (familiesToRender.length === 0) return [widget];
     const hasMixedFamilies = familiesToRender.length > 1;
     const baseTitle = titleBaseFor(widget);
 

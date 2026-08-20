@@ -877,6 +877,117 @@ describe("derived metric agent tools", () => {
     }
   });
 
+  it("keeps a comparison widget bound to its own metric when no per-equipment widget shares that metric", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+
+    const registerPair = (entityId: string) => ({
+      deltaT: metrics.registerMetric({
+        projectId: "project_element",
+        metricKey: "chw_delta_t",
+        entityId,
+        displayName: `${entityId} CHW Delta T`,
+        formula: "return_temp - supply_temp",
+        dependencies: [
+          { role: "return_temp", sourceType: "raw_point", sourceId: `${entityId}-CHWRT`, pointName: `${entityId}-CHWRT` },
+          { role: "supply_temp", sourceType: "raw_point", sourceId: `${entityId}-CHWST`, pointName: `${entityId}-CHWST` }
+        ]
+      }),
+      cop: metrics.registerMetric({
+        projectId: "project_element",
+        metricKey: "system_cop",
+        entityId,
+        displayName: `${entityId} System COP`,
+        formula: "cooling_load_kw / power_kw",
+        dependencies: [
+          { role: "cooling_load_kw", sourceType: "raw_point", sourceId: `${entityId}_Q`, pointName: `${entityId}_Q` },
+          { role: "power_kw", sourceType: "raw_point", sourceId: `${entityId}_P`, pointName: `${entityId}_P` }
+        ]
+      })
+    });
+    const wcc01 = registerPair("WCC_01");
+    const wcc02 = registerPair("WCC_02");
+
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const dashboardCreate = registry.list().find((tool) => tool.name === "dashboard_create");
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_comparison_family",
+      conversationId: "conv_comparison_family",
+      canConfigure: true,
+      messages: [],
+      dashboardOps: {
+        create: (input: any) => ({
+          id: "dash_comparison_family",
+          projectId: "project_element",
+          ownerUserId: "user_buildinggpt",
+          visibility: input.visibility ?? "project",
+          createdAt: "2026-08-20T00:00:00.000Z",
+          updatedAt: "2026-08-20T00:00:00.000Z",
+          ...input
+        })
+      }
+    };
+
+    // Mirrors the real "monitor CHW delta-T for all chillers and compare performance" request:
+    // every per-chiller widget carries only delta-T, while the comparison asks for COP.
+    const result = await dashboardCreate!.run({
+      title: "Chiller CHW delta-T monitoring",
+      widgets: [
+        {
+          id: "wcc01_delta_t",
+          kind: "stat_value",
+          title: "Chiller 1 Delta T",
+          pointBindings: [
+            { source: "derived_metric", metricInstanceId: wcc01.deltaT.instance.instanceId, label: "WCC-01 CHW Delta T", entityId: "WCC_01" }
+          ]
+        },
+        {
+          id: "wcc02_delta_t",
+          kind: "stat_value",
+          title: "Chiller 2 Delta T",
+          pointBindings: [
+            { source: "derived_metric", metricInstanceId: wcc02.deltaT.instance.instanceId, label: "WCC-02 CHW Delta T", entityId: "WCC_02" }
+          ]
+        },
+        {
+          id: "cop_comparison",
+          kind: "bar_comparison",
+          title: "COP Comparison (Latest)",
+          pointBindings: [
+            { source: "derived_metric", metricInstanceId: wcc01.cop.instance.instanceId, label: "WCC-01 System COP", entityId: "WCC_01" },
+            { source: "derived_metric", metricInstanceId: wcc02.cop.instance.instanceId, label: "WCC-02 System COP", entityId: "WCC_02" }
+          ]
+        }
+      ]
+    }, context);
+
+    const widgets = (result.dashboard as any).widgets as Array<{ id: string; kind: string; title: string; pointBindings: Array<Record<string, unknown>> }>;
+    const comparisonWidgets = widgets.filter((widget) => widget.kind === "bar_comparison");
+    expect(comparisonWidgets).toHaveLength(1);
+
+    const copInstanceIds = new Set([wcc01.cop.instance.instanceId, wcc02.cop.instance.instanceId]);
+    const deltaTInstanceIds = new Set([wcc01.deltaT.instance.instanceId, wcc02.deltaT.instance.instanceId]);
+    const boundInstanceIds = comparisonWidgets[0]!.pointBindings.map((binding) => binding.metricInstanceId);
+
+    expect(new Set(boundInstanceIds)).toEqual(copInstanceIds);
+    expect(boundInstanceIds.some((instanceId) => deltaTInstanceIds.has(String(instanceId)))).toBe(false);
+    expect(comparisonWidgets[0]!.title).toBe("COP Comparison (Latest)");
+  });
+
   it("expands persisted calculations to at least a 30-day history window", async () => {
     const dir = tempDir();
     const memory = new AgentMemoryStore(dir);
