@@ -153,6 +153,57 @@ export interface DerivedMetricConfigureMaterializationInput {
   lastError?: string | null;
 }
 
+export interface FddDeploymentReceiptTemplateRef {
+  templateId: string;
+  version: number;
+  signature: string;
+}
+
+export interface FddDeploymentReceiptBinding {
+  role: string;
+  familyKey: string;
+  pointId: string;
+  objectRef: string;
+  unit?: string;
+}
+
+export interface FddDeploymentReceiptEntity {
+  entityKey: string;
+  instanceId: string;
+  bindings: FddDeploymentReceiptBinding[];
+}
+
+/** Immutable, authoritative FleetGuard deployment record stored with runtime rows. */
+export interface FddDeploymentReceipt {
+  receiptId: string;
+  projectId: string;
+  taskId: string;
+  policyVersion: "fleetguard-v1";
+  planId: string;
+  planSignature: string;
+  structuralPlanSignature: string;
+  rolloutRevision: number;
+  templateRef: FddDeploymentReceiptTemplateRef;
+  algorithm: { id: string; key: string; version: string };
+  evaluator: { id: string; version: string };
+  signatures: {
+    algorithm: string;
+    evaluator: string;
+    inventory: string;
+    evidence: string;
+    template: string;
+    tool?: string;
+    skill?: string;
+    model?: string;
+  };
+  entities: FddDeploymentReceiptEntity[];
+  parameterSignature: string;
+  taskSnapshot?: Record<string, unknown>;
+  supersedesReceiptId?: string;
+  deployedAt: string;
+  deployedBy: string;
+}
+
 function stableId(prefix: string, parts: string[], length = 20): string {
   const hash = createHash("sha256")
     .update(parts.map((part) => part.trim().toLowerCase()).join("\u001f"))
@@ -172,6 +223,14 @@ function trimRequired(value: string, name: string): string {
 function optional(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function receiptText(value: unknown, maxLength = 20_000): value is string {
+  return typeof value === "string" && Boolean(value.trim()) && value.length <= maxLength;
 }
 
 function serializeMetadata(value: Record<string, unknown> | undefined): string | null {
@@ -262,6 +321,23 @@ interface MaterializationRow {
   status: string;
   last_error: string | null;
   updated_at: string;
+}
+
+interface FddDeploymentReceiptRow {
+  receipt_id: string;
+  project_id: string;
+  task_id: string;
+  policy_version: string;
+  plan_id: string;
+  plan_signature: string;
+  rollout_revision: number;
+  template_id: string;
+  template_version: number;
+  template_signature: string;
+  receipt_json: string;
+  supersedes_receipt_id: string | null;
+  deployed_at: string;
+  deployed_by: string;
 }
 
 export class DerivedMetricStore {
@@ -398,6 +474,23 @@ export class DerivedMetricStore {
         FOREIGN KEY(instance_id) REFERENCES metric_instances(instance_id)
       );
 
+      CREATE TABLE IF NOT EXISTS fdd_deployment_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        plan_signature TEXT NOT NULL,
+        rollout_revision INTEGER NOT NULL,
+        template_id TEXT NOT NULL,
+        template_version INTEGER NOT NULL,
+        template_signature TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        supersedes_receipt_id TEXT,
+        deployed_at TEXT NOT NULL,
+        deployed_by TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_metric_instances_lookup
         ON metric_instances(project_id, metric_key, entity_id);
       CREATE INDEX IF NOT EXISTS idx_metric_samples_instance_ts
@@ -406,9 +499,219 @@ export class DerivedMetricStore {
         ON metric_latest(project_id, ts);
       CREATE INDEX IF NOT EXISTS idx_metric_materialization_project
         ON metric_materialization(project_id, enabled, next_run_at);
+      CREATE INDEX IF NOT EXISTS idx_fdd_deployment_receipts_task
+        ON fdd_deployment_receipts(project_id, task_id, deployed_at);
     `);
     this.ensureMetricInstanceLineageColumns();
     this.ensureMetricMaterializationAlignmentColumns();
+  }
+
+  /** INSERT-only by design: a receipt can be superseded but never updated. */
+  insertFddDeploymentReceipt(receipt: FddDeploymentReceipt): FddDeploymentReceipt {
+    const receiptId = trimRequired(receipt.receiptId, "receiptId");
+    const projectId = trimRequired(receipt.projectId, "projectId");
+    const taskId = trimRequired(receipt.taskId, "taskId");
+    if (receipt.policyVersion !== "fleetguard-v1") throw new Error("fdd_receipt_policy_invalid");
+    if (!Number.isSafeInteger(receipt.rolloutRevision) || receipt.rolloutRevision < 1) throw new Error("fdd_receipt_rollout_revision_invalid");
+    if (!Number.isSafeInteger(receipt.templateRef.version) || receipt.templateRef.version < 1) throw new Error("fdd_receipt_template_version_invalid");
+    this.assertValidFddDeploymentReceipt(receipt);
+    const normalized: FddDeploymentReceipt = structuredClone({
+      ...receipt,
+      receiptId,
+      projectId,
+      taskId
+    });
+    const receiptJson = JSON.stringify(normalized);
+    if (receiptJson.length > 2_000_000) throw new Error("fdd_receipt_too_large");
+    this.db.prepare(`
+      INSERT INTO fdd_deployment_receipts (
+        receipt_id, project_id, task_id, policy_version, plan_id, plan_signature,
+        rollout_revision, template_id, template_version, template_signature,
+        receipt_json, supersedes_receipt_id, deployed_at, deployed_by
+      ) VALUES (
+        @receipt_id, @project_id, @task_id, @policy_version, @plan_id, @plan_signature,
+        @rollout_revision, @template_id, @template_version, @template_signature,
+        @receipt_json, @supersedes_receipt_id, @deployed_at, @deployed_by
+      )
+    `).run({
+      receipt_id: normalized.receiptId,
+      project_id: normalized.projectId,
+      task_id: normalized.taskId,
+      policy_version: normalized.policyVersion,
+      plan_id: trimRequired(normalized.planId, "planId"),
+      plan_signature: trimRequired(normalized.planSignature, "planSignature"),
+      rollout_revision: normalized.rolloutRevision,
+      template_id: trimRequired(normalized.templateRef.templateId, "templateId"),
+      template_version: normalized.templateRef.version,
+      template_signature: trimRequired(normalized.templateRef.signature, "templateSignature"),
+      receipt_json: receiptJson,
+      supersedes_receipt_id: optional(normalized.supersedesReceiptId),
+      deployed_at: trimRequired(normalized.deployedAt, "deployedAt"),
+      deployed_by: trimRequired(normalized.deployedBy, "deployedBy")
+    });
+    return structuredClone(normalized);
+  }
+
+  getFddDeploymentReceipt(receiptId: string): FddDeploymentReceipt | null {
+    const row = this.db.prepare(`
+      SELECT * FROM fdd_deployment_receipts WHERE receipt_id = ?
+    `).get(trimRequired(receiptId, "receiptId")) as FddDeploymentReceiptRow | undefined;
+    return row ? this.fddDeploymentReceiptFromRow(row) : null;
+  }
+
+  listFddDeploymentReceipts(projectId?: string, taskId?: string): FddDeploymentReceipt[] {
+    const clauses: string[] = [];
+    const params: Record<string, string> = {};
+    if (projectId?.trim()) {
+      clauses.push("project_id = @project_id");
+      params.project_id = projectId.trim();
+    }
+    if (taskId?.trim()) {
+      clauses.push("task_id = @task_id");
+      params.task_id = taskId.trim();
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(`
+      SELECT * FROM fdd_deployment_receipts
+      ${where}
+      ORDER BY deployed_at DESC, receipt_id DESC
+    `).all(params) as FddDeploymentReceiptRow[];
+    return rows.map((row) => this.fddDeploymentReceiptFromRow(row));
+  }
+
+  latestFddDeploymentReceipt(projectId: string, taskId: string): FddDeploymentReceipt | null {
+    const row = this.db.prepare(`
+      SELECT * FROM fdd_deployment_receipts
+      WHERE project_id = ? AND task_id = ?
+      ORDER BY deployed_at DESC, receipt_id DESC
+      LIMIT 1
+    `).get(trimRequired(projectId, "projectId"), trimRequired(taskId, "taskId")) as FddDeploymentReceiptRow | undefined;
+    return row ? this.fddDeploymentReceiptFromRow(row) : null;
+  }
+
+  private fddDeploymentReceiptFromRow(row: FddDeploymentReceiptRow): FddDeploymentReceipt {
+    if (row.receipt_json.length > 2_000_000) throw new Error("fdd_receipt_corrupt");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.receipt_json) as unknown;
+    } catch {
+      throw new Error("fdd_receipt_corrupt");
+    }
+    this.assertValidFddDeploymentReceipt(parsed);
+    if (
+      parsed.receiptId !== row.receipt_id
+      || parsed.projectId !== row.project_id
+      || parsed.taskId !== row.task_id
+      || parsed.policyVersion !== row.policy_version
+      || parsed.planId !== row.plan_id
+      || parsed.planSignature !== row.plan_signature
+      || parsed.rolloutRevision !== row.rollout_revision
+      || parsed.templateRef.templateId !== row.template_id
+      || parsed.templateRef.version !== row.template_version
+      || parsed.templateRef.signature !== row.template_signature
+      || (parsed.supersedesReceiptId ?? null) !== row.supersedes_receipt_id
+      || parsed.deployedAt !== row.deployed_at
+      || parsed.deployedBy !== row.deployed_by
+    ) {
+      throw new Error("fdd_receipt_corrupt");
+    }
+    return structuredClone(parsed);
+  }
+
+  private assertValidFddDeploymentReceipt(receipt: unknown): asserts receipt is FddDeploymentReceipt {
+    if (!isPlainRecord(receipt) || receipt.policyVersion !== "fleetguard-v1") throw new Error("fdd_receipt_corrupt");
+    if (!isPlainRecord(receipt.templateRef) || !isPlainRecord(receipt.algorithm) || !isPlainRecord(receipt.evaluator) || !isPlainRecord(receipt.signatures)) {
+      throw new Error("fdd_receipt_corrupt");
+    }
+    const required = [
+      receipt.receiptId,
+      receipt.projectId,
+      receipt.taskId,
+      receipt.planId,
+      receipt.planSignature,
+      receipt.structuralPlanSignature,
+      receipt.templateRef.templateId,
+      receipt.templateRef.signature,
+      receipt.algorithm.id,
+      receipt.algorithm.key,
+      receipt.algorithm.version,
+      receipt.evaluator.id,
+      receipt.evaluator.version,
+      receipt.signatures.algorithm,
+      receipt.signatures.evaluator,
+      receipt.signatures.inventory,
+      receipt.signatures.evidence,
+      receipt.signatures.template,
+      receipt.parameterSignature,
+      receipt.deployedAt,
+      receipt.deployedBy
+    ];
+    if (required.some((value) => !receiptText(value))) throw new Error("fdd_receipt_corrupt");
+    if (!Number.isSafeInteger(receipt.rolloutRevision) || (receipt.rolloutRevision as number) < 1) throw new Error("fdd_receipt_corrupt");
+    if (!Number.isSafeInteger(receipt.templateRef.version) || (receipt.templateRef.version as number) < 1) throw new Error("fdd_receipt_corrupt");
+    if (!Number.isFinite(Date.parse(receipt.deployedAt as string))) throw new Error("fdd_receipt_corrupt");
+    if (receipt.signatures.template !== receipt.templateRef.signature) throw new Error("fdd_receipt_corrupt");
+    for (const key of ["tool", "skill", "model"] as const) {
+      const value = receipt.signatures[key];
+      if (typeof value !== "undefined" && !receiptText(value, 20_000)) throw new Error("fdd_receipt_corrupt");
+    }
+    if (typeof receipt.supersedesReceiptId !== "undefined" && !receiptText(receipt.supersedesReceiptId, 20_000)) throw new Error("fdd_receipt_corrupt");
+    if (typeof receipt.taskSnapshot !== "undefined") {
+      if (
+        !isPlainRecord(receipt.taskSnapshot)
+        || receipt.taskSnapshot.id !== receipt.taskId
+        || receipt.taskSnapshot.projectId !== receipt.projectId
+        || receipt.taskSnapshot.authorizationPolicy !== "fleetguard-v1"
+        || receipt.taskSnapshot.activeDeploymentReceiptId !== receipt.receiptId
+        || !isPlainRecord(receipt.taskSnapshot.algorithmSnapshot)
+        || receipt.taskSnapshot.algorithmSnapshot.id !== receipt.algorithm.id
+        || receipt.taskSnapshot.algorithmSnapshot.algorithmKey !== receipt.algorithm.key
+        || receipt.taskSnapshot.algorithmSnapshot.version !== receipt.algorithm.version
+      ) throw new Error("fdd_receipt_corrupt");
+    }
+    if (!Array.isArray(receipt.entities) || receipt.entities.length < 1 || receipt.entities.length > 10_000) throw new Error("fdd_receipt_corrupt");
+    const entityKeys = new Set<string>();
+    const instanceIds = new Set<string>();
+    const pointIds = new Set<string>();
+    const objectRefs = new Set<string>();
+    for (const rawEntity of receipt.entities) {
+      if (!isPlainRecord(rawEntity) || !receiptText(rawEntity.entityKey) || !receiptText(rawEntity.instanceId) || !Array.isArray(rawEntity.bindings) || rawEntity.bindings.length < 1 || rawEntity.bindings.length > 64) {
+        throw new Error("fdd_receipt_corrupt");
+      }
+      const entityKey = rawEntity.entityKey.trim().toUpperCase();
+      const instanceId = rawEntity.instanceId.trim();
+      if (rawEntity.entityKey !== rawEntity.entityKey.trim() || rawEntity.instanceId !== instanceId) throw new Error("fdd_receipt_corrupt");
+      if (entityKeys.has(entityKey) || instanceIds.has(instanceId)) throw new Error("fdd_receipt_corrupt");
+      entityKeys.add(entityKey);
+      instanceIds.add(instanceId);
+      const roles = new Set<string>();
+      for (const rawBinding of rawEntity.bindings) {
+        if (
+          !isPlainRecord(rawBinding)
+          || !receiptText(rawBinding.role)
+          || !receiptText(rawBinding.familyKey)
+          || !receiptText(rawBinding.pointId)
+          || !receiptText(rawBinding.objectRef)
+          || (typeof rawBinding.unit !== "undefined" && !receiptText(rawBinding.unit))
+        ) {
+          throw new Error("fdd_receipt_corrupt");
+        }
+        const role = rawBinding.role.trim().toLowerCase();
+        const pointId = rawBinding.pointId.trim();
+        const objectRef = rawBinding.objectRef.trim();
+        if (
+          rawBinding.role !== rawBinding.role.trim()
+          || rawBinding.familyKey !== rawBinding.familyKey.trim()
+          || rawBinding.pointId !== pointId
+          || rawBinding.objectRef !== objectRef
+          || (typeof rawBinding.unit === "string" && rawBinding.unit !== rawBinding.unit.trim())
+        ) throw new Error("fdd_receipt_corrupt");
+        if (roles.has(role) || pointIds.has(pointId) || objectRefs.has(objectRef)) throw new Error("fdd_receipt_corrupt");
+        roles.add(role);
+        pointIds.add(pointId);
+        objectRefs.add(objectRef);
+      }
+    }
   }
 
   private ensureMetricInstanceLineageColumns(): void {

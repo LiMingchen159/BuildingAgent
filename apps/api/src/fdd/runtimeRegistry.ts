@@ -60,6 +60,67 @@ const EXECUTABLE_FDD_ALGORITHM_KEYS = new Set<string>([
   "chiller_low_cop_detection"
 ]);
 
+export interface FddEvaluatorRegistration {
+  algorithmKey: string;
+  evaluatorId: string;
+  evaluatorVersion: string;
+  handler: "evaluateFddRuleSample";
+}
+
+const FLEET_GUARD_EVALUATOR_REGISTRATIONS: readonly FddEvaluatorRegistration[] = [
+  {
+    algorithmKey: "chiller_ch_01_commanded_fails_to_start",
+    evaluatorId: "chiller-commanded-fails-to-start",
+    evaluatorVersion: "ch01-command-state-v1",
+    handler: "evaluateFddRuleSample"
+  },
+  {
+    algorithmKey: "chiller_ch_02_uncommanded_operation",
+    evaluatorId: "chiller-uncommanded-operation",
+    evaluatorVersion: "ch02-command-state-v1",
+    handler: "evaluateFddRuleSample"
+  },
+  {
+    algorithmKey: "chiller_ch_03_abnormal_shutdown",
+    evaluatorId: "chiller-abnormal-shutdown",
+    evaluatorVersion: "ch03-shutdown-edge-v1",
+    handler: "evaluateFddRuleSample"
+  }
+] as const;
+
+function compareText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).filter((key) => typeof record[key] !== "undefined").sort(compareText)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+/** Single source of truth for FleetGuard-capable, explicitly versioned evaluators. */
+export function fleetGuardEvaluatorRegistration(algorithmKey: string): FddEvaluatorRegistration | undefined {
+  const registration = FLEET_GUARD_EVALUATOR_REGISTRATIONS.find((entry) => entry.algorithmKey === algorithmKey.trim());
+  return registration ? { ...registration } : undefined;
+}
+
+export function fleetGuardEvaluatorRegistrations(): FddEvaluatorRegistration[] {
+  return FLEET_GUARD_EVALUATOR_REGISTRATIONS.map((entry) => ({ ...entry }));
+}
+
+export function fddEvaluatorRegistrationCanonicalSignature(registration: FddEvaluatorRegistration): string {
+  return canonicalJson({
+    algorithmKey: registration.algorithmKey,
+    evaluatorId: registration.evaluatorId,
+    evaluatorVersion: registration.evaluatorVersion,
+    handler: registration.handler
+  });
+}
+
 export function hasExecutableFddEvaluator(algorithmKey: string): boolean {
   return EXECUTABLE_FDD_ALGORITHM_KEYS.has(algorithmKey);
 }

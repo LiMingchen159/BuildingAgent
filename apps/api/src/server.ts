@@ -68,6 +68,7 @@ import {
 import { createEmbeddingProvider } from "./embeddingProvider.js";
 import {
   DerivedMetricStore,
+  type FddDeploymentReceipt,
   type DerivedMetricFormulaKind,
   type DerivedMetricInstance,
   type DerivedMetricInvalidValuePolicy,
@@ -131,6 +132,12 @@ import {
   latestFddCheck,
   normalizeFddCreateInput,
   planFddHomogeneousV4Fleet,
+  planFleetGuard,
+  fleetGuardStructuralPlanSignature,
+  validateFleetGuardAuthorization,
+  type FleetGuardAuthorizationToken,
+  type FleetGuardPlan,
+  type FleetGuardPlanInput,
   projectFddV4FleetCandidateEvidence,
   sortFddPointCandidatesForRequiredPoint,
   type FddAlgorithm,
@@ -159,7 +166,11 @@ import {
   fddKbSummaryHasCompleteEquipmentInventory,
   parseMinimalBrickFacts
 } from "./fdd/equipmentEvidence.js";
-import { isExecutableFddAlgorithm } from "./fdd/runtimeRegistry.js";
+import {
+  fddEvaluatorRegistrationCanonicalSignature,
+  fleetGuardEvaluatorRegistration,
+  isExecutableFddAlgorithm
+} from "./fdd/runtimeRegistry.js";
 import {
   FddBindingProposerShadowService,
   ProjectFddBindingProposerAuditStore,
@@ -168,13 +179,35 @@ import {
   type FddBindingProposerScheduleResult
 } from "./fdd/bindingProposer.js";
 import { createFddBindingProposerCompletionPort } from "./fdd/bindingProposerProvider.js";
-import { buildFleetGuardShadowInputFromV4Evidence } from "./fdd/bindingProposerEvidenceAdapter.js";
 import {
+  buildFleetGuardShadowInputFromV4Evidence,
+  fddFleetGuardAlgorithmEvidenceSignature,
+  fddFleetGuardEvaluatorEvidenceSignature
+} from "./fdd/bindingProposerEvidenceAdapter.js";
+import {
+  applyFddFleetTemplateVersionToPlannerInput,
   applyCurrentFddFleetTemplateToPlannerInput,
   createFddFleetTemplateBindings,
+  currentFddFleetTemplateHead,
   ensureStoreFddFleetTemplates,
-  FddFleetTemplateError
+  fddFleetTemplateVersionByRef,
+  FddFleetTemplateError,
+  type FddFleetTemplateVersion
 } from "./fdd/fleetTemplates.js";
+import {
+  createFddFleetGuardRolloutBindings,
+  currentFddFleetGuardRollout,
+  ensureStoreFddFleetGuardRollouts,
+  fddFleetGuardGlobalConfigFromEnv,
+  isFddFleetGuardCanarySelected,
+  FddFleetGuardRolloutError
+} from "./fdd/fleetGuardRollout.js";
+import {
+  fddFleetGuardAssessment,
+  fddFleetGuardParameterSignature,
+  parseFddFleetGuardAuthorization,
+  type FddFleetGuardAssessment
+} from "./fdd/fleetGuardAuthorization.js";
 export { fddPersistenceWindowGraceMs } from "./fdd/evaluator.js";
 
 type DashboardDataSource = "bms" | "derived_metric";
@@ -244,6 +277,9 @@ interface BuildServerOptions {
   persist?: boolean;
   fddTestHooks?: {
     beforeRegisterMetric?: (input: { projectId: string; algorithmKey: string; entityId: string }) => void;
+    beforeInsertFleetGuardReceipt?: (input: { projectId: string; taskId: string; receiptId: string }) => void;
+    afterInsertFleetGuardReceipt?: (input: { projectId: string; taskId: string; receiptId: string }) => void;
+    beforeFleetGuardStorePersist?: (input: { projectId: string; taskId: string; receiptId: string }) => void;
     onAuthorizationRefresh?: (input: { projectId: string; taskId: string }) => void;
     onFddMaterialized?: (input: { projectId: string; instanceId: string }) => void;
     onMaterializerReady?: (run: () => Promise<void>) => void;
@@ -2320,6 +2356,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   restoreMemoryProposalSequence(store);
   const fddLibraryChangedOnBoot = ensureStoreFddLibrary(store);
   const fddFleetTemplatesChangedOnBoot = ensureStoreFddFleetTemplates(store);
+  const fddFleetGuardRolloutsChangedOnBoot = ensureStoreFddFleetGuardRollouts(store);
   const persistStore = options.persist === true;
   const persistSoon = (): void => {
     if (persistStore) {
@@ -2331,7 +2368,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       saveStoreSync(store);
     }
   };
-  if (fddLibraryChangedOnBoot || fddFleetTemplatesChangedOnBoot) {
+  if (fddLibraryChangedOnBoot || fddFleetTemplatesChangedOnBoot || fddFleetGuardRolloutsChangedOnBoot) {
     persistNow();
   }
   const env = options.env ?? process.env;
@@ -2347,6 +2384,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
   const provider = options.chatProvider ?? providerResolver(env);
   const fddBindingProposerConfig = fddBindingProposerConfigFromEnv(env);
+  const fddFleetGuardGlobalConfig = fddFleetGuardGlobalConfigFromEnv(env);
   const fddBindingProposerShadow = new FddBindingProposerShadowService({
     config: fddBindingProposerConfig,
     completionPort: createFddBindingProposerCompletionPort(provider),
@@ -2355,11 +2393,23 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     })
   });
   const fddFleetTemplates = createFddFleetTemplateBindings(store, { onChange: persistSoon });
+  const fddFleetGuardRollouts = createFddFleetGuardRolloutBindings(store, { onChange: persistSoon });
   const fetchProxy = options.fetch ?? fetch;
   const fddHistoryProbeCache = new Map<string, { expiresAt: number; promise: Promise<number | undefined> }>();
   const fddCatalogQueryCache = new Map<string, { expiresAt: number; promise: Promise<Record<string, unknown>[]> }>();
+  interface FddEvidenceReadContext {
+    allowSharedCache: boolean;
+    catalog: Map<string, Promise<Record<string, unknown>[]>>;
+    history: Map<string, Promise<number | undefined>>;
+  }
+  const createFddEvidenceReadContext = (allowSharedCache: boolean): FddEvidenceReadContext => ({
+    allowSharedCache,
+    catalog: new Map(),
+    history: new Map()
+  });
   const automaticFddCheckRuns = new Map<string, Promise<void>>();
   const fddTaskAuthorizationRefreshRuns = new Map<string, Promise<boolean>>();
+  const fddFleetGuardRuntimeAuthorizationRuns = new Map<string, Promise<boolean>>();
   const derivedMetricMaterializationRuns = new Map<string, Promise<void>>();
   const memory = new AgentMemoryStore(dataRoot(env));
   memory.start();
@@ -3556,11 +3606,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   function fddUnitCompatibility(
     point: FddAlgorithm["requiredPoints"][number],
     item: Record<string, unknown>,
-    pointName: string
+    pointName: string,
+    allowStructuralMetadataOverride = false
   ): { unitCompatibility: FddUnitCompatibility; dimensionReason: string; rejectionReason?: string } {
     const actualKind = inferFddCandidateQuantityKind(item, pointName);
     const expectedKind = point.quantityKind ?? "unknown";
     const unit = fddPointUnit(item);
+    const acceptedStructuralUnit = Boolean(
+      unit
+      && point.acceptableUnits?.length
+      && fddEngineeringUnitIsAccepted(unit, point.acceptableUnits)
+      && inferFddCandidateQuantityKind({ unit }, "") === expectedKind
+    );
     if (expectedKind === "unknown" || actualKind === "unknown") {
       return {
         unitCompatibility: "unknown",
@@ -3588,6 +3645,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         dimensionReason: `Formula input expects ${expectedKind}; catalog metadata indicates ${actualKind}.${acceptableUnitText}`
       };
     }
+    if (allowStructuralMetadataOverride && acceptedStructuralUnit) {
+      return {
+        unitCompatibility: "match",
+        dimensionReason: `The structural engineering unit ${unit} verifies ${expectedKind}; conflicting semantic/description metadata is non-authoritative.`
+      };
+    }
     const rejectionReason = `Formula input "${point.label}" requires ${expectedKind}, but candidate metadata indicates ${actualKind}.`;
     return {
       unitCompatibility: "mismatch",
@@ -3596,11 +3659,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   }
 
-  async function fetchFddCatalogItems(base: string, query: string, limit: number): Promise<Record<string, unknown>[]> {
+  async function fetchFddCatalogItems(
+    base: string,
+    query: string,
+    limit: number,
+    readContext?: FddEvidenceReadContext
+  ): Promise<Record<string, unknown>[]> {
     const cacheKey = `${base}\u0000${query}\u0000${limit}`;
+    const local = readContext?.catalog.get(cacheKey);
+    if (local) return local;
     const now = Date.now();
     const cached = fddCatalogQueryCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) return cached.promise;
+    if (readContext?.allowSharedCache !== false && cached && cached.expiresAt > now) {
+      readContext?.catalog.set(cacheKey, cached.promise);
+      return cached.promise;
+    }
     const promise = (async (): Promise<Record<string, unknown>[]> => {
       try {
         const response = await fetchProxy(`${base}/api/v1/points?${new URLSearchParams({ q: query, limit: String(limit) }).toString()}`, {
@@ -3614,7 +3687,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         return [];
       }
     })();
-    fddCatalogQueryCache.set(cacheKey, { expiresAt: now + 5 * 60_000, promise });
+    readContext?.catalog.set(cacheKey, promise);
+    if (readContext?.allowSharedCache !== false) {
+      fddCatalogQueryCache.set(cacheKey, { expiresAt: now + 5 * 60_000, promise });
+    }
     return promise;
   }
 
@@ -3675,6 +3751,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     base: string;
     candidates: FddPointCandidate[];
     seen: Set<string>;
+    readContext?: FddEvidenceReadContext;
+    allowStructuralMetadataOverride?: boolean;
   }): Promise<boolean> {
     const matchingFacts = input.context.brickPoints.filter((fact) =>
       fddEntityAllowedForAlgorithm(fact.entityKey, input.context, input.algorithm)
@@ -3683,32 +3761,44 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (matchingFacts.length === 0) return false;
     let verified = false;
     await mapWithConcurrency(matchingFacts, 8, async (fact) => {
-      const items = await fetchFddCatalogItems(input.base, fact.pointName, 8);
-      const exactItem = items.find((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(fact.pointName));
-      if (!exactItem) return;
+      const items = await fetchFddCatalogItems(input.base, fact.pointName, 8, input.readContext);
+      const exactItems = items.filter((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(fact.pointName));
+      if (exactItems.length === 0) return;
       verified = true;
-      const explicitPowerUnit = fddExplicitPowerUnitEvidence(input.point, fact, exactItem);
-      const semanticItem = {
-        ...exactItem,
-        name: fact.pointName,
-        equipment_name: fact.entityKey,
-        semantic_class: fact.brickClass,
-        brick_class: fact.brickClass,
-        ...(fact.unit ? { unit: fact.unit } : explicitPowerUnit ? { unit: explicitPowerUnit.unit } : {})
-      };
-      addFddPointCandidateFromItem({
-        algorithm: input.algorithm,
-        point: input.point,
-        item: semanticItem,
-        query: fact.pointName,
-        context: input.context,
-        candidates: input.candidates,
-        seen: input.seen,
-        reason: `Verified exact BMS point from Brick class ${fact.brickClass}.${explicitPowerUnit ? ` ${explicitPowerUnit.reason}` : ""}`,
-        minConfidence: 0.5,
-        confidenceOverride: 0.96,
-        entityKeyOverride: fact.entityKey
-      });
+      for (const exactItem of exactItems) {
+        const explicitPowerUnit = fddExplicitPowerUnitEvidence(input.point, fact, exactItem);
+        const semanticItem = {
+          ...exactItem,
+          name: fact.pointName,
+          equipment_name: fact.entityKey,
+          semantic_class: fact.brickClass,
+          brick_class: fact.brickClass,
+          ...(fact.unit ? { unit: fact.unit } : explicitPowerUnit ? { unit: explicitPowerUnit.unit } : {})
+        };
+        addFddPointCandidateFromItem({
+          algorithm: input.algorithm,
+          point: input.point,
+          item: semanticItem,
+          query: fact.pointName,
+          context: input.context,
+          candidates: input.candidates,
+          seen: input.seen,
+          reason: `Verified exact BMS point from Brick class ${fact.brickClass}.${explicitPowerUnit ? ` ${explicitPowerUnit.reason}` : ""}`,
+          minConfidence: 0.5,
+          confidenceOverride: 0.96,
+          entityKeyOverride: fact.entityKey,
+          unitEvidenceSourceOverride: fact.unit
+            ? "brick"
+            : fddPointUnit(exactItem)
+              ? "catalog"
+              : explicitPowerUnit
+                ? "description_inference"
+                : undefined,
+          ...(typeof input.allowStructuralMetadataOverride === "boolean"
+            ? { allowStructuralMetadataOverride: input.allowStructuralMetadataOverride }
+            : {})
+        });
+      }
     });
     return verified;
   }
@@ -3725,10 +3815,16 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     minConfidence?: number;
     confidenceOverride?: number;
     entityKeyOverride?: string;
+    unitEvidenceSourceOverride?: FddPointCandidate["unitEvidenceSource"];
+    allowStructuralMetadataOverride?: boolean;
   }): void {
     const pointName = fddPointName(input.item);
     if (!pointName) return;
-    const key = `${input.point.slot}:${pointName}`;
+    const objectRef = fddPointObjectRef(input.item);
+    // Distinct exact catalog identities must remain distinct candidates. A
+    // same-name/different-objectRef result is ambiguous and FleetGuard must
+    // block instead of silently selecting the first row.
+    const key = `${input.point.slot}:${pointName}:${objectRef ?? "no-object-ref"}`;
     if (input.seen.has(key)) return;
     const entityKey = input.entityKeyOverride
       ? canonicalFddEntityKey(input.entityKeyOverride, input.context)
@@ -3742,15 +3838,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const confidence = input.confidenceOverride ?? fddCandidateConfidence(input.point, scoringItem, input.query);
     if (confidence < (input.minConfidence ?? 0.56)) return;
     input.seen.add(key);
-    const objectRef = fddPointObjectRef(input.item);
     const unit = fddPointUnit(input.item);
-    const unitCheck = fddUnitCompatibility(input.point, scoringItem, pointName);
+    const unitCheck = fddUnitCompatibility(
+      input.point,
+      scoringItem,
+      pointName,
+      input.allowStructuralMetadataOverride
+    );
     input.candidates.push({
       slot: input.point.slot,
       pointName,
       ...(entityKey ? { entityKey } : {}),
       ...(objectRef ? { objectRef } : {}),
       ...(unit ? { unit } : {}),
+      ...(unit ? { unitEvidenceSource: input.unitEvidenceSourceOverride ?? "catalog" } : {}),
       unitCompatibility: unitCheck.unitCompatibility,
       dimensionReason: unitCheck.dimensionReason,
       ...(unitCheck.rejectionReason ? { rejectionReason: unitCheck.rejectionReason } : {}),
@@ -3830,6 +3931,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     base: string;
     candidates: FddPointCandidate[];
     seen: Set<string>;
+    readContext?: FddEvidenceReadContext;
+    allowStructuralMetadataOverride?: boolean;
   }): Promise<void> {
     const targetEntities = fddTargetEntityKeysForAlgorithm(input.algorithm, input.context);
     if (targetEntities.length <= 1) return;
@@ -3857,21 +3960,25 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         // versus the WCC CHWST family). Only an already verified counterpart
         // from the same template family can short-circuit this lookup.
         if (alreadyHasExactFamilyPoint) continue;
-        const items = await fetchFddCatalogItems(input.base, targetPointName, 8);
-        const exactItem = items.find((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(targetPointName));
-        if (!exactItem) continue;
-        addFddPointCandidateFromItem({
-          algorithm: input.algorithm,
-          point,
-          item: exactItem,
-          query: targetPointName,
-          context: input.context,
-          candidates: input.candidates,
-          seen: input.seen,
-          reason: `Completed same-class entity candidate from Knowledge Base entity aliases and verified exact BMS point "${targetPointName}".`,
-          minConfidence: 0.5,
-          confidenceOverride: Math.max(0.74, Math.min(0.94, candidate.confidence - 0.02))
-        });
+        const items = await fetchFddCatalogItems(input.base, targetPointName, 8, input.readContext);
+        const exactItems = items.filter((item) => normalizeFddEntityAlias(fddPointName(item) ?? "") === normalizeFddEntityAlias(targetPointName));
+        for (const exactItem of exactItems) {
+          addFddPointCandidateFromItem({
+            algorithm: input.algorithm,
+            point,
+            item: exactItem,
+            query: targetPointName,
+            context: input.context,
+            candidates: input.candidates,
+            seen: input.seen,
+            reason: `Completed same-class entity candidate from Knowledge Base entity aliases and verified exact BMS point "${targetPointName}".`,
+            minConfidence: 0.5,
+            confidenceOverride: Math.max(0.74, Math.min(0.94, candidate.confidence - 0.02)),
+            ...(typeof input.allowStructuralMetadataOverride === "boolean"
+              ? { allowStructuralMetadataOverride: input.allowStructuralMetadataOverride }
+              : {})
+          });
+        }
       }
     }
   }
@@ -3967,7 +4074,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     projectId: string,
     algorithm: FddAlgorithm,
     context: FddEntityContext,
-    skillContext: BuildingGptFddSkillContext
+    skillContext: BuildingGptFddSkillContext,
+    readContext?: FddEvidenceReadContext,
+    allowStructuralMetadataOverride = false
   ): Promise<{ candidates: FddPointCandidate[]; supplementalPoints: FddAlgorithm["requiredPoints"]; catalogUnavailableReason?: string }> {
     const candidates: FddPointCandidate[] = [];
     const seen = new Set<string>();
@@ -3995,12 +4104,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         context,
         base,
         candidates,
-        seen
+        seen,
+        ...(readContext ? { readContext } : {}),
+        allowStructuralMetadataOverride
       });
       if (verifiedFromBrick) continue;
       const queries = fddSearchQueriesForPoint(point, skillContext, context);
       for (const query of queries) {
-        const items = await fetchFddCatalogItems(base, query, 50);
+        const items = await fetchFddCatalogItems(base, query, 50, readContext);
         for (const item of items) {
           addFddPointCandidateFromItem({
             algorithm: effectiveAlgorithm,
@@ -4010,12 +4121,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             context,
             candidates,
             seen,
-            reason: `Matched "${query}" against BMS catalog metadata.`
+            reason: `Matched "${query}" against BMS catalog metadata.`,
+            allowStructuralMetadataOverride
           });
         }
       }
     }
-    await supplementFddCandidatesFromEntityTemplates({ algorithm: effectiveAlgorithm, context, base, candidates, seen });
+    await supplementFddCandidatesFromEntityTemplates({
+      algorithm: effectiveAlgorithm,
+      context,
+      base,
+      candidates,
+      seen,
+      ...(readContext ? { readContext } : {}),
+      allowStructuralMetadataOverride
+    });
     return {
       candidates: candidates.sort((left, right) => right.confidence - left.confidence).slice(0, 1200),
       supplementalPoints
@@ -4064,25 +4184,35 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   function probeFddCandidateHistoryDays(
     baseUrl: string,
     candidate: FddPointCandidate,
-    requiredDays: number
+    requiredDays: number,
+    readContext?: FddEvidenceReadContext
   ): Promise<number | undefined> {
     const selector = candidate.objectRef ? `object_ref:${candidate.objectRef}` : `name:${candidate.pointName}`;
     const cacheKey = `${baseUrl}\u0000${selector}\u0000${requiredDays}`;
+    const local = readContext?.history.get(cacheKey);
+    if (local) return local;
     const now = Date.now();
     const cached = fddHistoryProbeCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) return cached.promise;
+    if (readContext?.allowSharedCache !== false && cached && cached.expiresAt > now) {
+      readContext?.history.set(cacheKey, cached.promise);
+      return cached.promise;
+    }
     const promise = probeFddCandidateHistoryDaysUncached(baseUrl, candidate, requiredDays).catch((error: unknown) => {
       fddHistoryProbeCache.delete(cacheKey);
       throw error;
     });
-    fddHistoryProbeCache.set(cacheKey, { expiresAt: now + 5 * 60_000, promise });
+    readContext?.history.set(cacheKey, promise);
+    if (readContext?.allowSharedCache !== false) {
+      fddHistoryProbeCache.set(cacheKey, { expiresAt: now + 5 * 60_000, promise });
+    }
     return promise;
   }
 
   async function enrichFddCandidateHistory(
     baseUrl: string,
     algorithm: FddAlgorithm,
-    candidates: FddPointCandidate[]
+    candidates: FddPointCandidate[],
+    readContext?: FddEvidenceReadContext
   ): Promise<FddPointCandidate[]> {
     const pointBySlot = new Map(algorithm.requiredPoints.map((point) => [point.slot, point]));
     const candidatesToProbe = new Map<string, { candidate: FddPointCandidate; requiredDays: number }>();
@@ -4118,7 +4248,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const historyDaysByProbeKey = new Map<string, number>();
     await mapWithConcurrency([...candidatesToProbe.entries()], 8, async ([probeKey, probe]) => {
       try {
-        const historyDays = await probeFddCandidateHistoryDays(baseUrl, probe.candidate, probe.requiredDays);
+        const historyDays = await probeFddCandidateHistoryDays(baseUrl, probe.candidate, probe.requiredDays, readContext);
         if (typeof historyDays === "number") historyDaysByProbeKey.set(probeKey, historyDays);
       } catch {
         // A failed or timed-out probe remains unverified and therefore blocks
@@ -4214,13 +4344,102 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     ];
   }
 
-  function scheduleFddBindingProposalShadow(input: {
+  const fleetGuardAssessmentsByCheck = new WeakMap<FddDeployabilityCheck, FddFleetGuardAssessment>();
+
+  function frozenFleetGuardPlannerInput(input: {
     projectId: string;
     algorithm: FddAlgorithm;
     context: FddEntityContext;
     targetAvailability: FddEquipmentAvailability;
     inventorySignature: string;
     candidates: ReturnType<typeof projectFddV4FleetCandidateEvidence>;
+    templateVersion?: FddFleetTemplateVersion;
+  }): FleetGuardPlanInput | undefined {
+    const rawFleet = input.targetAvailability.entityKeys ?? [];
+    const requiredBrickPoints = input.algorithm.requiredPoints.filter((point) => point.required);
+    if (
+      rawFleet.length > 10_000
+      || requiredBrickPoints.length > 64
+      || input.candidates.length > 8_192
+      || input.context.brickPoints.length > 8_192
+    ) return undefined;
+    const plannerInputWithoutTemplate = buildFleetGuardShadowInputFromV4Evidence({
+      projectId: input.projectId,
+      algorithm: input.algorithm,
+      evaluatorId: input.algorithm.algorithmKey,
+      evaluatorAvailable: isExecutableFddAlgorithm(input.algorithm),
+      targetAvailability: input.targetAvailability,
+      authoritativeInventory: input.context.authoritativeInventory,
+      targetEntityKeys: rawFleet.map((key) => canonicalFddEntityKey(key, input.context)),
+      candidates: input.candidates,
+      brickPoints: input.context.brickPoints.map((fact) => ({
+        subjectKey: fact.subjectKey,
+        pointName: fact.pointName,
+        entityKey: canonicalFddEntityKey(fact.entityKey, input.context),
+        brickClass: fact.brickClass,
+        ...(fact.unit ? { unit: fact.unit } : {}),
+        matchedRoleSlots: requiredBrickPoints
+          .filter((point) => fddBrickPointMatchesRequiredPoint(point, fact))
+          .map((point) => point.slot)
+          .sort()
+      })),
+      sourceDataSignature: fddProjectDataSignature(input.projectId),
+      inventorySignature: input.inventorySignature
+    });
+    return structuredClone(input.templateVersion
+      ? applyFddFleetTemplateVersionToPlannerInput(input.templateVersion, plannerInputWithoutTemplate)
+      : applyCurrentFddFleetTemplateToPlannerInput(store, input.projectId, plannerInputWithoutTemplate));
+  }
+
+  function attachFleetGuardAssessment(input: {
+    check: FddDeployabilityCheck;
+    projectId: string;
+    userId: string;
+    projectTaskId?: string;
+    algorithm: FddAlgorithm;
+    plannerInput?: FleetGuardPlanInput;
+    historicalTemplate?: FddFleetTemplateVersion;
+    rolloutRevisionOverride?: number;
+    force?: boolean;
+  }): void {
+    const rollout = currentFddFleetGuardRollout(store, input.projectId);
+    if (!input.force && !isFddFleetGuardCanarySelected({
+      global: fddFleetGuardGlobalConfig,
+      rollout,
+      algorithmKey: input.algorithm.algorithmKey
+    })) return;
+    const plannerInput = input.plannerInput;
+    if (!plannerInput) return;
+    const task = input.projectTaskId
+      ? (store.fddTasksByProject?.[input.projectId] ?? []).find((entry) => entry.id === input.projectTaskId)
+      : undefined;
+    const parameters = recommendFddTaskParameters(
+      input.algorithm,
+      input.check,
+      input.userId,
+      task?.parameterValues ?? []
+    );
+    const head = input.historicalTemplate
+      ?? currentFddFleetTemplateHead(store, input.projectId, input.algorithm.id);
+    const templateRef = head
+      ? { templateId: head.templateId, version: head.version, signature: head.signature }
+      : undefined;
+    const assessment = fddFleetGuardAssessment({
+      plan: planFleetGuard(plannerInput),
+      rolloutRevision: input.rolloutRevisionOverride ?? rollout.revision,
+      ...(templateRef ? { templateRef } : {}),
+      checkedAt: input.check.checkedAt,
+      parameterSignature: fddFleetGuardParameterSignature(parameters),
+      ...(input.projectTaskId ? { taskId: input.projectTaskId } : {})
+    });
+    input.check.fleetGuard = assessment.summary;
+    fleetGuardAssessmentsByCheck.set(input.check, assessment);
+  }
+
+  function scheduleFddBindingProposalShadow(input: {
+    projectId: string;
+    algorithm: FddAlgorithm;
+    plannerInput?: FleetGuardPlanInput;
   }): void {
     if (
       fddBindingProposerConfig.mode !== "shadow"
@@ -4237,48 +4456,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           algorithmId: input.algorithm.id
         });
         if (!store.projects.some((project) => project.id === input.projectId)) return;
-        const rawFleet = input.targetAvailability.entityKeys ?? [];
-        const requiredBrickPoints = input.algorithm.requiredPoints.filter((point) => point.required);
-        if (
-          rawFleet.length > 10_000
-          || requiredBrickPoints.length > 64
-          || input.candidates.length > 8_192
-          || input.context.brickPoints.length > 8_192
-        ) return;
-        const fullFleet = rawFleet
-          .map((key) => canonicalFddEntityKey(key, input.context));
-        const plannerInputWithoutTemplate = buildFleetGuardShadowInputFromV4Evidence({
-          projectId: input.projectId,
-          algorithm: input.algorithm,
-          evaluatorId: input.algorithm.algorithmKey,
-          evaluatorAvailable: isExecutableFddAlgorithm(input.algorithm),
-          targetAvailability: input.targetAvailability,
-          authoritativeInventory: input.context.authoritativeInventory,
-          targetEntityKeys: fullFleet,
-          candidates: input.candidates,
-          brickPoints: input.context.brickPoints.map((fact) => ({
-            subjectKey: fact.subjectKey,
-            pointName: fact.pointName,
-            entityKey: canonicalFddEntityKey(fact.entityKey, input.context),
-            brickClass: fact.brickClass,
-            ...(fact.unit ? { unit: fact.unit } : {}),
-            matchedRoleSlots: requiredBrickPoints
-              .filter((point) => fddBrickPointMatchesRequiredPoint(point, fact))
-              .map((point) => point.slot)
-              .sort()
-          })),
-          sourceDataSignature: fddProjectDataSignature(input.projectId),
-          inventorySignature: input.inventorySignature
-        });
-        const plannerInput = applyCurrentFddFleetTemplateToPlannerInput(
-          store,
-          input.projectId,
-          plannerInputWithoutTemplate
-        );
+        const plannerInput = input.plannerInput;
+        if (!plannerInput) return;
         const result = fddBindingProposerShadow.schedule({
           projectId: input.projectId,
           evidenceProjectId: input.projectId,
-          plannerInput
+          plannerInput: structuredClone(plannerInput)
         });
         options.fddTestHooks?.onBindingProposerScheduled?.({
           projectId: input.projectId,
@@ -4304,9 +4487,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     source: FddCheckSource,
     projectTaskId?: string,
     entityContext?: FddEntityContext,
-    equipmentAvailability?: FddEquipmentAvailability[]
+    equipmentAvailability?: FddEquipmentAvailability[],
+    authorizationBoundary = false,
+    runtimeReceiptContext?: {
+      templateVersion: FddFleetTemplateVersion;
+      rolloutRevision: number;
+    }
   ): Promise<FddDeployabilityCheck> {
-    ensureProjectFddCollections(projectId);
+    if (!authorizationBoundary) ensureProjectFddCollections(projectId);
     const context = entityContext ?? await buildFddEntityContext(projectId);
     const inventory = equipmentAvailability ?? fddEquipmentAvailabilityFromContext(context);
     const inventorySignature = fddEquipmentInventorySignature(context, inventory);
@@ -4331,19 +4519,54 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         ...(projectTaskId ? { projectTaskId } : {})
       });
       check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
-      persistFddDeployabilityCheck(projectId, check, projectTaskId);
-      scheduleFddBindingProposalShadow({
+      const plannerInput = frozenFleetGuardPlannerInput({
         projectId,
         algorithm,
         context,
         targetAvailability,
         inventorySignature,
-        candidates: []
+        candidates: [],
+        ...(runtimeReceiptContext ? { templateVersion: runtimeReceiptContext.templateVersion } : {})
       });
+      attachFleetGuardAssessment({
+        check,
+        projectId,
+        userId,
+        ...(projectTaskId ? { projectTaskId } : {}),
+        algorithm,
+        ...(runtimeReceiptContext ? {
+          historicalTemplate: runtimeReceiptContext.templateVersion,
+          rolloutRevisionOverride: runtimeReceiptContext.rolloutRevision,
+          force: true
+        } : {}),
+        ...(plannerInput ? { plannerInput } : {})
+      });
+      if (!authorizationBoundary) {
+        persistFddDeployabilityCheck(projectId, check, projectTaskId);
+        scheduleFddBindingProposalShadow({
+          projectId,
+          algorithm,
+          ...(plannerInput ? { plannerInput } : {})
+        });
+      }
       return check;
     }
     const excludedEntityKeys = new Set(skillContext.excludedEntityKeys.map(normalizeFddEntityAlias));
-    const candidateResult = await queryFddPointCandidates(projectId, algorithm, context, skillContext);
+    const evidenceReads = createFddEvidenceReadContext(!authorizationBoundary && source !== "manual");
+    const allowStructuralMetadataOverride = Boolean(runtimeReceiptContext)
+      || isFddFleetGuardCanarySelected({
+        global: fddFleetGuardGlobalConfig,
+        rollout: currentFddFleetGuardRollout(store, projectId),
+        algorithmKey: algorithm.algorithmKey
+      });
+    const candidateResult = await queryFddPointCandidates(
+      projectId,
+      algorithm,
+      context,
+      skillContext,
+      evidenceReads,
+      allowStructuralMetadataOverride
+    );
     const effectiveAlgorithm: FddAlgorithm = candidateResult.supplementalPoints.length > 0
       ? {
           ...algorithm,
@@ -4356,7 +4579,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const unverifiedCandidates = rawCandidates.filter((candidate) => candidate.unitCompatibility !== "mismatch");
     const access = resolveProjectBmsAccess(projectId);
     const usableCandidates = access.ok
-      ? await enrichFddCandidateHistory(access.baseUrl, effectiveAlgorithm, unverifiedCandidates)
+      ? await enrichFddCandidateHistory(access.baseUrl, effectiveAlgorithm, unverifiedCandidates, evidenceReads)
       : unverifiedCandidates;
     const rawRejectedCandidates = rawCandidates.filter((candidate) => candidate.unitCompatibility === "mismatch");
     const targetEntityKeys = (targetAvailability.entityKeys ?? [])
@@ -4408,15 +4631,36 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       requiredRuntimeSlots: effectiveAlgorithm.requiredPoints.filter((point) => point.required).map((point) => point.slot)
     });
     check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
-    persistFddDeployabilityCheck(projectId, check, projectTaskId);
-    scheduleFddBindingProposalShadow({
+    const plannerInput = frozenFleetGuardPlannerInput({
       projectId,
       algorithm: effectiveAlgorithm,
       context,
       targetAvailability,
       inventorySignature,
-      candidates: fleetCandidateEvidence
+      candidates: fleetCandidateEvidence,
+      ...(runtimeReceiptContext ? { templateVersion: runtimeReceiptContext.templateVersion } : {})
     });
+    attachFleetGuardAssessment({
+      check,
+      projectId,
+      userId,
+      ...(projectTaskId ? { projectTaskId } : {}),
+      algorithm: effectiveAlgorithm,
+      ...(runtimeReceiptContext ? {
+        historicalTemplate: runtimeReceiptContext.templateVersion,
+        rolloutRevisionOverride: runtimeReceiptContext.rolloutRevision,
+        force: true
+      } : {}),
+      ...(plannerInput ? { plannerInput } : {})
+    });
+    if (!authorizationBoundary) {
+      persistFddDeployabilityCheck(projectId, check, projectTaskId);
+      scheduleFddBindingProposalShadow({
+        projectId,
+        algorithm: effectiveAlgorithm,
+        ...(plannerInput ? { plannerInput } : {})
+      });
+    }
     return check;
   }
 
@@ -4628,6 +4872,99 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
   }
 
+  function fleetGuardInstanceMatchesReceiptEntity(
+    instance: DerivedMetricInstance,
+    receipt: FddDeploymentReceipt,
+    entity: FddDeploymentReceipt["entities"][number]
+  ): boolean {
+    if (
+      instance.instanceId !== entity.instanceId
+      || instance.projectId !== receipt.projectId
+      || instance.entityId.trim().toUpperCase() !== entity.entityKey.trim().toUpperCase()
+      || instance.metricKey !== receipt.algorithm.key
+      || instance.formulaVersion !== receipt.algorithm.version
+      || instance.metadata?.fddTaskId !== receipt.taskId
+      || instance.metadata?.fddAlgorithmId !== receipt.algorithm.id
+      || instance.metadata?.fddAuthorizationPolicy !== "fleetguard-v1"
+      || instance.metadata?.fddFleetGuardReceiptId !== receipt.receiptId
+      || instance.dependencies.length !== entity.bindings.length
+    ) return false;
+    const dependenciesByRole = new Map(instance.dependencies.map((dependency) => [dependency.role, dependency]));
+    if (dependenciesByRole.size !== entity.bindings.length) return false;
+    return entity.bindings.every((binding) => {
+      const dependency = dependenciesByRole.get(binding.role);
+      return Boolean(
+        dependency
+        && dependency.sourceType === "raw_point"
+        // pointId is a stable Brick identity. pointName must stay empty so a
+        // human-readable label can never impersonate that identity.
+        && dependency.sourceId === binding.pointId
+        && !dependency.pointName
+        // Runtime reads are pinned to the exact BMS object reference.
+        && dependency.objectRef === binding.objectRef
+        && (dependency.unit ?? undefined) === (binding.unit ?? undefined)
+        && dependency.metadata?.fddPointFamilyKey === binding.familyKey
+        && dependency.metadata?.fddFleetGuardReceiptId === receipt.receiptId
+      );
+    });
+  }
+
+  function fleetGuardRuntimeForReceipt(receipt: FddDeploymentReceipt): DerivedMetricInstance[] | null {
+    if (receipt.entities.length !== 8) return null;
+    const instances: DerivedMetricInstance[] = [];
+    for (const entity of receipt.entities) {
+      const instance = derivedMetrics.getInstance(entity.instanceId);
+      if (!instance || !fleetGuardInstanceMatchesReceiptEntity(instance, receipt, entity)) return null;
+      instances.push(instance);
+    }
+    return new Set(instances.map((instance) => instance.instanceId)).size === 8 ? instances : null;
+  }
+
+  function fleetGuardTaskSnapshotFromReceipt(receipt: FddDeploymentReceipt): ProjectFddTask | undefined {
+    const snapshot = receipt.taskSnapshot;
+    if (!snapshot || !isRecordValue(snapshot.algorithmSnapshot)) return undefined;
+    if (
+      snapshot.id !== receipt.taskId
+      || snapshot.projectId !== receipt.projectId
+      || snapshot.authorizationPolicy !== "fleetguard-v1"
+      || snapshot.activeDeploymentReceiptId !== receipt.receiptId
+      || snapshot.status !== "running"
+      || snapshot.algorithmSnapshot.id !== receipt.algorithm.id
+      || snapshot.algorithmSnapshot.algorithmKey !== receipt.algorithm.key
+      || snapshot.algorithmSnapshot.version !== receipt.algorithm.version
+    ) return undefined;
+    return structuredClone(snapshot) as unknown as ProjectFddTask;
+  }
+
+  function recoverFleetGuardTasksFromReceipts(): number {
+    const receipts = derivedMetrics.listFddDeploymentReceipts();
+    const recoveredTaskIds = new Set<string>();
+    let changes = 0;
+    for (const receipt of receipts) {
+      const taskKey = `${receipt.projectId}\u0000${receipt.taskId}`;
+      if (recoveredTaskIds.has(taskKey)) continue;
+      const snapshot = fleetGuardTaskSnapshotFromReceipt(receipt);
+      const instances = fleetGuardRuntimeForReceipt(receipt);
+      if (!snapshot || !instances) continue;
+      recoveredTaskIds.add(taskKey);
+      const tasks = store.fddTasksByProject?.[receipt.projectId] ?? [];
+      const current = tasks.find((task) => task.id === receipt.taskId);
+      if (
+        current?.authorizationPolicy === "fleetguard-v1"
+        && current.activeDeploymentReceiptId === receipt.receiptId
+        && current.status === "running"
+      ) continue;
+      store.fddTasksByProject ??= {};
+      store.fddTasksByProject[receipt.projectId] = [snapshot, ...tasks.filter((task) => task.id !== receipt.taskId)];
+      changes += 1;
+    }
+    return changes;
+  }
+
+  if (recoverFleetGuardTasksFromReceipts() > 0) {
+    persistNow();
+  }
+
   function invalidateLegacyFddRuntimeAuthorizations(): number {
     let changes = 0;
     const currentInventorySignatures = new Map<string, string>();
@@ -4636,6 +4973,32 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         ?? currentFddEquipmentInventorySignatureSync(projectId);
       currentInventorySignatures.set(projectId, currentInventorySignature);
       for (const task of tasks) {
+        if (task.authorizationPolicy === "fleetguard-v1") {
+          const receipt = task.activeDeploymentReceiptId
+            ? derivedMetrics.getFddDeploymentReceipt(task.activeDeploymentReceiptId)
+            : null;
+          const fleetInstances = receipt && receipt.projectId === projectId && receipt.taskId === task.id
+            ? fleetGuardRuntimeForReceipt(receipt)
+            : null;
+          if (fleetInstances) continue;
+          task.status = "checking";
+          task.updatedAt = new Date().toISOString();
+          derivedMetrics.runInTransaction(() => {
+            for (const instance of fddRuntimeInstancesForTask(projectId, task)) {
+              const materialization = derivedMetrics.readMaterialization(instance.instanceId);
+              if (!materialization?.enabled) continue;
+              derivedMetrics.configureMaterialization({
+                instanceId: instance.instanceId,
+                enabled: false,
+                status: "authorization_required",
+                lastError: "fdd_fleetguard_receipt_revalidation_required"
+              });
+              changes += 1;
+            }
+          });
+          changes += 1;
+          continue;
+        }
         const check = task.deployabilityCheck;
         const hasCurrentBmsSource = projectBmsSources(projectId).length > 0;
         const currentlyAuthorized = Boolean(
@@ -4857,12 +5220,408 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     task.deployabilityCheck = check;
     task.status = "running";
     task.parameterValues = parameterValues;
+    task.authorizationPolicy = "v4";
+    delete task.activeDeploymentReceiptId;
     task.updatedAt = new Date().toISOString();
     upsertFddTask(projectId, task);
 	    ensureFddDashboardForInstances(projectId, userId, task.algorithmSnapshot, instances);
 	    scheduleFddRuntimeMaterialization(projectId, instances);
 	    return { task, instances, runtimeEntities };
 	  }
+
+  function fleetGuardAuthorizationStillCurrent(input: {
+    projectId: string;
+    algorithm: FddAlgorithm;
+    taskId?: string;
+    assessment: FddFleetGuardAssessment;
+    submitted?: FleetGuardAuthorizationToken;
+    parameterSignature: string;
+  }): ReturnType<typeof validateFleetGuardAuthorization> {
+    if (!store.projects.some((project) => project.id === input.projectId)) {
+      return { valid: false, code: "inventory_signature_mismatch", reason: "The project no longer exists." };
+    }
+    const rollout = currentFddFleetGuardRollout(store, input.projectId);
+    if (!isFddFleetGuardCanarySelected({
+      global: fddFleetGuardGlobalConfig,
+      rollout,
+      algorithmKey: input.algorithm.algorithmKey
+    })) {
+      return { valid: false, code: "rollout_revision_mismatch", reason: "FleetGuard canary selection changed." };
+    }
+    const templateRef = input.assessment.templateRef;
+    if (!templateRef) return { valid: false, code: "template_mismatch", reason: "A compatible locked fleet template is required." };
+    const head = currentFddFleetTemplateHead(store, input.projectId, input.algorithm.id);
+    if (
+      !head
+      || head.state !== "locked"
+      || head.templateId !== templateRef.templateId
+      || head.version !== templateRef.version
+      || head.signature !== templateRef.signature
+    ) {
+      return { valid: false, code: "template_mismatch", reason: "The locked fleet template changed." };
+    }
+    const registration = fleetGuardEvaluatorRegistration(input.algorithm.algorithmKey);
+    if (
+      !registration
+      || registration.evaluatorId !== input.assessment.plan.evaluator.id
+      || registration.evaluatorVersion !== input.assessment.plan.evaluator.registeredVersion
+      || input.assessment.plan.signatures.evaluator !== fddFleetGuardEvaluatorEvidenceSignature({
+        projectId: input.projectId,
+        evaluatorId: input.algorithm.algorithmKey,
+        evaluatorAvailable: isExecutableFddAlgorithm(input.algorithm)
+      })
+    ) {
+      return { valid: false, code: "evaluator_signature_mismatch", reason: "The versioned evaluator registration changed." };
+    }
+    return validateFleetGuardAuthorization({
+      ...(input.submitted ? { submitted: input.submitted } : {}),
+      plan: input.assessment.plan,
+      rolloutRevision: rollout.revision,
+      templateRef,
+      parameterSignature: input.parameterSignature,
+      ...(input.taskId ? { taskId: input.taskId } : {})
+    });
+  }
+
+  function fleetGuardInstanceMatchesPlanEntity(
+    instance: DerivedMetricInstance,
+    entity: FleetGuardPlan["entities"][number],
+    receiptId: string
+  ): boolean {
+    if (instance.entityId.trim().toUpperCase() !== entity.entityKey.trim().toUpperCase()) return false;
+    if (instance.metadata?.fddFleetGuardReceiptId !== receiptId || instance.metadata?.fddAuthorizationPolicy !== "fleetguard-v1") return false;
+    if (instance.dependencies.length !== entity.bindings.length) return false;
+    const byRole = new Map(instance.dependencies.map((dependency) => [dependency.role, dependency]));
+    if (byRole.size !== entity.bindings.length) return false;
+    return entity.bindings.every((binding) => {
+      const dependency = byRole.get(binding.role);
+      return Boolean(
+        dependency
+        && dependency.sourceType === "raw_point"
+        && dependency.sourceId === binding.pointId
+        && !dependency.pointName
+        && dependency.objectRef === binding.objectRef
+        && (dependency.unit ?? undefined) === (binding.unit ?? undefined)
+        && dependency.metadata?.fddPointFamilyKey === binding.familyKey
+        && dependency.metadata?.fddFleetGuardReceiptId === receiptId
+      );
+    });
+  }
+
+  function registerFleetGuardFddMetric(input: {
+    projectId: string;
+    userId: string;
+    task: ProjectFddTask;
+    check: FddDeployabilityCheck;
+    parameterValues: FddTaskParameterValue[];
+    plan: FleetGuardPlan;
+    entity: FleetGuardPlan["entities"][number];
+    receiptId: string;
+    templateRef: NonNullable<FddFleetGuardAssessment["templateRef"]>;
+  }): DerivedMetricInstance {
+    const { task, entity } = input;
+    options.fddTestHooks?.beforeRegisterMetric?.({
+      projectId: input.projectId,
+      algorithmKey: task.algorithmSnapshot.algorithmKey,
+      entityId: entity.entityKey
+    });
+    const planFingerprint = JSON.stringify({
+      policyVersion: input.plan.policyVersion,
+      algorithmKey: task.algorithmSnapshot.algorithmKey,
+      algorithmVersion: task.algorithmSnapshot.version,
+      parameterSignature: fddFleetGuardParameterSignature(input.parameterValues),
+      bindings: entity.bindings
+    });
+    const existing = derivedMetrics.lookup({
+      projectId: input.projectId,
+      metricKey: task.algorithmSnapshot.algorithmKey,
+      entityId: entity.entityKey,
+      limit: 1
+    })[0];
+    const preserveWatermark = existing?.metadata?.fddMaterializationPlanFingerprint === planFingerprint;
+    const result = derivedMetrics.registerMetric({
+      projectId: input.projectId,
+      metricKey: task.algorithmSnapshot.algorithmKey,
+      entityId: entity.entityKey,
+      entityName: entity.entityKey.replace(/_/gu, "-"),
+      displayName: task.algorithmSnapshot.name,
+      metricType: "fdd",
+      formulaVersion: task.algorithmSnapshot.version,
+      formula: task.algorithmSnapshot.logicSummary,
+      formulaDescription: task.algorithmSnapshot.logicSummary,
+      dependencies: entity.bindings.map((binding) => ({
+        role: binding.role,
+        sourceType: "raw_point",
+        sourceId: binding.pointId,
+        objectRef: binding.objectRef,
+        ...(binding.unit ? { unit: binding.unit } : {}),
+        label: binding.role,
+        metadata: {
+          fddPointFamilyKey: binding.familyKey,
+          fddFleetGuardReceiptId: input.receiptId
+        }
+      })),
+      createdBy: input.userId,
+      metadata: {
+        fddTaskId: task.id,
+        fddAlgorithmId: task.algorithmSnapshot.id,
+        fddDeployabilityStatus: input.check.status,
+        fddEntityDeployabilityStatus: entity.state,
+        fddAuthorizationPolicy: "fleetguard-v1",
+        fddFleetGuardReceiptId: input.receiptId,
+        fddFleetGuardPlanId: input.plan.planId,
+        fddFleetTemplateRef: input.templateRef,
+        fddMaterializationPlanFingerprint: planFingerprint,
+        fddParameters: input.parameterValues.map((parameter) => ({
+          key: parameter.key,
+          value: parameter.value,
+          source: parameter.source
+        }))
+      }
+    });
+    if (existing && !preserveWatermark) derivedMetrics.clearHistory(result.instance.instanceId);
+    configureFddMetricMaterialization(result.instance, task.algorithmSnapshot, Boolean(existing && !preserveWatermark));
+    const registered = derivedMetrics.getInstance(result.instance.instanceId);
+    if (!registered || !fleetGuardInstanceMatchesPlanEntity(registered, entity, input.receiptId)) {
+      throw new Error(`fdd_fleetguard_runtime_plan_mismatch:${entity.entityKey}`);
+    }
+    return registered;
+  }
+
+  function deployFleetGuardFddTaskRuntime(input: {
+    projectId: string;
+    userId: string;
+    task: ProjectFddTask;
+    check: FddDeployabilityCheck;
+    assessment: FddFleetGuardAssessment;
+    submitted?: FleetGuardAuthorizationToken;
+    /** Authoritative route target. Undefined means a prospective library task. */
+    authorizationTaskId?: string;
+    prospectiveTask?: boolean;
+  }): {
+    task: ProjectFddTask;
+    instances: DerivedMetricInstance[];
+    receipt?: FddDeploymentReceipt;
+    error?: string;
+    errorCode?: string;
+  } {
+    // Work on a detached value. A failed FleetGuard authorization or SQLite
+    // transaction must leave the caller's authoritative SeedStore byte-for-byte
+    // unchanged.
+    const task = structuredClone(input.task);
+    const { assessment } = input;
+    const templateRef = assessment.templateRef;
+    if (!templateRef) return { task, instances: [], errorCode: "template_mismatch", error: "A compatible locked fleet template is required." };
+    const parameterValues = recommendFddTaskParameters(
+      task.algorithmSnapshot,
+      input.check,
+      input.userId,
+      task.parameterValues ?? []
+    );
+    const parameterSignature = fddFleetGuardParameterSignature(parameterValues);
+    const validation = fleetGuardAuthorizationStillCurrent({
+      projectId: input.projectId,
+      algorithm: task.algorithmSnapshot,
+      assessment,
+      ...(input.submitted ? { submitted: input.submitted } : {}),
+      ...(input.authorizationTaskId ? { taskId: input.authorizationTaskId } : {}),
+      parameterSignature,
+    });
+    if (!validation.valid) {
+      return {
+        task,
+        instances: [],
+        ...(validation.code ? { errorCode: validation.code } : {}),
+        error: validation.reason ?? "FleetGuard authorization is stale."
+      };
+    }
+    if (assessment.plan.coverage.expected !== 8) {
+      return { task, instances: [], errorCode: "fleet_coverage_incomplete", error: "The Element canary requires exactly 8 authorized chillers." };
+    }
+    const projectTasks = store.fddTasksByProject?.[input.projectId] ?? [];
+    const currentTarget = projectTasks.find((entry) => entry.id === task.id);
+    if (input.prospectiveTask) {
+      const competingTask = projectTasks.find((entry) =>
+        entry.algorithmSnapshot.algorithmKey === task.algorithmSnapshot.algorithmKey
+      );
+      if (input.authorizationTaskId || currentTarget || competingTask) {
+        return { task, instances: [], errorCode: "task_mismatch", error: "The prospective FleetGuard task target changed." };
+      }
+    } else if (!input.authorizationTaskId || !currentTarget || currentTarget.id !== input.authorizationTaskId) {
+      return { task, instances: [], errorCode: "task_mismatch", error: "The authoritative FleetGuard task no longer exists." };
+    }
+    const receiptId = `fddreceipt_${randomUUID()}`;
+    const deployedAt = new Date().toISOString();
+    const assertCommitInputsCurrent = (): ProjectFddTask | undefined => {
+      const authoritativeAlgorithm = (store.fddAlgorithms ?? []).find((algorithm) =>
+        algorithm.id === task.algorithmSnapshot.id
+        || algorithm.algorithmKey === task.algorithmSnapshot.algorithmKey
+      );
+      if (
+        !authoritativeAlgorithm
+        || authoritativeAlgorithm.id !== task.algorithmSnapshot.id
+        || authoritativeAlgorithm.algorithmKey !== task.algorithmSnapshot.algorithmKey
+        || authoritativeAlgorithm.version !== task.algorithmSnapshot.version
+        || fddFleetGuardAlgorithmEvidenceSignature({
+          projectId: input.projectId,
+          algorithm: authoritativeAlgorithm
+        }) !== assessment.plan.signatures.algorithm
+        || input.check.projectDataSignature !== fddProjectDataSignature(input.projectId)
+        || input.check.equipmentInventorySignature !== currentFddEquipmentInventorySignatureSync(input.projectId)
+      ) throw new Error("fdd_fleetguard_stale:authoritative_evidence_changed");
+
+      const authoritativeTask = (store.fddTasksByProject?.[input.projectId] ?? [])
+        .find((entry) => entry.id === task.id);
+      const competingTask = input.prospectiveTask
+        ? (store.fddTasksByProject?.[input.projectId] ?? []).find((entry) =>
+            entry.algorithmSnapshot.algorithmKey === task.algorithmSnapshot.algorithmKey
+          )
+        : undefined;
+      const authoritativeParameterSignature = fddFleetGuardParameterSignature(recommendFddTaskParameters(
+        authoritativeAlgorithm,
+        input.check,
+        input.userId,
+        authoritativeTask?.parameterValues ?? []
+      ));
+      const authoritativeTaskMismatch = input.prospectiveTask
+        ? Boolean(authoritativeTask || competingTask)
+        : !authoritativeTask
+          || authoritativeTask.id !== input.authorizationTaskId
+          || authoritativeTask.algorithmSnapshot.id !== task.algorithmSnapshot.id
+          || authoritativeTask.algorithmSnapshot.algorithmKey !== task.algorithmSnapshot.algorithmKey
+          || authoritativeTask.algorithmSnapshot.version !== task.algorithmSnapshot.version
+          || fddFleetGuardAlgorithmEvidenceSignature({
+            projectId: input.projectId,
+            algorithm: authoritativeTask.algorithmSnapshot
+          }) !== assessment.plan.signatures.algorithm;
+      if (authoritativeTaskMismatch) throw new Error("fdd_fleetguard_stale:task_mismatch");
+      if (authoritativeParameterSignature !== parameterSignature) {
+        throw new Error("fdd_fleetguard_stale:parameter_signature_mismatch");
+      }
+      const finalValidation = fleetGuardAuthorizationStillCurrent({
+        projectId: input.projectId,
+        algorithm: authoritativeAlgorithm,
+        assessment,
+        ...(input.submitted ? { submitted: input.submitted } : {}),
+        ...(input.authorizationTaskId ? { taskId: input.authorizationTaskId } : {}),
+        parameterSignature
+      });
+      if (!finalValidation.valid) throw new Error(`fdd_fleetguard_stale:${finalValidation.code}`);
+      return authoritativeTask;
+    };
+    let committed: { instances: DerivedMetricInstance[]; receipt: FddDeploymentReceipt };
+    try {
+      committed = derivedMetrics.runInTransaction(() => {
+        // Last synchronous TOCTOU gate. There is deliberately no await from
+        // here until receipt + all eight runtimes/materializations commit.
+        const authoritativeTask = assertCommitInputsCurrent();
+        const instances = assessment.plan.entities.map((entity) => registerFleetGuardFddMetric({
+          projectId: input.projectId,
+          userId: input.userId,
+          task,
+          check: input.check,
+          parameterValues,
+          plan: assessment.plan,
+          entity,
+          receiptId,
+          templateRef
+        }));
+        if (instances.length !== 8 || new Set(instances.map((instance) => instance.entityId.trim().toUpperCase())).size !== 8) {
+          throw new Error("fdd_fleetguard_runtime_coverage_mismatch");
+        }
+        const registration = fleetGuardEvaluatorRegistration(task.algorithmSnapshot.algorithmKey);
+        if (!registration) throw new Error("fdd_fleetguard_evaluator_missing");
+        const previousReceiptId = authoritativeTask?.activeDeploymentReceiptId;
+        const committedTask: ProjectFddTask = {
+          ...structuredClone(task),
+          deployabilityCheck: structuredClone(input.check),
+          status: "running",
+          parameterValues: structuredClone(parameterValues),
+          authorizationPolicy: "fleetguard-v1",
+          activeDeploymentReceiptId: receiptId,
+          updatedAt: deployedAt
+        };
+        const receipt: FddDeploymentReceipt = {
+          receiptId,
+          projectId: input.projectId,
+          taskId: task.id,
+          policyVersion: "fleetguard-v1",
+          planId: assessment.plan.planId,
+          planSignature: assessment.summary.planSignature,
+          structuralPlanSignature: fleetGuardStructuralPlanSignature(assessment.plan),
+          rolloutRevision: assessment.summary.rolloutRevision,
+          templateRef,
+          algorithm: {
+            id: task.algorithmSnapshot.id,
+            key: task.algorithmSnapshot.algorithmKey,
+            version: task.algorithmSnapshot.version
+          },
+          evaluator: { id: registration.evaluatorId, version: registration.evaluatorVersion },
+          signatures: {
+            algorithm: assessment.plan.signatures.algorithm,
+            evaluator: assessment.plan.signatures.evaluator,
+            inventory: assessment.plan.signatures.inventory,
+            evidence: assessment.plan.signatures.evidence,
+            template: templateRef.signature,
+            ...(assessment.plan.signatures.tool ? { tool: assessment.plan.signatures.tool } : {}),
+            ...(assessment.plan.signatures.skill ? { skill: assessment.plan.signatures.skill } : {}),
+            ...(assessment.plan.signatures.model ? { model: assessment.plan.signatures.model } : {})
+          },
+          entities: assessment.plan.entities.map((entity) => ({
+            entityKey: entity.entityKey,
+            instanceId: instances.find((instance) => instance.entityId === entity.entityKey)!.instanceId,
+            bindings: entity.bindings.map((binding) => ({ ...binding }))
+          })),
+          parameterSignature,
+          taskSnapshot: committedTask as unknown as Record<string, unknown>,
+          ...(previousReceiptId ? { supersedesReceiptId: previousReceiptId } : {}),
+          deployedAt,
+          deployedBy: input.userId
+        };
+        options.fddTestHooks?.beforeInsertFleetGuardReceipt?.({ projectId: input.projectId, taskId: task.id, receiptId });
+        // Test hooks and future synchronous adapters may touch authoritative
+        // state. Recheck immediately before the immutable receipt insert.
+        assertCommitInputsCurrent();
+        derivedMetrics.insertFddDeploymentReceipt(receipt);
+        options.fddTestHooks?.afterInsertFleetGuardReceipt?.({ projectId: input.projectId, taskId: task.id, receiptId });
+        return { instances, receipt };
+      });
+    } catch (error) {
+      return {
+        task,
+        instances: [],
+        errorCode: "fdd_fleetguard_atomic_commit_failed",
+        error: `FleetGuard Deploy All failed before commit; receipt and all runtime changes were rolled back (${error instanceof Error ? error.message : "registration failed"}).`
+      };
+    }
+    task.deployabilityCheck = input.check;
+    task.status = "running";
+    task.parameterValues = parameterValues;
+    task.authorizationPolicy = "fleetguard-v1";
+    task.activeDeploymentReceiptId = committed.receipt.receiptId;
+    task.updatedAt = deployedAt;
+    upsertFddTask(input.projectId, task);
+    // SQLite is authoritative. Only publish the SeedStore pointer after the
+    // receipt and all eight runtime/materialization rows have committed.
+    try {
+      options.fddTestHooks?.beforeFleetGuardStorePersist?.({
+        projectId: input.projectId,
+        taskId: task.id,
+        receiptId: committed.receipt.receiptId
+      });
+      persistNow();
+    } catch {
+      // The SQLite receipt is authoritative and contains a complete task
+      // snapshot. Boot reconciliation repairs a failed SeedStore flush.
+    }
+    try {
+      ensureFddDashboardForInstances(input.projectId, input.userId, task.algorithmSnapshot, committed.instances);
+    } catch {
+      // The SQLite receipt is authoritative; dashboard presentation is best effort.
+    }
+    scheduleFddRuntimeMaterialization(input.projectId, committed.instances);
+    return { task, instances: committed.instances, receipt: committed.receipt };
+  }
 
 	  function fddDashboardBindingForMetric(instance: DerivedMetricInstance, algorithm: FddAlgorithm): DashboardPointBinding {
 	    const fddParameters = Array.isArray(instance.metadata?.fddParameters)
@@ -5070,11 +5829,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       .map((instance) => derivedMetrics.readMaterialization(instance.instanceId))
       .filter((materialization): materialization is DerivedMetricMaterialization => Boolean(materialization));
     if (materializations.length === 0) return;
+    const prevalidatedFleetGuardReceipts = await prevalidateFleetGuardMaterializationBatch(instances);
     let touched = false;
     await mapWithConcurrency(materializations, 2, async (materialization) => {
       if (!derivedMetrics.getInstance(materialization.instanceId)) return;
       try {
-        await materializeDerivedMetricInstanceSingleflight(materialization.instanceId);
+        await materializeDerivedMetricInstanceSingleflight(materialization.instanceId, false, prevalidatedFleetGuardReceipts);
         touched = true;
       } catch (error) {
         if (isMissingDerivedMetricError(error)) return;
@@ -5126,6 +5886,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         metadata: {
           ...(projectTaskId ? { fddTaskId: projectTaskId } : {}),
           fddAlgorithmId: algorithm.id,
+          // An explicit marker lets boot reconciliation distinguish a
+          // committed v4 redeploy from a damaged FleetGuard receipt link.
+          fddAuthorizationPolicy: "v4",
           fddDeployabilityStatus: check.status,
           fddEntityDeployabilityStatus: entity?.status ?? check.status,
           fddBuildingGptSkillId: check.agentWorkflow?.skillId,
@@ -5306,6 +6069,173 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     broadcastToProject(projectId, { type: "fdd_tasks_updated", projectId });
   }
 
+  function stopFleetGuardReceiptRuntime(
+    task: ProjectFddTask,
+    receipt: FddDeploymentReceipt,
+    blocker: string
+  ): void {
+    const instances = receipt.entities
+      .map((entity) => derivedMetrics.getInstance(entity.instanceId))
+      .filter((instance): instance is DerivedMetricInstance => Boolean(instance));
+    derivedMetrics.runInTransaction(() => {
+      for (const instance of instances) {
+        const materialization = derivedMetrics.readMaterialization(instance.instanceId);
+        if (!materialization) continue;
+        derivedMetrics.configureMaterialization({
+          instanceId: instance.instanceId,
+          enabled: false,
+          status: "authorization_required",
+          lastError: blocker
+        });
+      }
+    });
+    task.status = "cannot_deploy";
+    task.updatedAt = new Date().toISOString();
+    upsertFddTask(task.projectId, task);
+    persistSoon();
+    broadcastToProject(task.projectId, { type: "fdd_tasks_updated", projectId: task.projectId });
+  }
+
+  function fleetGuardReceiptExecutionIsCurrent(
+    task: ProjectFddTask,
+    receipt: FddDeploymentReceipt
+  ): boolean {
+    const authoritativeTask = (store.fddTasksByProject?.[task.projectId] ?? [])
+      .find((candidate) => candidate.id === task.id);
+    if (
+      !authoritativeTask
+      || authoritativeTask.authorizationPolicy !== "fleetguard-v1"
+      || authoritativeTask.activeDeploymentReceiptId !== receipt.receiptId
+    ) return false;
+    const instances = fleetGuardRuntimeForReceipt(receipt);
+    return Boolean(instances && instances.every((instance) => derivedMetrics.readMaterialization(instance.instanceId)?.enabled));
+  }
+
+  function refreshFleetGuardReceiptAuthorization(
+    task: ProjectFddTask,
+    receipt: FddDeploymentReceipt
+  ): Promise<boolean> {
+    const runKey = `${task.projectId}:${task.id}:${receipt.receiptId}`;
+    const existing = fddFleetGuardRuntimeAuthorizationRuns.get(runKey);
+    if (existing) return existing;
+    const run = (async (): Promise<boolean> => {
+      let blocker = "fdd_fleetguard_runtime_evidence_changed";
+      try {
+        const templateVersion = fddFleetTemplateVersionByRef(
+          store,
+          receipt.projectId,
+          receipt.templateRef.templateId,
+          receipt.templateRef.version
+        );
+        const registration = fleetGuardEvaluatorRegistration(task.algorithmSnapshot.algorithmKey);
+        if (
+          !templateVersion
+          || templateVersion.state !== "locked"
+          || templateVersion.signature !== receipt.templateRef.signature
+          || task.algorithmSnapshot.id !== receipt.algorithm.id
+          || task.algorithmSnapshot.algorithmKey !== receipt.algorithm.key
+          || task.algorithmSnapshot.version !== receipt.algorithm.version
+          || registration?.evaluatorId !== receipt.evaluator.id
+          || registration.evaluatorVersion !== receipt.evaluator.version
+          || fddFleetGuardParameterSignature(recommendFddTaskParameters(
+            task.algorithmSnapshot,
+            task.deployabilityCheck,
+            receipt.deployedBy,
+            task.parameterValues ?? []
+          )) !== receipt.parameterSignature
+          || !fleetGuardRuntimeForReceipt(receipt)
+        ) {
+          blocker = "fdd_fleetguard_historical_receipt_invalid";
+          throw new Error(blocker);
+        }
+        const context = await buildFddEntityContext(task.projectId);
+        const inventory = fddEquipmentAvailabilityFromContext(context);
+        const refreshedCheck = await runFddDeployabilityCheck(
+          task.projectId,
+          receipt.deployedBy,
+          task.algorithmSnapshot,
+          "auto",
+          task.id,
+          context,
+          inventory,
+          true,
+          { templateVersion, rolloutRevision: receipt.rolloutRevision }
+        );
+        const assessment = fleetGuardAssessmentsByCheck.get(refreshedCheck);
+        if (!assessment) {
+          blocker = "fdd_fleetguard_runtime_assessment_missing";
+          throw new Error(blocker);
+        }
+        if (
+          assessment.plan.state !== "ready"
+          || assessment.plan.coverage.expected !== 8
+          || assessment.plan.coverage.bound !== 8
+          || assessment.plan.coverage.dataReady !== 8
+          || assessment.plan.coverage.authorized !== 8
+        ) {
+          blocker = `fdd_fleetguard_runtime_plan_not_ready:${assessment.plan.primaryBlocker?.code ?? "coverage"}`;
+          throw new Error(blocker);
+        }
+        if (fleetGuardStructuralPlanSignature(assessment.plan) !== receipt.structuralPlanSignature) {
+          blocker = "fdd_fleetguard_runtime_structural_plan_changed";
+          throw new Error(blocker);
+        }
+        if (
+          assessment.plan.signatures.algorithm !== receipt.signatures.algorithm
+          || assessment.plan.signatures.evaluator !== receipt.signatures.evaluator
+          || assessment.plan.signatures.template !== receipt.signatures.template
+        ) {
+          blocker = "fdd_fleetguard_runtime_contract_signature_changed";
+          throw new Error(blocker);
+        }
+        if (!fleetGuardReceiptExecutionIsCurrent(task, receipt)) {
+          blocker = "fdd_fleetguard_runtime_receipt_rows_changed";
+          throw new Error(blocker);
+        }
+        return true;
+      } catch {
+        const authoritativeTask = (store.fddTasksByProject?.[task.projectId] ?? [])
+          .find((candidate) => candidate.id === task.id);
+        if (
+          authoritativeTask?.authorizationPolicy === "fleetguard-v1"
+          && authoritativeTask.activeDeploymentReceiptId === receipt.receiptId
+        ) {
+          stopFleetGuardReceiptRuntime(authoritativeTask, receipt, blocker);
+        }
+        return false;
+      }
+    })().finally(() => {
+      fddFleetGuardRuntimeAuthorizationRuns.delete(runKey);
+    });
+    fddFleetGuardRuntimeAuthorizationRuns.set(runKey, run);
+    return run;
+  }
+
+  async function prevalidateFleetGuardMaterializationBatch(
+    instances: DerivedMetricInstance[]
+  ): Promise<Set<string>> {
+    const receipts = new Map<string, FddDeploymentReceipt>();
+    for (const instance of instances) {
+      if (instance.metadata?.fddAuthorizationPolicy !== "fleetguard-v1") continue;
+      const receiptId = typeof instance.metadata?.fddFleetGuardReceiptId === "string"
+        ? instance.metadata.fddFleetGuardReceiptId
+        : undefined;
+      const receipt = receiptId ? derivedMetrics.getFddDeploymentReceipt(receiptId) : null;
+      if (receipt) receipts.set(receipt.receiptId, receipt);
+    }
+    const validated = new Set<string>();
+    for (const receipt of receipts.values()) {
+      const task = (store.fddTasksByProject?.[receipt.projectId] ?? [])
+        .find((candidate) => candidate.id === receipt.taskId);
+      if (
+        task?.authorizationPolicy === "fleetguard-v1"
+        && task.activeDeploymentReceiptId === receipt.receiptId
+        && await refreshFleetGuardReceiptAuthorization(task, receipt)
+      ) validated.add(receipt.receiptId);
+    }
+    return validated;
+  }
+
   function refreshExpiredFddTaskAuthorization(
     projectId: string,
     userId: string,
@@ -5376,7 +6306,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   async function materializeFddRuleMetricInstance(
     instance: DerivedMetricInstance,
     materialization: DerivedMetricMaterialization,
-    expectedPlanSignature: string
+    expectedPlanSignature: string,
+    prevalidatedFleetGuardReceipts?: ReadonlySet<string>
   ): Promise<void> {
     const taskId = typeof instance.metadata?.fddTaskId === "string" ? instance.metadata.fddTaskId : undefined;
     const algorithmId = typeof instance.metadata?.fddAlgorithmId === "string" ? instance.metadata.fddAlgorithmId : undefined;
@@ -5384,9 +6315,33 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       (taskId ? candidate.id === taskId : false)
       || (!taskId && algorithmId ? candidate.algorithmSnapshot.id === algorithmId || candidate.globalAlgorithmId === algorithmId : false)
     );
+    const receiptId = typeof instance.metadata?.fddFleetGuardReceiptId === "string"
+      ? instance.metadata.fddFleetGuardReceiptId
+      : undefined;
+    const usesFleetGuard = instance.metadata?.fddAuthorizationPolicy === "fleetguard-v1";
+    if (usesFleetGuard) {
+      const receipt = receiptId ? derivedMetrics.getFddDeploymentReceipt(receiptId) : null;
+      if (
+        !task
+        || task.authorizationPolicy !== "fleetguard-v1"
+        || task.activeDeploymentReceiptId !== receiptId
+        || !receipt
+        || receipt.taskId !== task.id
+        || (!prevalidatedFleetGuardReceipts?.has(receipt.receiptId)
+          && !await refreshFleetGuardReceiptAuthorization(task, receipt))
+      ) {
+        const activeReceipt = task?.activeDeploymentReceiptId
+          ? derivedMetrics.getFddDeploymentReceipt(task.activeDeploymentReceiptId)
+          : null;
+        if (task && activeReceipt && activeReceipt.taskId === task.id) {
+          stopFleetGuardReceiptRuntime(task, activeReceipt, "fdd_fleetguard_runtime_receipt_mismatch");
+        }
+        return;
+      }
+    }
     let check = task?.deployabilityCheck;
     let automaticRefreshFailed = false;
-    if (task && check && !fddCheckIsFresh(check) && isExecutableFddAlgorithm(task.algorithmSnapshot)) {
+    if (!usesFleetGuard && task && check && !fddCheckIsFresh(check) && isExecutableFddAlgorithm(task.algorithmSnapshot)) {
       const refreshed = await refreshExpiredFddTaskAuthorization(
         instance.projectId,
         instance.createdBy ?? "buildinggpt-system",
@@ -5397,18 +6352,20 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     if (!derivedMetricExecutionPlanIsCurrent(instance.instanceId, expectedPlanSignature)) return;
     const hasCurrentBmsSource = projectBmsSources(instance.projectId).length > 0;
-    const currentlyAuthorized = Boolean(
-      task
-      && check
-      && isExecutableFddAlgorithm(task.algorithmSnapshot)
-      && check.status === "can_deploy"
-      && fddCheckMatchesCurrentPolicy(check)
-      && fddCheckIsFresh(check)
-      && (!hasCurrentBmsSource || fddCheckMatchesCurrentProjectSignature(instance.projectId, check))
-      && fddCheckMatchesAlgorithm(check, task.algorithmSnapshot)
-      && fddCheckHasEntityCoverage(check, task.algorithmSnapshot)
-      && check.equipmentInventorySignature === currentFddEquipmentInventorySignatureSync(instance.projectId)
-    );
+    const currentlyAuthorized = usesFleetGuard
+      ? Boolean(task && receiptId && task.activeDeploymentReceiptId === receiptId)
+      : Boolean(
+          task
+          && check
+          && isExecutableFddAlgorithm(task.algorithmSnapshot)
+          && check.status === "can_deploy"
+          && fddCheckMatchesCurrentPolicy(check)
+          && fddCheckIsFresh(check)
+          && (!hasCurrentBmsSource || fddCheckMatchesCurrentProjectSignature(instance.projectId, check))
+          && fddCheckMatchesAlgorithm(check, task.algorithmSnapshot)
+          && fddCheckHasEntityCoverage(check, task.algorithmSnapshot)
+          && check.equipmentInventorySignature === currentFddEquipmentInventorySignatureSync(instance.projectId)
+        );
     if (!currentlyAuthorized) {
       if (task && (task.status === "running" || task.status === "ready")) {
         task.status = "checking";
@@ -5442,6 +6399,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     // in flight. Never let an obsolete execution plan repopulate samples or a
     // watermark that the redeploy transaction deliberately cleared.
     if (!derivedMetricExecutionPlanIsCurrent(instance.instanceId, expectedPlanSignature)) return;
+    if (usesFleetGuard) {
+      const receipt = receiptId ? derivedMetrics.getFddDeploymentReceipt(receiptId) : null;
+      if (!task || !receipt || !fleetGuardReceiptExecutionIsCurrent(task, receipt)) return;
+    }
     const seriesByRole = new Map(seriesEntries.map((entry) => [entry.role, entry.points]));
     const anchor = [...seriesEntries].sort((left, right) => right.points.length - left.points.length)[0];
     const calculationRunId = `fdd-materializer:${instance.instanceId}`;
@@ -5602,7 +6563,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   async function materializeDerivedMetricInstance(
     instance: DerivedMetricInstance,
     materialization: DerivedMetricMaterialization,
-    expectedPlanSignature: string
+    expectedPlanSignature: string,
+    prevalidatedFleetGuardReceipts?: ReadonlySet<string>
   ): Promise<void> {
     const kind = inferredMaterializerKind(instance, materialization);
     if (!kind) {
@@ -5615,7 +6577,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return;
     }
     if (kind === "fdd_rule") {
-      await materializeFddRuleMetricInstance(instance, materialization, expectedPlanSignature);
+      await materializeFddRuleMetricInstance(instance, materialization, expectedPlanSignature, prevalidatedFleetGuardReceipts);
       return;
     }
     const leftRole = materialization.leftRole ?? instance.dependencies[0]?.role ?? "left";
@@ -5720,7 +6682,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
   }
 
-  function materializeDerivedMetricInstanceSingleflight(instanceId: string, requireDue = false): Promise<void> {
+  function materializeDerivedMetricInstanceSingleflight(
+    instanceId: string,
+    requireDue = false,
+    prevalidatedFleetGuardReceipts?: ReadonlySet<string>
+  ): Promise<void> {
     const existingRun = derivedMetricMaterializationRuns.get(instanceId);
     if (existingRun) return existingRun;
     const run = (async (): Promise<void> => {
@@ -5731,7 +6697,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       if (!instance || !materialization || !materialization.enabled) return;
       if (requireDue && materialization.nextRunAt && Date.parse(materialization.nextRunAt) > Date.now()) return;
       const expectedPlanSignature = derivedMetricExecutionPlanSignature(instance);
-      await materializeDerivedMetricInstance(instance, materialization, expectedPlanSignature);
+      await materializeDerivedMetricInstance(instance, materialization, expectedPlanSignature, prevalidatedFleetGuardReceipts);
     })().finally(() => {
       derivedMetricMaterializationRuns.delete(instanceId);
     });
@@ -5752,9 +6718,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           && (!materialization.nextRunAt || Date.parse(materialization.nextRunAt) <= now)
         )
         .slice(0, 50);
+      const dueInstances = due
+        .map((materialization) => derivedMetrics.getInstance(materialization.instanceId))
+        .filter((instance): instance is DerivedMetricInstance => Boolean(instance));
+      const prevalidatedFleetGuardReceipts = await prevalidateFleetGuardMaterializationBatch(dueInstances);
       for (const materialization of due) {
         try {
-          await materializeDerivedMetricInstanceSingleflight(materialization.instanceId, true);
+          await materializeDerivedMetricInstanceSingleflight(
+            materialization.instanceId,
+            true,
+            prevalidatedFleetGuardReceipts
+          );
           touchedProjects.add(materialization.projectId);
         } catch (error) {
           if (isMissingDerivedMetricError(error)) {
@@ -7532,6 +8506,43 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   });
 
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/fdd-fleetguard-rollout", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+    return {
+      projectId: request.params.projectId,
+      globalMode: fddFleetGuardGlobalConfig.mode,
+      rollout: fddFleetGuardRollouts.get(request.params.projectId),
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.patch<{ Params: ProjectParams; Body: unknown }>("/api/projects/:projectId/fdd-fleetguard-rollout", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+    const configurable = requirePermission(request, reply, membership, "project:configure");
+    if (isReply(configurable)) return configurable;
+    try {
+      const rollout = fddFleetGuardRollouts.update(request.params.projectId, session.userId, request.body);
+      return { projectId: request.params.projectId, rollout, requestId: requestIdFor(request) };
+    } catch (error) {
+      if (error instanceof FddFleetGuardRolloutError) {
+        return sendError(request, reply, error.statusCode, error.code, error.message);
+      }
+      throw error;
+    }
+  });
+
   app.get<{ Params: ProjectParams }>("/api/projects/:projectId/fdd-fleet-templates", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
@@ -7662,7 +8673,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (!algorithm) {
       return sendError(request, reply, 404, "fdd_algorithm_not_found", "The requested FDD algorithm does not exist.");
     }
-    const check = await runFddDeployabilityCheck(request.params.projectId, session.userId, algorithm, "manual");
+    const existingTask = (store.fddTasksByProject?.[request.params.projectId] ?? []).find((entry) =>
+      entry.source === "global_library"
+      && (entry.globalAlgorithmId === algorithm.id || entry.algorithmSnapshot.algorithmKey === algorithm.algorithmKey)
+    );
+    const check = await runFddDeployabilityCheck(
+      request.params.projectId,
+      session.userId,
+      algorithm,
+      "manual",
+      existingTask?.id
+    );
     persistSoon();
     return {
       projectId: request.params.projectId,
@@ -7672,7 +8693,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   });
 
-  app.post<{ Params: ProjectParams & { algorithmId: string } }>("/api/projects/:projectId/fdd-library/:algorithmId/deploy", async (request, reply) => {
+  app.post<{ Params: ProjectParams & { algorithmId: string }; Body: unknown }>("/api/projects/:projectId/fdd-library/:algorithmId/deploy", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
 
@@ -7692,27 +8713,41 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (!isExecutableFddAlgorithm(algorithm)) {
       return sendError(request, reply, 422, "fdd_runtime_not_supported", "This FDD definition is specification-only because no executable evaluator is registered.");
     }
-    ensureProjectFddCollections(request.params.projectId);
+    const existingTask = (store.fddTasksByProject?.[request.params.projectId] ?? []).find((entry) =>
+      entry.source === "global_library"
+      && (entry.globalAlgorithmId === algorithm.id || entry.algorithmSnapshot.algorithmKey === algorithm.algorithmKey)
+    );
+    const fleetGuardSelected = isFddFleetGuardCanarySelected({
+      global: fddFleetGuardGlobalConfig,
+      rollout: currentFddFleetGuardRollout(store, request.params.projectId),
+      algorithmKey: algorithm.algorithmKey
+    });
+    if (!fleetGuardSelected) ensureProjectFddCollections(request.params.projectId);
+    let submittedAuthorization: FleetGuardAuthorizationToken | undefined;
+    if (fleetGuardSelected) {
+      try {
+        submittedAuthorization = parseFddFleetGuardAuthorization(request.body);
+      } catch (error) {
+        return sendError(request, reply, 409, "fdd_fleetguard_authorization_invalid", error instanceof Error ? error.message : "FleetGuard authorization is invalid.");
+      }
+      if (!submittedAuthorization) {
+        return sendError(request, reply, 409, "fdd_fleetguard_authorization_required", "Run Test and submit its FleetGuard authorization before deployment.");
+      }
+    }
     const entityContext = await buildFddEntityContext(request.params.projectId);
     const equipmentAvailability = fddEquipmentAvailabilityFromContext(entityContext);
-    // Deployment is a state-changing boundary. Always re-read inventory,
-    // catalog mappings, and observed history instead of authorizing from a
-    // merely fresh cached library card.
+    // FleetGuard deployment is a state-changing boundary: it re-reads
+    // inventory, catalog mappings, and observed history without mutating the
+    // cached v4 card. Default-off v4 keeps its established persistence path.
     const check = await runFddDeployabilityCheck(
       request.params.projectId,
       session.userId,
       algorithm,
       "auto",
-      undefined,
+      existingTask?.id,
       entityContext,
-      equipmentAvailability
-    );
-    if (check.status !== "can_deploy") {
-      return sendError(request, reply, 422, "fdd_cannot_deploy", "This FDD algorithm requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first.");
-    }
-    const existingTask = fddTasksForProject(request.params.projectId).find((entry) =>
-      entry.source === "global_library"
-      && (entry.globalAlgorithmId === algorithm.id || entry.algorithmSnapshot.algorithmKey === algorithm.algorithmKey)
+      equipmentAvailability,
+      fleetGuardSelected
     );
     const task = existingTask
       ? {
@@ -7725,6 +8760,41 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           updatedAt: new Date().toISOString()
         }
       : fddTaskFromAlgorithm(request.params.projectId, algorithm, "global_library", "global_community", check);
+    if (fleetGuardSelected) {
+      const assessment = fleetGuardAssessmentsByCheck.get(check);
+      if (!assessment) {
+        return sendError(request, reply, 409, "fdd_fleetguard_plan_unavailable", "The fresh FleetGuard assessment is unavailable; deployment did not fall back to v4.");
+      }
+      const deployment = deployFleetGuardFddTaskRuntime({
+        projectId: request.params.projectId,
+        userId: session.userId,
+        task,
+        check,
+        assessment,
+        ...(submittedAuthorization ? { submitted: submittedAuthorization } : {}),
+        ...(existingTask ? { authorizationTaskId: existingTask.id } : { prospectiveTask: true })
+      });
+      if (deployment.error) {
+        return sendError(request, reply, 409, deployment.errorCode ?? "fdd_fleetguard_not_ready", deployment.error);
+      }
+      persistSoon();
+      broadcastToProject(request.params.projectId, { type: "fdd_tasks_updated", projectId: request.params.projectId });
+      return {
+        projectId: request.params.projectId,
+        task: deployment.task,
+        deployment: {
+          expectedEntityCount: assessment.plan.coverage.expected,
+          deployedEntityCount: deployment.instances.length,
+          entityKeys: assessment.plan.entities.map((entity) => entity.entityKey),
+          authorizationPolicy: "fleetguard-v1" as const,
+          receiptId: deployment.receipt?.receiptId
+        },
+        requestId: requestIdFor(request)
+      };
+    }
+    if (check.status !== "can_deploy") {
+      return sendError(request, reply, 422, "fdd_cannot_deploy", "This FDD algorithm requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first.");
+    }
     const deployment = await deployFddTaskRuntime(request.params.projectId, session.userId, task, check);
     if (deployment.error) {
       return sendError(request, reply, 422, "fdd_no_runtime_entities", deployment.error);
@@ -7857,7 +8927,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const writable = requirePermission(request, reply, membership, "chat:write");
     if (isReply(writable)) return writable;
 
-    const task = fddTasksForProject(request.params.projectId).find((entry) => entry.id === request.params.taskId);
+    const authoritativeTask = (store.fddTasksByProject?.[request.params.projectId] ?? [])
+      .find((entry) => entry.id === request.params.taskId);
+    const task = authoritativeTask ? structuredClone(authoritativeTask) : undefined;
     if (!task) {
       return sendError(request, reply, 404, "fdd_task_not_found", "The requested FDD task does not exist.");
     }
@@ -7883,7 +8955,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const writable = requirePermission(request, reply, membership, "chat:write");
     if (isReply(writable)) return writable;
 
-    const task = fddTasksForProject(request.params.projectId).find((entry) => entry.id === request.params.taskId);
+    const authoritativeTask = (store.fddTasksByProject?.[request.params.projectId] ?? [])
+      .find((entry) => entry.id === request.params.taskId);
+    const task = authoritativeTask ? structuredClone(authoritativeTask) : undefined;
     if (!task) {
       return sendError(request, reply, 404, "fdd_task_not_found", "The requested FDD task does not exist.");
     }
@@ -7898,7 +8972,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return { projectId: request.params.projectId, task, requestId: requestIdFor(request) };
   });
 
-  app.post<{ Params: ProjectParams & { taskId: string } }>("/api/projects/:projectId/fdd-tasks/:taskId/deploy", async (request, reply) => {
+  app.post<{ Params: ProjectParams & { taskId: string }; Body: unknown }>("/api/projects/:projectId/fdd-tasks/:taskId/deploy", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) return session;
 
@@ -7911,12 +8985,30 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const writable = requirePermission(request, reply, membership, "chat:write");
     if (isReply(writable)) return writable;
 
-    const task = fddTasksForProject(request.params.projectId).find((entry) => entry.id === request.params.taskId);
+    const authoritativeTask = (store.fddTasksByProject?.[request.params.projectId] ?? [])
+      .find((entry) => entry.id === request.params.taskId);
+    const task = authoritativeTask ? structuredClone(authoritativeTask) : undefined;
     if (!task) {
       return sendError(request, reply, 404, "fdd_task_not_found", "The requested FDD task does not exist.");
     }
     if (!isExecutableFddAlgorithm(task.algorithmSnapshot)) {
       return sendError(request, reply, 422, "fdd_runtime_not_supported", "This FDD definition is specification-only because no executable evaluator is registered.");
+    }
+    const fleetGuardSelected = isFddFleetGuardCanarySelected({
+      global: fddFleetGuardGlobalConfig,
+      rollout: currentFddFleetGuardRollout(store, request.params.projectId),
+      algorithmKey: task.algorithmSnapshot.algorithmKey
+    });
+    let submittedAuthorization: FleetGuardAuthorizationToken | undefined;
+    if (fleetGuardSelected) {
+      try {
+        submittedAuthorization = parseFddFleetGuardAuthorization(request.body);
+      } catch (error) {
+        return sendError(request, reply, 409, "fdd_fleetguard_authorization_invalid", error instanceof Error ? error.message : "FleetGuard authorization is invalid.");
+      }
+      if (!submittedAuthorization) {
+        return sendError(request, reply, 409, "fdd_fleetguard_authorization_required", "Run Test and submit its FleetGuard authorization before deployment.");
+      }
     }
     const entityContext = await buildFddEntityContext(request.params.projectId);
     const equipmentAvailability = fddEquipmentAvailabilityFromContext(entityContext);
@@ -7927,8 +9019,41 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       "auto",
       task.id,
       entityContext,
-      equipmentAvailability
+      equipmentAvailability,
+      fleetGuardSelected
     );
+    if (fleetGuardSelected) {
+      const assessment = fleetGuardAssessmentsByCheck.get(check);
+      if (!assessment) {
+        return sendError(request, reply, 409, "fdd_fleetguard_plan_unavailable", "The fresh FleetGuard assessment is unavailable; deployment did not fall back to v4.");
+      }
+      const deployment = deployFleetGuardFddTaskRuntime({
+        projectId: request.params.projectId,
+        userId: session.userId,
+        task,
+        check,
+        assessment,
+        ...(submittedAuthorization ? { submitted: submittedAuthorization } : {}),
+        authorizationTaskId: task.id
+      });
+      if (deployment.error) {
+        return sendError(request, reply, 409, deployment.errorCode ?? "fdd_fleetguard_not_ready", deployment.error);
+      }
+      persistSoon();
+      broadcastToProject(request.params.projectId, { type: "fdd_tasks_updated", projectId: request.params.projectId });
+      return {
+        projectId: request.params.projectId,
+        task: deployment.task,
+        deployment: {
+          expectedEntityCount: assessment.plan.coverage.expected,
+          deployedEntityCount: deployment.instances.length,
+          entityKeys: assessment.plan.entities.map((entity) => entity.entityKey),
+          authorizationPolicy: "fleetguard-v1" as const,
+          receiptId: deployment.receipt?.receiptId
+        },
+        requestId: requestIdFor(request)
+      };
+    }
     if (check.status !== "can_deploy") {
       return sendError(request, reply, 422, "fdd_cannot_deploy", "This FDD task requires a confirmed can_deploy check; resolve missing, ambiguous, or history blockers first.");
     }
@@ -9446,6 +10571,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     if (store.fddFleetTemplateAuditByProject) {
       delete store.fddFleetTemplateAuditByProject[projectId];
+    }
+    if (store.fddFleetGuardRolloutByProject) {
+      delete store.fddFleetGuardRolloutByProject[projectId];
     }
     writeSessionForToken(store, session.token, { userId: session.userId, selectedProjectId: null });
     persistSoon();

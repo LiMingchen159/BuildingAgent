@@ -15,6 +15,7 @@ import {
   type LegacyV4FleetCandidateEvidence,
   type LegacyV4FleetPlanInput
 } from "@building-agent/fdd-deployment-planner";
+import type { FddFleetGuardCheckSummary } from "./fleetGuardAuthorization.js";
 
 export interface FddCheckAgentWorkflow {
   agentId: "buildinggpt";
@@ -39,6 +40,7 @@ export interface FddCheckAgentWorkflow {
 /** API wire shape extends the pure decision only with API-owned workflow evidence. */
 export interface FddDeployabilityCheck extends FddDeployabilityDecision {
   agentWorkflow?: FddCheckAgentWorkflow;
+  fleetGuard?: FddFleetGuardCheckSummary;
 }
 
 export type EvaluateFddDeployabilityInput = Omit<LegacyV4DeployabilityInput, "checkedAt"> & {

@@ -176,6 +176,8 @@ export interface SeedStore {
   fddFleetTemplateVersionsByProject?: Record<string, import("./fdd/fleetTemplates.js").FddFleetTemplateVersion[]>;
   /** Optional, append-only fleet template audit events keyed by project. */
   fddFleetTemplateAuditByProject?: Record<string, import("./fdd/fleetTemplates.js").FddFleetTemplateAuditEvent[]>;
+  /** Optional, default-off project canary rollout. Absence always means off. */
+  fddFleetGuardRolloutByProject?: Record<string, import("./fdd/fleetGuardRollout.js").FddFleetGuardRollout>;
   runtimeProviders: PlaceholderRuntimeProvider[];
   tools: PlaceholderTool[];
   skills: PlaceholderSkill[];
@@ -552,6 +554,12 @@ export function cloneStore(store: SeedStore): SeedStore {
       Object.entries(store.fddFleetTemplateAuditByProject ?? {}).map(([projectId, events]) => [
         projectId,
         events.map((event) => structuredClone(event))
+      ])
+    ),
+    fddFleetGuardRolloutByProject: Object.fromEntries(
+      Object.entries(store.fddFleetGuardRolloutByProject ?? {}).map(([projectId, rollout]) => [
+        projectId,
+        structuredClone(rollout)
       ])
     ),
     runtimeProviders: store.runtimeProviders.map((provider) => ({ ...provider })),
