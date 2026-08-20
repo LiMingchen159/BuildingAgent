@@ -302,6 +302,92 @@ function frozenFleetPlan(check: Record<string, unknown>) {
 }
 
 describe("FleetGuard CH-01 Element canary", () => {
+  it("automatically refreshes prospective evidence when canary rollout or its template is stale", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-auto-refresh-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const { algorithm, locked, rollout } = enableCh01FleetGuardCanary(store);
+    const pointUnitOverrides = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `WCC_${index + 1}_TLKW`,
+      "kW"
+    ]));
+    const fetchMock = elementCollectorFetch(names, { includeObjectRefs: true, pointUnitOverrides });
+    const commonEnv = {
+      BUILDING_AGENT_DATA_DIR: dataDir,
+      BMS_DATABASE_API_URL: "http://collector.test",
+      DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+    };
+
+    // Establish a fresh prospective v4 baseline while the global gate is off.
+    const v4App = buildServer({ store, fetch: fetchMock as typeof fetch, env: commonEnv });
+    await v4App.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const initialLibrary = await v4App.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers });
+    expect(initialLibrary.statusCode).toBe(200);
+    await vi.waitFor(() => {
+      const check = (store.fddChecksByProject?.project_element ?? []).find((entry) =>
+        entry.algorithmId === algorithm.id && !entry.projectTaskId
+      );
+      expect(check).toBeTruthy();
+      expect(check?.fleetGuard).toBeUndefined();
+    }, { timeout: 10_000 });
+    await v4App.close();
+
+    const app = buildServer({
+      store,
+      fetch: fetchMock as typeof fetch,
+      env: { ...commonEnv, BUILDING_AGENT_FLEETGUARD_AUTHORIZATION_MODE: "canary" }
+    });
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+    const checkForAlgorithm = () => (store.fddChecksByProject?.project_element ?? []).find((entry) =>
+      entry.algorithmId === algorithm.id && !entry.projectTaskId
+    );
+
+    const v4RunCount = store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0;
+    const canaryRefresh = await app.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers });
+    expect(canaryRefresh.statusCode).toBe(200);
+    expect(canaryRefresh.json().checksPending).toBe(true);
+    await vi.waitFor(() => {
+      expect(checkForAlgorithm()?.fleetGuard).toMatchObject({
+        rolloutRevision: rollout.revision,
+        templateRef: { templateId: locked.templateId, version: locked.version, signature: locked.signature }
+      });
+      expect(store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0).toBeGreaterThan(v4RunCount);
+    }, { timeout: 10_000 });
+
+    const currentRunCount = store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0;
+    const currentEvidence = await app.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers });
+    expect(currentEvidence.json().checksPending).toBe(false);
+    expect(store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0).toBe(currentRunCount);
+
+    const oldRevisionCheck = checkForAlgorithm();
+    if (!oldRevisionCheck?.fleetGuard) throw new Error("Missing automatic FleetGuard check");
+    oldRevisionCheck.fleetGuard.rolloutRevision = 0;
+    const revisionRefresh = await app.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers });
+    expect(revisionRefresh.json().checksPending).toBe(true);
+    await vi.waitFor(() => {
+      expect(checkForAlgorithm()?.fleetGuard?.rolloutRevision).toBe(rollout.revision);
+    }, { timeout: 10_000 });
+
+    const oldTemplateCheck = checkForAlgorithm();
+    if (!oldTemplateCheck?.fleetGuard?.templateRef) throw new Error("Missing automatic FleetGuard template reference");
+    oldTemplateCheck.fleetGuard.templateRef.signature = "sha256:stale-template";
+    const templateRefresh = await app.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers });
+    expect(templateRefresh.json().checksPending).toBe(true);
+    await vi.waitFor(() => {
+      expect(checkForAlgorithm()?.fleetGuard?.templateRef).toEqual({
+        templateId: locked.templateId,
+        version: locked.version,
+        signature: locked.signature
+      });
+    }, { timeout: 10_000 });
+
+    const finalRunCount = store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0;
+    const noRepeat = await app.inject({ method: "GET", url: "/api/projects/project_element/fdd-library", headers });
+    expect(noRepeat.json().checksPending).toBe(false);
+    expect(store.fddLibraryCheckRunsByProject?.project_element?.length ?? 0).toBe(finalRunCount);
+    await app.close();
+  }, 30_000);
+
   it("keeps CH-03 future-only and blocked until its supplemental role contract is versioned in a locked template", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-fleetguard-ch03-future-"));
     const names = writeElementFleetFixture(dataDir);
@@ -422,6 +508,23 @@ describe("FleetGuard CH-01 Element canary", () => {
         expect(dependency.metadata).toMatchObject({ fddFleetGuardReceiptId: task.activeDeploymentReceiptId });
       }
     }
+    const library = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_element/fdd-library",
+      headers
+    });
+    expect(library.statusCode).toBe(200);
+    expect(library.json().fleetGuardRollout).toEqual({
+      mode: "canary",
+      revision: 1,
+      algorithmKeys: [algorithm.algorithmKey],
+      templateRefs: [{
+        algorithmKey: algorithm.algorithmKey,
+        templateId: locked.templateId,
+        version: locked.version,
+        signature: locked.signature
+      }]
+    });
     await app.close();
   });
 

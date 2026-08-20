@@ -435,6 +435,73 @@ export interface FddCheckAgentWorkflow {
   steps: string[];
 }
 
+export type FddFleetGuardState = "ready" | "blocked" | "not_applicable";
+
+export interface FddFleetGuardSignatures {
+  algorithm: string;
+  evaluator: string;
+  inventory: string;
+  evidence: string;
+  template?: string;
+  skill?: string;
+  model?: string;
+  tool?: string;
+}
+
+export interface FddFleetGuardTemplateRef {
+  templateId: string;
+  version: number;
+  signature: string;
+}
+
+export interface FddFleetGuardAuthorization {
+  policyVersion: "fleetguard-v1";
+  planId: string;
+  planSignature: string;
+  rolloutRevision: number;
+  parameterSignature: string;
+  taskId?: string;
+  templateRef: FddFleetGuardTemplateRef;
+  signatures: Pick<FddFleetGuardSignatures, "algorithm" | "evaluator" | "inventory" | "evidence" | "template">;
+}
+
+export interface FddFleetGuardBlocker {
+  code: string;
+  reason: string;
+  entityKey?: string;
+  role?: string;
+}
+
+export interface FddFleetGuardWarning {
+  code: string;
+  reason: string;
+  entityKey: string;
+  role: string;
+}
+
+export interface FddFleetGuardCheckSummary {
+  kind: "fleetguard_v1";
+  policyVersion: "fleetguard-v1";
+  state: FddFleetGuardState;
+  planId: string;
+  planSignature: string;
+  rolloutRevision: number;
+  templateRef?: FddFleetGuardTemplateRef;
+  parameterSignature: string;
+  taskId?: string;
+  signatures: FddFleetGuardSignatures;
+  coverage: {
+    expected: number;
+    bound: number;
+    dataReady: number;
+    authorized: number;
+  };
+  primaryBlocker?: FddFleetGuardBlocker;
+  warnings: FddFleetGuardWarning[];
+  authorization?: FddFleetGuardAuthorization;
+  checkedAt: string;
+}
+
 export interface FddDeployabilityCheck {
   algorithmId?: string;
   projectTaskId?: string;
@@ -461,6 +528,9 @@ export interface FddDeployabilityCheck {
   source: "auto" | "manual";
   projectDataSignature: string;
   agentWorkflow?: FddCheckAgentWorkflow;
+  fleetGuard?: FddFleetGuardCheckSummary;
+  /** Wire evidence was present but invalid. Never fall back to v4 authorization. */
+  fleetGuardMalformed?: true;
 }
 
 export interface FddDeploymentSummary {
@@ -479,6 +549,8 @@ export interface ProjectFddTask {
   status: FddTaskStatus;
   deployabilityCheck?: FddDeployabilityCheck;
   parameterValues?: FddTaskParameterValue[];
+  authorizationPolicy?: "v4" | "fleetguard-v1";
+  activeDeploymentReceiptId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -490,6 +562,12 @@ export interface FddLibraryResponse {
   tasks: ProjectFddTask[];
   equipmentAvailability?: FddEquipmentAvailability[];
   equipmentInventorySignature?: string;
+  fleetGuardRollout?: {
+    mode: "off" | "canary";
+    revision: number;
+    algorithmKeys: string[];
+    templateRefs: Array<FddFleetGuardTemplateRef & { algorithmKey: string }>;
+  };
   checksPending?: boolean;
   requestId: string;
 }
@@ -2348,6 +2426,222 @@ function parseFddCheckAgentWorkflow(value: unknown): FddCheckAgentWorkflow | nul
   };
 }
 
+function parseFddFleetGuardText(value: unknown, maxLength = 10_000): string | null {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength ? value : null;
+}
+
+function parseFddFleetGuardSignatures(value: unknown): FddFleetGuardSignatures | null {
+  if (!isRecord(value)) return null;
+  const algorithm = parseFddFleetGuardText(value.algorithm, 256);
+  const evaluator = parseFddFleetGuardText(value.evaluator, 2_000);
+  const inventory = parseFddFleetGuardText(value.inventory, 256);
+  const evidence = parseFddFleetGuardText(value.evidence, 256);
+  if (!algorithm || !evaluator || !inventory || !evidence) return null;
+  const optional = (key: "template" | "skill" | "model" | "tool", maxLength: number) => {
+    const raw = value[key];
+    if (raw === undefined) return undefined;
+    return parseFddFleetGuardText(raw, maxLength) ?? null;
+  };
+  const template = optional("template", 256);
+  const skill = optional("skill", 256);
+  const model = optional("model", 256);
+  const tool = optional("tool", 256);
+  if (template === null || skill === null || model === null || tool === null) return null;
+  return {
+    algorithm,
+    evaluator,
+    inventory,
+    evidence,
+    ...(template ? { template } : {}),
+    ...(skill ? { skill } : {}),
+    ...(model ? { model } : {}),
+    ...(tool ? { tool } : {})
+  };
+}
+
+function parseFddFleetGuardTemplateRef(value: unknown): FddFleetGuardTemplateRef | null {
+  if (!isRecord(value)
+    || !Number.isSafeInteger(value.version)
+    || (value.version as number) < 1) return null;
+  const templateId = parseFddFleetGuardText(value.templateId, 200);
+  const signature = parseFddFleetGuardText(value.signature, 256);
+  return templateId && signature
+    ? { templateId, version: value.version as number, signature }
+    : null;
+}
+
+function sameFddFleetGuardTemplateRef(
+  left: FddFleetGuardTemplateRef | undefined,
+  right: FddFleetGuardTemplateRef | undefined
+): boolean {
+  return left?.templateId === right?.templateId
+    && left?.version === right?.version
+    && left?.signature === right?.signature;
+}
+
+function parseFddFleetGuardAuthorization(value: unknown): FddFleetGuardAuthorization | null {
+  if (!isRecord(value)
+    || value.policyVersion !== "fleetguard-v1"
+    || !Number.isSafeInteger(value.rolloutRevision)
+    || (value.rolloutRevision as number) < 1) return null;
+  const planId = parseFddFleetGuardText(value.planId, 2_000);
+  const planSignature = parseFddFleetGuardText(value.planSignature, 128);
+  const parameterSignature = parseFddFleetGuardText(value.parameterSignature, 128);
+  const taskId = value.taskId === undefined ? undefined : parseFddFleetGuardText(value.taskId, 200);
+  const templateRef = parseFddFleetGuardTemplateRef(value.templateRef);
+  const signatures = parseFddFleetGuardSignatures(value.signatures);
+  if (!planId || !planSignature || !parameterSignature || taskId === null || !templateRef || !signatures) return null;
+  return {
+    policyVersion: "fleetguard-v1",
+    planId,
+    planSignature,
+    rolloutRevision: value.rolloutRevision as number,
+    parameterSignature,
+    ...(taskId ? { taskId } : {}),
+    templateRef,
+    signatures: {
+      algorithm: signatures.algorithm,
+      evaluator: signatures.evaluator,
+      inventory: signatures.inventory,
+      evidence: signatures.evidence,
+      ...(signatures.template ? { template: signatures.template } : {})
+    }
+  };
+}
+
+function parseFddFleetGuardBlocker(value: unknown): FddFleetGuardBlocker | null {
+  if (!isRecord(value)) return null;
+  const code = parseFddFleetGuardText(value.code, 200);
+  const reason = parseFddFleetGuardText(value.reason, 2_000);
+  const entityKey = value.entityKey === undefined ? undefined : parseFddFleetGuardText(value.entityKey, 500);
+  const role = value.role === undefined ? undefined : parseFddFleetGuardText(value.role, 500);
+  if (!code || !reason || entityKey === null || role === null) return null;
+  return { code, reason, ...(entityKey ? { entityKey } : {}), ...(role ? { role } : {}) };
+}
+
+function parseFddFleetGuardWarning(value: unknown): FddFleetGuardWarning | null {
+  if (!isRecord(value)) return null;
+  const code = parseFddFleetGuardText(value.code, 200);
+  const reason = parseFddFleetGuardText(value.reason, 2_000);
+  const entityKey = parseFddFleetGuardText(value.entityKey, 500);
+  const role = parseFddFleetGuardText(value.role, 500);
+  return code && reason && entityKey && role ? { code, reason, entityKey, role } : null;
+}
+
+function parseFddFleetGuardCheckSummary(value: unknown, parent: {
+  checkedAt: string;
+  projectTaskId?: string;
+  expectedEntityCount?: number;
+  applicability?: FddApplicability;
+  equipmentAvailability?: FddEquipmentAvailability;
+}): FddFleetGuardCheckSummary | null {
+  if (!isRecord(value)
+    || value.kind !== "fleetguard_v1"
+    || value.policyVersion !== "fleetguard-v1"
+    || (value.state !== "ready" && value.state !== "blocked" && value.state !== "not_applicable")
+    || !Number.isSafeInteger(value.rolloutRevision)
+    || (value.rolloutRevision as number) < 1
+    || typeof value.checkedAt !== "string"
+    || value.checkedAt !== parent.checkedAt
+    || !Number.isFinite(Date.parse(value.checkedAt))
+    || !isRecord(value.coverage)
+    || !Array.isArray(value.warnings)
+    || value.warnings.length > 10_000) return null;
+  const planId = parseFddFleetGuardText(value.planId, 2_000);
+  const planSignature = parseFddFleetGuardText(value.planSignature, 128);
+  const parameterSignature = parseFddFleetGuardText(value.parameterSignature, 128);
+  const taskId = value.taskId === undefined ? undefined : parseFddFleetGuardText(value.taskId, 200);
+  const signatures = parseFddFleetGuardSignatures(value.signatures);
+  const templateRef = value.templateRef === undefined ? undefined : parseFddFleetGuardTemplateRef(value.templateRef);
+  const primaryBlocker = value.primaryBlocker === undefined ? undefined : parseFddFleetGuardBlocker(value.primaryBlocker);
+  const warnings = value.warnings.map((entry) => parseFddFleetGuardWarning(entry));
+  const authorization = value.authorization === undefined ? undefined : parseFddFleetGuardAuthorization(value.authorization);
+  if (!planId || !planSignature || !parameterSignature || taskId === null || !signatures
+    || templateRef === null || primaryBlocker === null || warnings.some((entry) => entry === null)
+    || authorization === null) return null;
+  const expected = value.coverage.expected;
+  const bound = value.coverage.bound;
+  const dataReady = value.coverage.dataReady;
+  const authorized = value.coverage.authorized;
+  if (![expected, bound, dataReady, authorized].every((entry) => Number.isSafeInteger(entry) && (entry as number) >= 0)
+    || (authorized as number) > (dataReady as number)
+    || (dataReady as number) > (bound as number)
+    || (bound as number) > (expected as number)) return null;
+  if (templateRef && signatures.template !== templateRef.signature) return null;
+  if (taskId !== parent.projectTaskId) return null;
+  const parentHasCompleteAvailableInventory = () => {
+    if (parent.applicability !== "applicable" || parent.equipmentAvailability?.status !== "available") return false;
+    const parentEntityKeys = parent.equipmentAvailability.entityKeys ?? [];
+    return Number.isSafeInteger(parent.expectedEntityCount)
+      && parent.expectedEntityCount === expected
+      && parent.equipmentAvailability.entityCount === expected
+      && new Set(parentEntityKeys).size === parentEntityKeys.length
+      && parentEntityKeys.length === expected;
+  };
+  if (value.state === "ready" && !parentHasCompleteAvailableInventory()) return null;
+  if (value.state === "blocked") {
+    if (parent.applicability === "no_equipment" || parent.equipmentAvailability?.status === "not_available") return null;
+    if (parent.equipmentAvailability?.status === "available" && !parentHasCompleteAvailableInventory()) return null;
+    if (parent.equipmentAvailability?.status !== "available"
+      && (parent.applicability !== "unknown"
+        || parent.equipmentAvailability?.status !== "unknown"
+        || expected !== 0
+        || bound !== 0
+        || dataReady !== 0)) return null;
+  }
+  if (value.state === "ready") {
+    if ((expected as number) <= 0
+      || bound !== expected
+      || dataReady !== expected
+      || authorized !== expected
+      || !templateRef
+      || !authorization
+      || !sameFddFleetGuardTemplateRef(templateRef, authorization.templateRef)
+      || authorization.planId !== planId
+      || authorization.planSignature !== planSignature
+      || authorization.rolloutRevision !== value.rolloutRevision
+      || authorization.parameterSignature !== parameterSignature
+      || authorization.taskId !== taskId
+      || authorization.signatures.algorithm !== signatures.algorithm
+      || authorization.signatures.evaluator !== signatures.evaluator
+      || authorization.signatures.inventory !== signatures.inventory
+      || authorization.signatures.evidence !== signatures.evidence
+      || authorization.signatures.template !== signatures.template
+      || primaryBlocker !== undefined) return null;
+  } else if (authorization !== undefined || authorized !== 0) {
+    return null;
+  }
+  if (value.state === "blocked" && !primaryBlocker) return null;
+  if (value.state === "not_applicable" && (expected !== 0
+    || bound !== 0
+    || dataReady !== 0
+    || !primaryBlocker
+    || parent.applicability !== "no_equipment"
+    || parent.equipmentAvailability?.status !== "not_available")) return null;
+  return {
+    kind: "fleetguard_v1",
+    policyVersion: "fleetguard-v1",
+    state: value.state,
+    planId,
+    planSignature,
+    rolloutRevision: value.rolloutRevision as number,
+    ...(templateRef ? { templateRef } : {}),
+    parameterSignature,
+    ...(taskId ? { taskId } : {}),
+    signatures,
+    coverage: {
+      expected: expected as number,
+      bound: bound as number,
+      dataReady: dataReady as number,
+      authorized: authorized as number
+    },
+    ...(primaryBlocker ? { primaryBlocker } : {}),
+    warnings: warnings as FddFleetGuardWarning[],
+    ...(authorization ? { authorization } : {}),
+    checkedAt: value.checkedAt
+  };
+}
+
 function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | null {
   if (!isRecord(value)
     || typeof value.algorithmVersion !== "string"
@@ -2381,6 +2675,15 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
     ? undefined
     : parseFddEquipmentAvailability(value.equipmentAvailability);
   const agentWorkflow = value.agentWorkflow === undefined ? undefined : parseFddCheckAgentWorkflow(value.agentWorkflow);
+  const fleetGuard = value.fleetGuard === undefined ? undefined : parseFddFleetGuardCheckSummary(value.fleetGuard, {
+    checkedAt: value.checkedAt,
+    ...(typeof value.projectTaskId === "string" ? { projectTaskId: value.projectTaskId } : {}),
+    ...(typeof value.expectedEntityCount === "number" ? { expectedEntityCount: value.expectedEntityCount } : {}),
+    ...(value.applicability === "applicable" || value.applicability === "no_equipment" || value.applicability === "unknown"
+      ? { applicability: value.applicability }
+      : {}),
+    ...(equipmentAvailability ? { equipmentAvailability } : {})
+  });
   if (pointCandidates.length !== value.pointCandidates.length) return null;
   if (Array.isArray(value.selectedMappings) && selectedMappings?.length !== value.selectedMappings.length) return null;
   if (Array.isArray(value.ambiguousInputs) && ambiguousInputs.length !== value.ambiguousInputs.length) return null;
@@ -2429,7 +2732,43 @@ function parseFddDeployabilityCheck(value: unknown): FddDeployabilityCheck | nul
     checkedAt: value.checkedAt,
     source: value.source,
     projectDataSignature: value.projectDataSignature,
-    ...(agentWorkflow ? { agentWorkflow } : {})
+    ...(agentWorkflow ? { agentWorkflow } : {}),
+    ...(fleetGuard ? { fleetGuard } : {}),
+    ...(value.fleetGuard !== undefined && !fleetGuard ? { fleetGuardMalformed: true as const } : {})
+  };
+}
+
+function parseFddFleetGuardRolloutSummary(
+  value: unknown
+): NonNullable<FddLibraryResponse["fleetGuardRollout"]> | null {
+  if (!isRecord(value)
+    || (value.mode !== "off" && value.mode !== "canary")
+    || !Number.isSafeInteger(value.revision)
+    || (value.revision as number) < 0
+    || !Array.isArray(value.algorithmKeys)
+    || !Array.isArray(value.templateRefs)
+    || value.algorithmKeys.length > 64) return null;
+  const algorithmKeys = value.algorithmKeys.filter((entry): entry is string => typeof entry === "string"
+    && entry === entry.trim()
+    && entry.length > 0
+    && entry.length <= 200);
+  if (algorithmKeys.length !== value.algorithmKeys.length
+    || new Set(algorithmKeys).size !== algorithmKeys.length
+    || (value.mode === "canary" && (value.revision as number) < 1)
+    || (value.mode === "off" && algorithmKeys.length > 0)
+    || value.templateRefs.length > algorithmKeys.length) return null;
+  const templateRefs = value.templateRefs.map((entry) => {
+    if (!isRecord(entry) || typeof entry.algorithmKey !== "string" || !algorithmKeys.includes(entry.algorithmKey)) return null;
+    const parsed = parseFddFleetGuardTemplateRef(entry);
+    return parsed ? { algorithmKey: entry.algorithmKey, ...parsed } : null;
+  });
+  if (templateRefs.some((entry) => entry === null)
+    || new Set(templateRefs.map((entry) => entry?.algorithmKey)).size !== templateRefs.length) return null;
+  return {
+    mode: value.mode,
+    revision: value.revision as number,
+    algorithmKeys,
+    templateRefs: templateRefs as Array<FddFleetGuardTemplateRef & { algorithmKey: string }>
   };
 }
 
@@ -2483,6 +2822,10 @@ function parseProjectFddTask(value: unknown): ProjectFddTask | null {
     status: value.status,
     ...(deployabilityCheck ? { deployabilityCheck } : {}),
     ...(parameterValues ? { parameterValues } : {}),
+    ...(value.authorizationPolicy === "v4" || value.authorizationPolicy === "fleetguard-v1"
+      ? { authorizationPolicy: value.authorizationPolicy }
+      : {}),
+    ...(typeof value.activeDeploymentReceiptId === "string" ? { activeDeploymentReceiptId: value.activeDeploymentReceiptId } : {}),
     createdAt: value.createdAt,
     updatedAt: value.updatedAt
   };
@@ -2752,10 +3095,15 @@ export async function getFddLibrary(token: string, projectId: string): Promise<F
   const equipmentAvailability = Array.isArray(payload.equipmentAvailability)
     ? payload.equipmentAvailability.map((entry) => parseFddEquipmentAvailability(entry))
     : undefined;
+  const rawFleetGuardRollout = payload.fleetGuardRollout;
+  const fleetGuardRollout = rawFleetGuardRollout === undefined
+    ? undefined
+    : parseFddFleetGuardRolloutSummary(rawFleetGuardRollout);
   if (algorithms.some((entry) => entry === null)
     || checks.some((entry) => entry === null)
     || tasks.some((entry) => entry === null)
-    || (equipmentAvailability?.some((entry) => entry === null) ?? false)) {
+    || (equipmentAvailability?.some((entry) => entry === null) ?? false)
+    || fleetGuardRollout === null) {
     throw malformed("FDD library returned an unexpected entry.");
   }
   return {
@@ -2765,6 +3113,7 @@ export async function getFddLibrary(token: string, projectId: string): Promise<F
     tasks: tasks as ProjectFddTask[],
     ...(equipmentAvailability ? { equipmentAvailability: equipmentAvailability as FddEquipmentAvailability[] } : {}),
     ...(typeof payload.equipmentInventorySignature === "string" ? { equipmentInventorySignature: payload.equipmentInventorySignature } : {}),
+    ...(fleetGuardRollout ? { fleetGuardRollout } : {}),
     ...(typeof payload.checksPending === "boolean" ? { checksPending: payload.checksPending } : {}),
     requestId: payload.requestId
   };
@@ -2786,10 +3135,16 @@ export async function testFddAlgorithm(token: string, projectId: string, algorit
   return { algorithm, check, requestId: payload.requestId };
 }
 
-export async function deployFddAlgorithm(token: string, projectId: string, algorithmId: string): Promise<{ task: ProjectFddTask; deployment?: FddDeploymentSummary; requestId: string }> {
+export async function deployFddAlgorithm(
+  token: string,
+  projectId: string,
+  algorithmId: string,
+  authorization?: FddFleetGuardAuthorization
+): Promise<{ task: ProjectFddTask; deployment?: FddDeploymentSummary; requestId: string }> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-library/${encodeURIComponent(algorithmId)}/deploy`, {
     method: "POST",
-    headers: authHeaders(token)
+    headers: authHeaders(token),
+    ...(authorization ? { body: JSON.stringify({ authorization }) } : {})
   });
   if (!isRecord(payload) || typeof payload.requestId !== "string") {
     throw malformed("FDD algorithm deploy returned an unexpected response.");
@@ -2850,10 +3205,16 @@ export async function testFddTask(token: string, projectId: string, taskId: stri
   return { task, requestId: payload.requestId };
 }
 
-export async function deployFddTask(token: string, projectId: string, taskId: string): Promise<{ task: ProjectFddTask; deployment?: FddDeploymentSummary; requestId: string }> {
+export async function deployFddTask(
+  token: string,
+  projectId: string,
+  taskId: string,
+  authorization?: FddFleetGuardAuthorization
+): Promise<{ task: ProjectFddTask; deployment?: FddDeploymentSummary; requestId: string }> {
   const payload = await requestJson(`/api/projects/${encodeURIComponent(projectId)}/fdd-tasks/${encodeURIComponent(taskId)}/deploy`, {
     method: "POST",
-    headers: authHeaders(token)
+    headers: authHeaders(token),
+    ...(authorization ? { body: JSON.stringify({ authorization }) } : {})
   });
   if (!isRecord(payload) || typeof payload.requestId !== "string") {
     throw malformed("FDD task deploy returned an unexpected response.");

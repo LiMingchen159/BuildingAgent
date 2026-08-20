@@ -383,6 +383,7 @@ describe("BMS API contract", () => {
     await app.inject({ method: "POST", url: `/api/projects/${wkgoProjectId}/select`, headers: bearer() });
     const wkgoLibrary = await app.inject({ method: "GET", url: `/api/projects/${wkgoProjectId}/fdd-library`, headers: bearer() });
     expect(wkgoLibrary.statusCode).toBe(200);
+    expect(wkgoLibrary.json().fleetGuardRollout).toEqual({ mode: "off", revision: 0, algorithmKeys: [], templateRefs: [] });
     expect(wkgoLibrary.json().equipmentAvailability).toEqual([
       expect.objectContaining({ equipmentType: "chiller", status: "available", entityCount: 6 }),
       expect.objectContaining({ equipmentType: "pump", status: "not_available", entityCount: 0 }),

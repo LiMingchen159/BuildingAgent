@@ -43,6 +43,26 @@ export interface FddDeployabilityCheck extends FddDeployabilityDecision {
   fleetGuard?: FddFleetGuardCheckSummary;
 }
 
+/**
+ * Project-task status is only a coarse UI/API projection. When FleetGuard
+ * evidence is present it is authoritative; a contradictory legacy v4 status
+ * must not make the task look ready (or blocked) in the opposite direction.
+ */
+export function fddDeployabilityCheckIsTaskReady(check: {
+  status: FddDeployabilityCheck["status"];
+  fleetGuard?: {
+    state: FddFleetGuardCheckSummary["state"];
+    authorization?: unknown;
+  };
+}): boolean {
+  if (check.fleetGuard) {
+    return check.fleetGuard.state === "ready"
+      && typeof check.fleetGuard.authorization === "object"
+      && check.fleetGuard.authorization !== null;
+  }
+  return check.status === "can_deploy";
+}
+
 export type EvaluateFddDeployabilityInput = Omit<LegacyV4DeployabilityInput, "checkedAt"> & {
   checkedAt?: string;
 };

@@ -128,6 +128,7 @@ import {
   ensureStoreFddLibrary,
   evaluateFddDeployability,
   FDD_DEPLOYABILITY_POLICY_VERSION,
+  fddDeployabilityCheckIsTaskReady,
   fddV4DecisionHasFleetCoverage,
   latestFddCheck,
   normalizeFddCreateInput,
@@ -4667,6 +4668,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   function missingAutomaticFddAlgorithms(projectId: string, equipmentInventorySignature: string): FddAlgorithm[] {
     ensureProjectFddCollections(projectId);
     const checks = store.fddChecksByProject![projectId] ?? [];
+    const rollout = currentFddFleetGuardRollout(store, projectId);
     return (store.fddAlgorithms ?? [])
       // Specification-only imports are checked on demand. Running hundreds of
       // point-catalog queries synchronously on every library open would block
@@ -4675,7 +4677,31 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       // A current no-equipment/unknown/cannot-deploy result is still a
       // completed automatic check. Deployment uses latestUsableFddCheck and
       // therefore remains fail-closed; this only prevents endless reruns.
-      .filter((algorithm) => !latestCurrentFddCheck(projectId, checks, algorithm, equipmentInventorySignature));
+      .filter((algorithm) => {
+        // Automatic library evidence is prospective. A newer task-bound
+        // recheck must not suppress the project-level scan for this algorithm.
+        const current = latestCurrentFddCheck(
+          projectId,
+          checks.filter((check) => !check.projectTaskId),
+          algorithm,
+          equipmentInventorySignature
+        );
+        if (!current) return true;
+        if (!isFddFleetGuardCanarySelected({
+          global: fddFleetGuardGlobalConfig,
+          rollout,
+          algorithmKey: algorithm.algorithmKey
+        })) return false;
+
+        const fleetGuard = current.fleetGuard;
+        if (!fleetGuard || fleetGuard.rolloutRevision !== rollout.revision) return true;
+        const head = currentFddFleetTemplateHead(store, projectId, algorithm.id);
+        if (!head) return Boolean(fleetGuard.templateRef);
+        return !fleetGuard.templateRef
+          || fleetGuard.templateRef.templateId !== head.templateId
+          || fleetGuard.templateRef.version !== head.version
+          || fleetGuard.templateRef.signature !== head.signature;
+      });
   }
 
   async function ensureAutomaticFddLibraryChecks(
@@ -5070,7 +5096,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       sharingScope,
       ...(source === "global_library" ? { globalAlgorithmId: algorithm.id } : {}),
       algorithmSnapshot: { ...algorithm },
-      status: isExecutableFddAlgorithm(algorithm) && (!check || check.status === "can_deploy") ? "ready" : "cannot_deploy",
+      status: isExecutableFddAlgorithm(algorithm) && (!check || fddDeployabilityCheckIsTaskReady(check)) ? "ready" : "cannot_deploy",
       ...(check ? { deployabilityCheck: check } : {}),
       createdAt: now,
       updatedAt: now
@@ -8493,6 +8519,19 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       await ensureAutomaticFddLibraryChecks(request.params.projectId, session.userId, entityContext, equipmentAvailability);
     }
     ensureProjectFddCollections(request.params.projectId);
+    const projectFleetGuardRollout = currentFddFleetGuardRollout(store, request.params.projectId);
+    const effectiveFleetGuardMode = fddFleetGuardGlobalConfig.mode === "canary"
+      && projectFleetGuardRollout.mode === "canary"
+      ? "canary" as const
+      : "off" as const;
+    const effectiveFleetGuardAlgorithmKeys = effectiveFleetGuardMode === "canary"
+      ? projectFleetGuardRollout.algorithmKeys
+      : [];
+    const effectiveFleetGuardTemplateRefs = effectiveFleetGuardAlgorithmKeys.flatMap((algorithmKey) => {
+      const algorithm = (store.fddAlgorithms ?? []).find((entry) => entry.algorithmKey === algorithmKey);
+      const head = algorithm ? currentFddFleetTemplateHead(store, request.params.projectId, algorithm.id) : undefined;
+      return head ? [{ algorithmKey, templateId: head.templateId, version: head.version, signature: head.signature }] : [];
+    });
     return {
       projectId: request.params.projectId,
       algorithms: store.fddAlgorithms ?? [],
@@ -8501,6 +8540,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       checkRuns: bounded(store.fddLibraryCheckRunsByProject![request.params.projectId] ?? [], store.maxListSize),
       equipmentAvailability,
       equipmentInventorySignature: fddEquipmentInventorySignature(entityContext, equipmentAvailability),
+      fleetGuardRollout: {
+        mode: effectiveFleetGuardMode,
+        revision: projectFleetGuardRollout.revision,
+        algorithmKeys: effectiveFleetGuardAlgorithmKeys,
+        templateRefs: effectiveFleetGuardTemplateRefs
+      },
       checksPending,
       requestId: requestIdFor(request)
     };
@@ -8901,7 +8946,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     upsertFddTask(request.params.projectId, task);
     const check = await runFddDeployabilityCheck(request.params.projectId, session.userId, algorithm, "auto", task.id);
     task.deployabilityCheck = check;
-    task.status = isExecutableFddAlgorithm(task.algorithmSnapshot) && check.status === "can_deploy" ? "ready" : "cannot_deploy";
+    task.status = isExecutableFddAlgorithm(task.algorithmSnapshot) && fddDeployabilityCheckIsTaskReady(check) ? "ready" : "cannot_deploy";
     task.updatedAt = new Date().toISOString();
     upsertFddTask(request.params.projectId, task);
     persistSoon();
@@ -8935,7 +8980,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
     const check = await runFddDeployabilityCheck(request.params.projectId, session.userId, task.algorithmSnapshot, "manual", task.id);
     task.deployabilityCheck = check;
-    task.status = isExecutableFddAlgorithm(task.algorithmSnapshot) && check.status === "can_deploy" ? "ready" : "cannot_deploy";
+    task.status = isExecutableFddAlgorithm(task.algorithmSnapshot) && fddDeployabilityCheckIsTaskReady(check) ? "ready" : "cannot_deploy";
     task.updatedAt = new Date().toISOString();
     upsertFddTask(request.params.projectId, task);
     persistSoon();
