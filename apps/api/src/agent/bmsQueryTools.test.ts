@@ -142,7 +142,7 @@ describe("bms query tools", () => {
     });
     vi.stubGlobal("fetch", fetchImpl);
 
-    const registry = createGenericToolRegistry(new AgentMemoryStore("/tmp/ba-test-memory"));
+    const registry = createRegistry();
     const tool = registry.list().find((candidate) => candidate.name === "bms_points_query");
     const result = await tool!.run({ q: "Chiller 1 return water temperature" }, {
       projectId: "project_element",
