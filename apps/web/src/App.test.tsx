@@ -212,6 +212,8 @@ function installBaseFetch(options: {
   management?: Response;
   project?: typeof alphaProject | typeof betaProject;
   chatMessages?: unknown[];
+  selectedConversationMessages?: unknown[];
+  chatStream?: (init?: RequestInit) => Response | Promise<Response>;
   activeStreams?: unknown[];
   artifacts?: unknown[];
   documents?: unknown[];
@@ -251,6 +253,9 @@ function installBaseFetch(options: {
       }, 201);
     }
     if (url === `/api/projects/${project.id}/chat/stream` && init?.method === "POST") {
+      if (options.chatStream) {
+        return options.chatStream(init);
+      }
       const donePayload = {
         message: { id: "msg_000001", projectId: project.id, userId: "user_ada", role: "user", content: "What should we build first?" },
         assistantMessage: { id: "msg_000002", projectId: project.id, userId: "user_ada", role: "assistant", content: "I am checking related tools and data.\n\nFinal answer ready." },
@@ -292,7 +297,7 @@ function installBaseFetch(options: {
       return jsonResponse({ conversation: { id: "conv_new", title: "New conversation", messageCount: 0, createdAt: "2026-05-12T00:00:00.000Z" }, requestId: "req_new_conv" }, 201);
     }
     if (url.startsWith(`/api/projects/${project.id}/conversations/`) && url.endsWith("/select")) {
-      return jsonResponse({ conversation: { id: "conv_test", title: "What should we build first?", messageCount: 2, createdAt: "2026-05-12T00:00:00.000Z" }, messages: [], requestId: "req_select_conv" });
+      return jsonResponse({ conversation: { id: "conv_test", title: "What should we build first?", messageCount: 2, createdAt: "2026-05-12T00:00:00.000Z" }, messages: options.selectedConversationMessages ?? [], requestId: "req_select_conv" });
     }
     if (url.startsWith(`/api/projects/${project.id}/conversations/`) && init?.method === "DELETE") {
       return jsonResponse({ deleted: true, conversationId: url.split("/").slice(-1)[0], removedMessages: 2, requestId: "req_delete_conv" });
@@ -638,6 +643,160 @@ describe("BuildingGPT Web flow", () => {
     expect(within(messageList).getByText(/Drafting the dashboard/)).toBeInTheDocument();
     expect(within(messageList).getByText(/Worked for/)).toBeInTheDocument();
     expect(within(messageList).getByText(/Creating dashboard/)).toBeInTheDocument();
+  });
+
+  it("keeps a restored active stream visible when an earlier turn used the same prompt", async () => {
+    const repeatedPrompt = "Plot the COP trend";
+    const startedAt = Date.now() - 3_000;
+    window.localStorage.setItem("building-agent.session.v1", JSON.stringify({
+      token: "seed-token-ada",
+      user: { id: "user_ada", name: "Ada Lovelace" },
+      projectId: "project_alpha"
+    }));
+    installBaseFetch({
+      chatMessages: [
+        { id: "msg_old_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: repeatedPrompt },
+        { id: "msg_old_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Here is the earlier COP trend." },
+        { id: "msg_current_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: repeatedPrompt }
+      ],
+      activeStreams: [{
+        projectId: "project_alpha",
+        conversationId: "conv_active_repeat",
+        requestId: "req_active_repeat",
+        startedAt,
+        updatedAt: startedAt + 2_000,
+        userMessage: {
+          id: "msg_current_user",
+          projectId: "project_alpha",
+          userId: "user_ada",
+          role: "user",
+          content: repeatedPrompt
+        },
+        assistantMessage: {
+          id: "streaming_req_active_repeat",
+          projectId: "project_alpha",
+          userId: "user_ada",
+          role: "assistant",
+          content: ""
+        },
+        activities: [{
+          id: "act_current_repeat",
+          label: "Reading current COP history",
+          kind: "context",
+          status: "running",
+          requestId: "req_active_repeat",
+          at: startedAt + 1_000
+        }],
+        interimNarration: "",
+        answerPhase: false,
+        workElapsedMs: 0,
+        workSegmentStartedAt: startedAt,
+        workTimelinePaused: false,
+        streamTimelineFinalized: false
+      }]
+    });
+
+    render(<App />);
+
+    const messageList = await screen.findByLabelText(/alpha build messages/i);
+    await waitFor(() => {
+      expect(within(messageList).getAllByText(repeatedPrompt)).toHaveLength(2);
+    });
+    expect(within(messageList).getByText(/Working for/i)).toBeInTheDocument();
+    expect(within(messageList).getByText(/Reading current COP history/i)).toBeInTheDocument();
+    expect(within(messageList).getByText(/Here is the earlier COP trend/i)).toBeInTheDocument();
+  });
+
+  it("keeps a persisted user when a stale active snapshot already has its completed assistant", async () => {
+    const repeatedPrompt = "Plot the COP trend";
+    const startedAt = Date.now() - 3_000;
+    window.localStorage.setItem("building-agent.session.v1", JSON.stringify({
+      token: "seed-token-ada",
+      user: { id: "user_ada", name: "Ada Lovelace" },
+      projectId: "project_alpha"
+    }));
+    installBaseFetch({
+      chatMessages: [
+        { id: "msg_old_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: repeatedPrompt },
+        { id: "msg_old_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Here is the earlier COP trend." },
+        { id: "msg_current_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: repeatedPrompt },
+        { id: "msg_current_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Here is the current COP trend." }
+      ],
+      activeStreams: [{
+        projectId: "project_alpha",
+        conversationId: "conv_active_repeat",
+        requestId: "req_active_repeat",
+        startedAt,
+        updatedAt: startedAt + 2_000,
+        userMessage: {
+          id: "msg_current_user",
+          projectId: "project_alpha",
+          userId: "user_ada",
+          role: "user",
+          content: repeatedPrompt
+        },
+        assistantMessage: {
+          id: "streaming_req_active_repeat",
+          projectId: "project_alpha",
+          userId: "user_ada",
+          role: "assistant",
+          content: "Stale streaming response"
+        },
+        activities: [],
+        interimNarration: "",
+        answerPhase: true,
+        workElapsedMs: 2_000,
+        workSegmentStartedAt: null,
+        workTimelinePaused: true,
+        streamTimelineFinalized: false
+      }]
+    });
+
+    render(<App />);
+
+    const messageList = await screen.findByLabelText(/alpha build messages/i);
+    await waitFor(() => {
+      expect(within(messageList).getAllByText(repeatedPrompt)).toHaveLength(2);
+    });
+    expect(within(messageList).getByText(/Here is the current COP trend/i)).toBeInTheDocument();
+    expect(within(messageList).queryByText(/Stale streaming response/i)).not.toBeInTheDocument();
+    expect(within(messageList).queryByText(/Working for/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps a locally pending stream visible when an earlier turn used the same prompt", async () => {
+    const repeatedPrompt = "Plot the COP trend";
+    installBaseFetch({
+      selectedConversationMessages: [
+        { id: "msg_old_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: repeatedPrompt },
+        { id: "msg_old_assistant", projectId: "project_alpha", userId: "user_ada", role: "assistant", content: "Here is the earlier COP trend." }
+      ],
+      chatStream: (init) => hangingStreamingResponse([
+        "event: activity\ndata: " + JSON.stringify({
+          id: "act_current_repeat",
+          label: "Reading current COP history",
+          kind: "context",
+          status: "running",
+          requestId: "req_current_repeat"
+        })
+      ], init?.signal ?? undefined)
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await loginAndSelectProject(user);
+    await user.click(await screen.findByRole("button", { name: /What should we build first\?/i }));
+    expect(await screen.findByText(/Here is the earlier COP trend/i)).toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox", { name: /^message$/i }), repeatedPrompt);
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+
+    const messageList = screen.getByLabelText(/alpha build messages/i);
+    await waitFor(() => {
+      expect(within(messageList).getAllByText(repeatedPrompt)).toHaveLength(2);
+    });
+    expect(within(messageList).getByText(/Working for/i)).toBeInTheDocument();
+    expect(within(messageList).getByText(/Reading current COP history/i)).toBeInTheDocument();
+    expect(within(messageList).getByText(/Here is the earlier COP trend/i)).toBeInTheDocument();
   });
 
   it("logs in, selects a project, loads chat, management panels, and sends project-scoped messages", async () => {
