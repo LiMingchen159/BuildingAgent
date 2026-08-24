@@ -69,6 +69,10 @@ describe("chartStyle", () => {
     expect(header).toContain("def load_all_series");
     expect(header).toContain("payload.get('history'");
     expect(header).toContain("'valueNum': 'value_num'");
+    expect(header).toContain("format='mixed'");
+    expect(header).toContain("errors='coerce'");
+    expect(header).toContain("dropna(subset=['ts'])");
+    expect(header).toContain("df.index.duplicated(keep='last')");
     expect(header).toContain("def downsample_timeseries");
     expect(header).toContain("def _series_with_gap_breaks");
     expect(header).toContain("NOT a list of entries");
@@ -82,12 +86,21 @@ describe("chartStyle", () => {
     const scriptFile = path.join(dir, "bridge.py");
     const series = Array.from({ length: 8 }, (_, entityIndex) => ({
       instanceId: `metric_${entityIndex + 1}`,
-      history: Array.from({ length: 1_200 }, (_, index) => ({
-        ts: new Date(Date.UTC(2026, 5, 1, 0, index + (index >= 600 ? 3 * 24 * 60 : 0))).toISOString(),
-        valueNum: index === 617 ? 9_999 : entityIndex + index / 1_000,
-        quality: "good",
-        status: "ok"
-      }))
+      history: Array.from({ length: 1_200 }, (_, index) => {
+        const timestamp = new Date(
+          Date.UTC(2026, 5, 1, 0, index + (index >= 600 ? 3 * 24 * 60 : 0))
+        ).toISOString();
+        return {
+          ts: index % 2 === 0 ? timestamp.replace(".000Z", "Z") : timestamp,
+          valueNum: index === 617 ? 9_999 : entityIndex + index / 1_000,
+          quality: "good",
+          status: "ok"
+        };
+      }).flatMap((row, index) => {
+        if (index === 500) return [row, { ...row }];
+        if (index === 700) return [row, { ...row, ts: "not-a-timestamp" }];
+        return [row];
+      })
     }));
     writeFileSync(dataFile, JSON.stringify({ series }), "utf8");
     writeFileSync(manifestFile, JSON.stringify({
@@ -103,6 +116,7 @@ describe("chartStyle", () => {
     writeFileSync(scriptFile, `${executeCodeInjectedHeader()}\n${[
       "loaded = load_all_series()",
       "first = loaded['system_cop:WCC_01']",
+      "duplicate_index_count = int(first.index.duplicated().sum())",
       "sampled = downsample_timeseries(first, max_points=1000)",
       "sparse = pd.Series(np.nan, index=pd.date_range('2026-06-01T00:00:00Z', periods=2000, freq='min'), name='sparse')",
       "sparse.iloc[::20] = np.arange(100)",
@@ -125,7 +139,7 @@ describe("chartStyle", () => {
       "long_tick_hkt = [mdates.num2date(value, tz=HKT).strftime('%Y-%m-%d %H:%M %z') for value in long_ticks]",
       "long_offset_text = long_ax.xaxis.get_offset_text().get_text()",
       "plt.close(long_fig)",
-      "print(json.dumps({'series_count': len(loaded), 'has_value_num': 'value_num' in first.columns, 'sampled_count': len(sampled), 'sampled_sparse_count': len(sampled_sparse), 'sampled_sparse_valid': int(sampled_sparse.notna().sum()), 'plot_count': len(plot_ready), 'gap_markers': int(plot_ready.isna().sum()), 'line_gap_markers': int(np.isnan(line_values).sum()), 'first': float(valid_line_values[0]), 'last': float(valid_line_values[-1]), 'spike': float(np.nanmax(line_values)), 'hkt_label': hkt_label, 'long_tick_count': len(long_ticks), 'long_tick_labels': long_tick_labels, 'long_tick_hkt': long_tick_hkt, 'long_offset_text': long_offset_text}))"
+      "print(json.dumps({'series_count': len(loaded), 'has_value_num': 'value_num' in first.columns, 'frame_count': len(first), 'duplicate_index_count': duplicate_index_count, 'sampled_count': len(sampled), 'sampled_sparse_count': len(sampled_sparse), 'sampled_sparse_valid': int(sampled_sparse.notna().sum()), 'plot_count': len(plot_ready), 'gap_markers': int(plot_ready.isna().sum()), 'line_gap_markers': int(np.isnan(line_values).sum()), 'first': float(valid_line_values[0]), 'last': float(valid_line_values[-1]), 'spike': float(np.nanmax(line_values)), 'hkt_label': hkt_label, 'long_tick_count': len(long_ticks), 'long_tick_labels': long_tick_labels, 'long_tick_hkt': long_tick_hkt, 'long_offset_text': long_offset_text}))"
     ].join("\n")}\n`, "utf8");
 
     const output = execFileSync("python3", [scriptFile], {
@@ -136,6 +150,8 @@ describe("chartStyle", () => {
     expect(result).toMatchObject({
       series_count: 8,
       has_value_num: true,
+      frame_count: 1_200,
+      duplicate_index_count: 0,
       gap_markers: 1,
       line_gap_markers: 1,
       first: 0,

@@ -58,6 +58,8 @@ The following owner-approved exceptions are active only when the current branch 
 
 - Issue #243, branch `m003-s11-bound-tool-results`: request-scoped read-only tool deduplication, bounded and redacted tool audit persistence, request-cache retention, and directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/agent/**`, `apps/api/src/derivedMetrics.test.ts`.
 
+- Issue #247, branch `m003-s11-parse-mixed-history-timestamps`: parse mixed-precision ISO-8601 timestamps in the request-local chart bridge and add directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/agent/chartStyle.ts`, `apps/api/src/agent/chartStyle.test.ts`.
+
 For these exceptions:
 - Work only in separate clean worktrees and preserve unrelated changes.
 - Do not change COP/FDD formulas, persisted metric values, production data, secrets, deployment configuration, reverse proxy, Web/Dashboard behavior, or unrelated M007/M010 code.
