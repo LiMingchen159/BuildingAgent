@@ -26,7 +26,14 @@ import {
   knowledgeBasePrompt,
   repositoryPrompt
 } from "./knowledgeBase.js";
-import type { ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
+import {
+  ProviderError,
+  isRetriableProviderError,
+  type ChatCompletionResult,
+  type ChatToolCall,
+  type ChatToolDefinition,
+  type ProviderChatMessage
+} from "../providers.js";
 import { ContextCompressor } from "./compressor.js";
 import { estimateMessagesTokensRough } from "./contextTokens.js";
 import type { ChatMessage, ChatMessageDownload, ChatMessageImage } from "../seed.js";
@@ -64,6 +71,14 @@ interface WorkingToolCall {
   call: ChatToolCall;
   args: Record<string, unknown>;
   result: Record<string, unknown>;
+}
+
+function isNonRetriableProviderClientError(error: unknown): boolean {
+  return error instanceof ProviderError
+    && error.code === "provider_http_error"
+    && (error.status ?? 0) >= 400
+    && (error.status ?? 0) < 500
+    && !isRetriableProviderError(error);
 }
 
 function parseGeneratedImages(result: Record<string, unknown>): ChatMessageImage[] {
@@ -248,7 +263,14 @@ export class AgentRuntime {
           }
         }
       } catch (streamError) {
-        // Stream failed, fall back to non-streaming. Add cooldown for rate limits.
+        // A permanent provider rejection (notably HTTP 400) must surface as-is.
+        // Falling back to non-streaming would replay the same invalid model request
+        // and can duplicate output that the stream already emitted.
+        if (isNonRetriableProviderClientError(streamError)) {
+          throw streamError;
+        }
+        // Transient stream failures may fall back to non-streaming after the
+        // provider adapter has exhausted its own streaming retries.
         if (typeof streamError === "object" && streamError !== null && "status" in streamError && (streamError as { status?: number }).status === 429) {
           await sleep(5000);
         }
@@ -318,6 +340,9 @@ export class AgentRuntime {
         return completion;
       } catch (error) {
         lastError = error;
+        if (isNonRetriableProviderClientError(error)) {
+          throw error;
+        }
         if (attempt < maxRetries) {
           // 429 rate-limit: wait 10-20s before retry; other errors use standard backoff
           const isRateLimit =
@@ -326,7 +351,9 @@ export class AgentRuntime {
             ? 10000 + Math.floor(Math.random() * 10000)
             : Math.min(1000 * Math.pow(2, attempt), 8000);
           await sleep(delay);
+          continue;
         }
+        throw error;
       }
     }
     throw lastError;

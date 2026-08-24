@@ -129,6 +129,155 @@ describe("chat provider resolution and adapters", () => {
     });
   });
 
+  it("disables thinking for official DeepSeek v4 tool requests and tool continuations", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const provider = createOpenAICompatibleProvider({
+      apiKey: "provider-test-key",
+      baseUrl: "https://api.deepseek.com/v1/",
+      model: "deepseek-v4-pro",
+      fetch: async (_input, init) => {
+        requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return jsonResponse({ choices: [{ message: { content: "Done" } }] });
+      }
+    });
+    const tool = {
+      type: "function" as const,
+      function: {
+        name: "read_history",
+        description: "Read point history",
+        parameters: { type: "object" as const, properties: {} }
+      }
+    };
+
+    await provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_tool",
+      messages: [{ role: "user", content: "Check history" }],
+      tools: [tool]
+    });
+    await provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_continuation",
+      messages: [
+        { role: "user", content: "Check history" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_history",
+            type: "function",
+            function: { name: "read_history", arguments: "{}" }
+          }]
+        },
+        { role: "tool", content: "{\"rows\":[]}", tool_call_id: "call_history" }
+      ],
+      tools: []
+    });
+
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[0]).toMatchObject({ thinking: { type: "disabled" }, tools: [tool] });
+    expect(requestBodies[1]).toMatchObject({ thinking: { type: "disabled" } });
+    expect(requestBodies[1]).not.toHaveProperty("tools");
+  });
+
+  it("disables thinking for the official DeepSeek v4 flash tool model", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const provider = createOpenAICompatibleProvider({
+      apiKey: "provider-test-key",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash",
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse({ choices: [{ message: { content: "Done" } }] });
+      }
+    });
+
+    await provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_flash_tool",
+      messages: [{ role: "user", content: "Check history" }],
+      tools: [{
+        type: "function",
+        function: {
+          name: "read_history",
+          description: "Read point history",
+          parameters: { type: "object", properties: {} }
+        }
+      }]
+    });
+
+    expect(requestBody).toMatchObject({ thinking: { type: "disabled" } });
+  });
+
+  it.each([
+    {
+      name: "an official DeepSeek v4 request without tools",
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-pro",
+      withTools: false
+    },
+    {
+      name: "a non-v4 model on the official DeepSeek API",
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-chat",
+      withTools: true
+    },
+    {
+      name: "an unrecognized DeepSeek v4 model suffix",
+      baseUrl: "https://api.deepseek.com/v1",
+      model: "deepseek-v4-experimental",
+      withTools: true
+    },
+    {
+      name: "a DeepSeek v4 model on another provider",
+      baseUrl: "https://provider.example/v1",
+      model: "deepseek-v4-pro",
+      withTools: true
+    },
+    {
+      name: "a lookalike DeepSeek hostname",
+      baseUrl: "https://api.deepseek.com.example.test/v1",
+      model: "deepseek-v4-pro",
+      withTools: true
+    }
+  ])("does not change $name", async ({ baseUrl, model, withTools }) => {
+    let requestBody: Record<string, unknown> | undefined;
+    const provider = createOpenAICompatibleProvider({
+      apiKey: "provider-test-key",
+      baseUrl,
+      model,
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse({ choices: [{ message: { content: "Done" } }] });
+      }
+    });
+
+    await provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_unchanged",
+      messages: [{ role: "user", content: "Hello" }],
+      ...(withTools
+        ? {
+            tools: [{
+              type: "function" as const,
+              function: {
+                name: "read_history",
+                description: "Read point history",
+                parameters: { type: "object", properties: {} }
+              }
+            }]
+          }
+        : {})
+    });
+
+    expect(requestBody).toBeDefined();
+    expect(requestBody).not.toHaveProperty("thinking");
+  });
+
   it("retries transient provider failures before surfacing an error", async () => {
     vi.useFakeTimers();
     let calls = 0;

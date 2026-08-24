@@ -534,6 +534,22 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     });
   }
 
+  const isOfficialDeepSeekV4 = (() => {
+    try {
+      return new URL(baseUrl).hostname.toLowerCase() === "api.deepseek.com"
+        && (model === "deepseek-v4-pro" || model === "deepseek-v4-flash");
+    } catch {
+      return false;
+    }
+  })();
+
+  function isToolRequestOrContinuation(request: ChatCompletionRequest): boolean {
+    return Boolean(
+      request.tools?.length
+      || request.messages.some((message) => message.role === "tool" || Boolean(message.tool_calls?.length))
+    );
+  }
+
   function buildRequestBody(request: ChatCompletionRequest): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model,
@@ -558,6 +574,12 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     }
     if (request.stream) {
       body.stream = true;
+    }
+    // DeepSeek thinking-mode tool turns require opaque reasoning_content to be
+    // replayed on every continuation. The runtime intentionally does not retain
+    // hidden reasoning, so disable thinking for this narrowly scoped tool path.
+    if (isOfficialDeepSeekV4 && isToolRequestOrContinuation(request)) {
+      body.thinking = { type: "disabled" };
     }
     return body;
   }
