@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ChatToolDefinition } from "../providers.js";
 import { compactToolResult } from "./toolResultCompaction.js";
 import type { AgentTool, AgentToolContext, AgentToolSchema } from "./types.js";
+import { localHistoryToolDecision } from "./localHistoryRequestPolicy.js";
 
 export interface ToolDispatchResult {
   tool: string;
@@ -70,6 +71,23 @@ export class AgentToolRegistry {
     if (!tool) {
       const result: ToolDispatchResult = { tool: name, result: { error: `Unknown tool: ${name}` } };
       this.recordLog({ tool: name, category: "unknown", args, result: result.result, error: `Unknown tool: ${name}`, startedAt, context });
+      return result;
+    }
+
+    const localHistoryDecision = localHistoryToolDecision(name, args, context);
+    if (!localHistoryDecision.allowed) {
+      const error = localHistoryDecision.error;
+      const result: ToolDispatchResult = {
+        tool: name,
+        result: {
+          error,
+          tool: name,
+          message: error === "history_dataset_not_prepared"
+            ? "The local history producer did not return a valid request-local dataset; execute_code was not started."
+            : "This request has local derived history attached. Use execute_code for analysis; repository and arbitrary execution tools are disabled for the rest of this request."
+        }
+      };
+      this.recordLog({ tool: name, category: tool.category, args, result: result.result, error, startedAt, context });
       return result;
     }
 
