@@ -1588,34 +1588,34 @@ function mergeMessagesWithStreamingState(
   if (!streamState) {
     return messages;
   }
-  const optimisticUserContent = streamState.optimisticUser.content.trim();
-  const persistedUserIndex = optimisticUserContent.length > 0
+  const optimisticUserId = streamState.optimisticUser.id;
+  const optimisticUserIsPending = optimisticUserId.startsWith("pending_user_");
+  const persistedUserIndex = !optimisticUserIsPending
     ? messages.findIndex((message) =>
       message.role === "user"
-      && !message.id.startsWith("pending_user_")
-      && message.content.trim() === optimisticUserContent
+      && message.id === optimisticUserId
     )
     : -1;
-  const persistedAssistantAfterUser = persistedUserIndex >= 0
-    ? messages.slice(persistedUserIndex + 1).some((message) =>
-      message.role === "assistant" && !message.id.startsWith("streaming_")
-    )
-    : false;
+  const messageAfterPersistedUser = persistedUserIndex >= 0
+    ? messages[persistedUserIndex + 1]
+    : undefined;
+  const persistedAssistantAfterUser = messageAfterPersistedUser?.role === "assistant"
+    && !messageAfterPersistedUser.id.startsWith("streaming_");
   if (persistedAssistantAfterUser) {
     return messages.filter((message) =>
-      message.id !== streamState.optimisticUser.id
-      && message.id !== streamState.streamingAssistant.id
-      && !message.id.startsWith("pending_user_")
+      !message.id.startsWith("pending_user_")
       && !message.id.startsWith("streaming_")
     );
   }
   const withoutOptimistic = messages.filter(
     (message) =>
-      message.id !== streamState.optimisticUser.id
+      !(optimisticUserIsPending && message.id === optimisticUserId)
       && message.id !== streamState.streamingAssistant.id
-      && !(message.role === "user" && optimisticUserContent.length > 0 && message.content.trim() === optimisticUserContent)
       && !(message.role === "assistant" && message.id.startsWith("streaming_"))
   );
+  if (persistedUserIndex >= 0) {
+    return [...withoutOptimistic, streamState.streamingAssistant];
+  }
   return [...withoutOptimistic, streamState.optimisticUser, streamState.streamingAssistant];
 }
 
