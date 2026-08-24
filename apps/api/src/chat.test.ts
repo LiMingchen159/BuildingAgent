@@ -214,7 +214,7 @@ describe("project-scoped chat contract", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("preserves canonical provider error envelopes and avoids storing unsafe assistant content", async () => {
+  it("preserves the user turn and stores a sanitized assistant failure", async () => {
     const store = createSeedStore();
     const { provider } = fakeProvider({
       async complete() {
@@ -245,7 +245,11 @@ describe("project-scoped chat contract", () => {
     });
     expect(failed.json().error.message).toContain("[redacted]");
     assertNoSecrets(failed.json());
-    expect(store.messagesByProject.project_alpha).toEqual([]);
+    expect(store.messagesByProject.project_alpha).toEqual([
+      expect.objectContaining({ role: "user", content: "Do not store on failure" }),
+      expect.objectContaining({ role: "assistant", content: expect.stringContaining("provider_http_error") })
+    ]);
+    assertNoSecrets(store.messagesByProject.project_alpha);
   }, 20000);
 
   it("uses explicit fallback metadata when configured provider failure fallback is allowed", async () => {
@@ -285,6 +289,37 @@ describe("project-scoped chat contract", () => {
       lifecycle: expect.arrayContaining([expect.objectContaining({ type: "provider_started" })])
     });
     expect(JSON.stringify(response.json()).toLowerCase()).not.toContain("secret");
+  }, 20000);
+
+  it("shares one request deadline signal across non-streaming primary and fallback turns", async () => {
+    const runTurnSpy = vi.spyOn(AgentRuntime.prototype, "runTurn");
+    const provider: ChatProvider = {
+      metadata: { id: "deadline-primary", mode: "real", model: "deadline-model", status: "configured" },
+      async complete() {
+        throw new ProviderError("transport failed", {
+          code: "provider_request_failed",
+          provider: provider.metadata
+        });
+      }
+    };
+    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+
+    try {
+      await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/projects/project_alpha/chat",
+        headers: bearer(adaToken),
+        payload: { message: "hi" }
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(runTurnSpy).toHaveBeenCalledTimes(2);
+      expect(runTurnSpy.mock.calls[0]?.[1]).toBeDefined();
+      expect(runTurnSpy.mock.calls[1]?.[1]).toBe(runTurnSpy.mock.calls[0]?.[1]);
+    } finally {
+      runTurnSpy.mockRestore();
+    }
   }, 20000);
 
   it("runs explicit memory commands through the agent lifecycle", async () => {
@@ -1784,6 +1819,64 @@ describe("chat streaming endpoint", () => {
     expect(cleared.json().streams).toEqual([]);
   });
 
+  it("continues and persists an active turn after the SSE client disconnects", async () => {
+    const store = createSeedStore();
+    const started = deferredPromise<void>();
+    const release = deferredPromise<void>();
+    const provider: ChatProvider = {
+      metadata: { id: "disconnect-test", mode: "real", model: "disconnect-model", status: "configured" },
+      async complete() {
+        return { text: "unused", provider: provider.metadata, fallbackUsed: false };
+      },
+      async *completeStream() {
+        yield { content: "Started locally" };
+        started.resolve();
+        await release.promise;
+        yield { content: " and completed after disconnect" };
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider, persist: false });
+    const controller = new AbortController();
+
+    try {
+      await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+      const address = await app.listen({ port: 0, host: "127.0.0.1" });
+      const response = await fetch(`${address}/api/projects/project_alpha/chat/stream`, {
+        method: "POST",
+        headers: { ...bearer(adaToken), "content-type": "application/json" },
+        body: JSON.stringify({ message: "Finish after I disconnect" }),
+        signal: controller.signal
+      });
+      await started.promise;
+      await response.body?.getReader().read();
+      controller.abort();
+
+      const active = await app.inject({
+        method: "GET",
+        url: "/api/projects/project_alpha/chat/active-streams",
+        headers: bearer(adaToken)
+      });
+      expect(active.json().streams).toHaveLength(1);
+
+      release.resolve();
+      await vi.waitFor(() => {
+        expect(store.messagesByProject.project_alpha).toEqual([
+          expect.objectContaining({ role: "user", content: "Finish after I disconnect" }),
+          expect.objectContaining({ role: "assistant", content: expect.stringContaining("completed after disconnect") })
+        ]);
+      });
+      const cleared = await app.inject({
+        method: "GET",
+        url: "/api/projects/project_alpha/chat/active-streams",
+        headers: bearer(adaToken)
+      });
+      expect(cleared.json().streams).toEqual([]);
+    } finally {
+      release.resolve();
+      await app.close();
+    }
+  }, 20000);
+
   it("emits Retrieved site rules activity when a relevant user rule matches the query", async () => {
     const store = createSeedStore();
     const grounding = createProjectGroundingBindings(store);
@@ -1992,7 +2085,7 @@ describe("chat streaming endpoint", () => {
     }
   });
 
-  it("keeps the real provider response when streaming yields no parseable deltas", async () => {
+  it("does not replay an empty provider stream through a second provider method", async () => {
     let completeCalls = 0;
     const provider: ChatProvider = {
       metadata: { id: "stream-real", mode: "real", model: "stream-model", status: "configured" },
@@ -2017,26 +2110,25 @@ describe("chat streaming endpoint", () => {
       resolveProjectSkillIds: (projectId) => skillBindings.getSkillIds(projectId)
     });
 
-    const events = [];
-    for await (const event of runtime.runTurnStream({
-      projectId: "project_alpha",
-      userId: "user_ada",
-      requestId: "req_stream",
-      conversationId: "conv_stream",
-      canConfigure: false,
-      messages: [{ id: "msg_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Hello empty stream" }],
-      providerMessages: [{ role: "user", content: "Hello empty stream" }],
-      provider,
-      knowledgeBaseDocuments: [],
-      repositoryArtifacts: []
-    })) {
-      events.push(event);
-    }
+    const consume = async () => {
+      for await (const _event of runtime.runTurnStream({
+        projectId: "project_alpha",
+        userId: "user_ada",
+        requestId: "req_stream",
+        conversationId: "conv_stream",
+        canConfigure: false,
+        messages: [{ id: "msg_user", projectId: "project_alpha", userId: "user_ada", role: "user", content: "Hello empty stream" }],
+        providerMessages: [{ role: "user", content: "Hello empty stream" }],
+        provider,
+        knowledgeBaseDocuments: [],
+        repositoryArtifacts: []
+      })) {
+        // Consume until the empty response is surfaced.
+      }
+    };
 
-    expect(completeCalls).toBe(1);
-    expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "turn_completed", message: "Real provider non-streaming response" })
-    ]));
+    await expect(consume()).rejects.toMatchObject({ code: "provider_empty_response" });
+    expect(completeCalls).toBe(0);
   });
 
   it("streams post-tool provider content as narration without narration_retract replay", async () => {
@@ -2229,6 +2321,7 @@ describe("chat streaming endpoint", () => {
   });
 
   it("emits an error event when the provider stream ends without a final response", async () => {
+    const store = createSeedStore();
     const provider: ChatProvider = {
       metadata: { id: "empty-stream", mode: "real", model: "empty-model", status: "configured" },
       async complete() {
@@ -2238,7 +2331,7 @@ describe("chat streaming endpoint", () => {
         return;
       }
     };
-    const app = buildServer({ chatProvider: provider, allowProviderFallback: false });
+    const app = buildServer({ store, chatProvider: provider, allowProviderFallback: false });
 
     await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
     const res = await app.inject({
@@ -2256,12 +2349,206 @@ describe("chat streaming endpoint", () => {
           event: "error",
           data: expect.objectContaining({
             code: "provider_error",
-            message: PROVIDER_UNAVAILABLE_MESSAGE,
+            message: expect.stringContaining("provider_empty_response"),
             requestId: expect.stringMatching(/^req_/)
           })
         })
       ])
     );
+    expect(events.some((event) => event.event === "done")).toBe(false);
+    expect(store.messagesByProject.project_alpha).toEqual([
+      expect.objectContaining({ role: "user", content: "Hello empty stream" }),
+      expect.objectContaining({ role: "assistant", content: expect.stringContaining("provider_empty_response") })
+    ]);
+    const conversationId = store.conversationsByProject.project_alpha?.at(-1)?.id;
+    const active = await app.inject({
+      method: "GET",
+      url: "/api/projects/project_alpha/chat/active-streams",
+      headers: bearer(adaToken)
+    });
+    expect(active.statusCode).toBe(200);
+    expect((active.json().streams as unknown[]).some((stream) =>
+      (stream as { conversationId?: string }).conversationId === conversationId
+    )).toBe(false);
+  }, 20000);
+
+  it("does not replay deterministic fallback after visible provider output", async () => {
+    let streamCalls = 0;
+    const provider: ChatProvider = {
+      metadata: { id: "partial-stream", mode: "real", model: "partial-model", status: "configured" },
+      async complete() {
+        throw new Error("non-streaming should not be used");
+      },
+      async *completeStream() {
+        streamCalls += 1;
+        yield { content: "Visible analysis" };
+        throw new TypeError("socket closed");
+      }
+    };
+    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Hello partial stream" }
+    });
+
+    const events = parseSseEvents(res.body);
+    expect(events.some((event) => event.event === "narration_token")).toBe(true);
+    expect(events.some((event) => event.event === "error")).toBe(true);
+    expect(events.some((event) => event.event === "done")).toBe(false);
+    expect(streamCalls).toBe(1);
+  }, 20000);
+
+  it("allows one deterministic fallback when transport fails before visible output", async () => {
+    let streamCalls = 0;
+    const provider: ChatProvider = {
+      metadata: { id: "failed-stream", mode: "real", model: "failed-model", status: "configured" },
+      async complete() {
+        throw new Error("non-streaming should not be used");
+      },
+      async *completeStream() {
+        streamCalls += 1;
+        throw new TypeError("socket closed");
+      }
+    };
+    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "hi" }
+    });
+
+    const events = parseSseEvents(res.body);
+    const done = events.find((event) => event.event === "done");
+    expect(done?.data).toMatchObject({
+      provider: expect.objectContaining({ id: "deterministic-mock", fallbackUsed: true })
+    });
+    expect(streamCalls).toBe(1);
+  }, 20000);
+
+  it("shares one request deadline signal across streaming primary and fallback turns", async () => {
+    const runTurnStreamSpy = vi.spyOn(AgentRuntime.prototype, "runTurnStream");
+    const provider: ChatProvider = {
+      metadata: { id: "deadline-stream", mode: "real", model: "deadline-model", status: "configured" },
+      async complete() {
+        throw new Error("non-streaming should not be used");
+      },
+      async *completeStream() {
+        throw new TypeError("socket closed");
+      }
+    };
+    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+
+    try {
+      await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/projects/project_alpha/chat/stream",
+        headers: bearer(adaToken),
+        payload: { message: "hi" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(runTurnStreamSpy).toHaveBeenCalledTimes(2);
+      expect(runTurnStreamSpy.mock.calls[0]?.[1]).toBeDefined();
+      expect(runTurnStreamSpy.mock.calls[1]?.[1]).toBe(runTurnStreamSpy.mock.calls[0]?.[1]);
+    } finally {
+      runTurnStreamSpy.mockRestore();
+    }
+  }, 20000);
+
+  it("does not replay a completed tool side effect when the continuation fails", async () => {
+    const store = createSeedStore();
+    let streamCalls = 0;
+    const provider: ChatProvider = {
+      metadata: { id: "tool-stream", mode: "real", model: "tool-model", status: "configured" },
+      async complete() {
+        throw new Error("non-streaming should not be used");
+      },
+      async *completeStream() {
+        streamCalls += 1;
+        if (streamCalls === 1) {
+          yield {
+            toolCalls: [{
+              id: "call_dashboard_once",
+              type: "function",
+              function: {
+                name: "dashboard_create",
+                arguments: JSON.stringify({
+                  title: "One dashboard only",
+                  description: "Created before provider continuation failure",
+                  widgets: [{
+                    kind: "live_value_grid",
+                    title: "One value",
+                    points: ["CH-01_Supply_Water_Temp"]
+                  }]
+                })
+              }
+            }]
+          };
+          return;
+        }
+        throw new TypeError("continuation socket closed");
+      }
+    };
+    const app = buildServer({ store, chatProvider: provider, allowProviderFallback: true });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_element/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Create one dashboard" }
+    });
+
+    const events = parseSseEvents(res.body);
+    expect(events.some((event) => event.event === "activity")).toBe(true);
+    expect(events.some((event) => event.event === "error")).toBe(true);
+    expect(events.some((event) => event.event === "done")).toBe(false);
+    expect(store.dashboardsByProject.project_element).toHaveLength(1);
+    expect(streamCalls).toBe(2);
+  }, 20000);
+
+  it.each([
+    ["provider_payload_too_large", 413],
+    ["provider_timeout", 504],
+    ["agent_turn_timeout", 504],
+    ["provider_http_error", 400]
+  ])("surfaces %s without deterministic fallback", async (code, status) => {
+    const provider: ChatProvider = {
+      metadata: { id: "bounded-stream", mode: "real", model: "bounded-model", status: "configured" },
+      async complete() {
+        throw new Error("non-streaming should not be used");
+      },
+      async *completeStream() {
+        throw new ProviderError("bounded provider failure", {
+          code,
+          status,
+          provider: provider.metadata
+        });
+      }
+    };
+    const app = buildServer({ chatProvider: provider, allowProviderFallback: true });
+
+    await app.inject({ method: "POST", url: "/api/projects/project_alpha/select", headers: bearer(adaToken) });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/project_alpha/chat/stream",
+      headers: bearer(adaToken),
+      payload: { message: "Bound this request" }
+    });
+
+    const events = parseSseEvents(res.body);
+    expect(events.find((event) => event.event === "error")?.data).toMatchObject({
+      code: "provider_error",
+      message: expect.stringContaining(code)
+    });
     expect(events.some((event) => event.event === "done")).toBe(false);
   }, 20000);
 

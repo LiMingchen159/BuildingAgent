@@ -130,8 +130,10 @@ export interface ResolveChatProviderOptions {
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const MOCK_MODEL = "deterministic-local-mock";
-/** Five total attempts (initial + 4 retries) before surfacing a provider error. */
-const PROVIDER_FETCH_MAX_RETRIES = 4;
+/** One retry, owned by the provider adapter, after the initial attempt. */
+const PROVIDER_FETCH_MAX_RETRIES = 1;
+const PROVIDER_REQUEST_TIMEOUT_MS = 60_000;
+const PROVIDER_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 
 export const PROVIDER_UNAVAILABLE_MESSAGE =
   "I am unable to connect to a real LLM provider right now. Configure the LLM provider credentials and base URL to enable BuildingGPT streaming.";
@@ -177,6 +179,13 @@ export function formatProviderFailureMessage(error: unknown): string {
     if (error.code === "provider_not_configured") {
       return PROVIDER_UNAVAILABLE_MESSAGE;
     }
+    if (error.code === "provider_payload_too_large") {
+      return "BuildingGPT stopped this request locally before contacting the LLM provider because the serialized request exceeded the 4 MiB safety limit. Reduce the requested time range or data volume, then retry. Error code: provider_payload_too_large.";
+    }
+    if (error.code === "provider_timeout" || error.code === "agent_turn_timeout") {
+      const scope = error.code === "provider_timeout" ? "LLM provider request" : "agent turn";
+      return `BuildingGPT could not finish this turn because the ${scope} timed out. Reduce the request scope or try again. Error code: ${error.code}.`;
+    }
 
     const model = error.provider?.model;
     const lines = ["BuildingGPT could not finish this turn — the LLM provider returned an error."];
@@ -203,8 +212,21 @@ export function formatProviderFailureMessage(error: unknown): string {
   return PROVIDER_UNAVAILABLE_MESSAGE;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function isRetriableProviderError(error: unknown): boolean {
@@ -226,6 +248,89 @@ function providerRetryDelayMs(error: unknown, attempt: number): number {
     return 5000 + Math.floor(Math.random() * 5000);
   }
   return Math.min(1000 * 2 ** attempt, 8000);
+}
+
+interface ProviderDeadline {
+  signal: AbortSignal;
+  didTimeout: () => boolean;
+  dispose: () => void;
+}
+
+function createProviderDeadline(parentSignal?: AbortSignal): ProviderDeadline {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onParentAbort = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+  } else {
+    parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+  }
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException("Provider request deadline exceeded.", "TimeoutError"));
+  }, PROVIDER_REQUEST_TIMEOUT_MS);
+  return {
+    signal: controller.signal,
+    didTimeout: () => timedOut,
+    dispose: () => {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", onParentAbort);
+    }
+  };
+}
+
+function raceWithProviderSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
+function normalizeProviderRequestError(
+  cause: unknown,
+  metadata: ProviderMetadata,
+  deadline: ProviderDeadline,
+  parentSignal?: AbortSignal,
+  streaming = false
+): ProviderError {
+  if (cause instanceof ProviderError) {
+    return cause;
+  }
+  if (deadline.didTimeout()) {
+    return new ProviderError("Chat provider request timed out.", {
+      code: "provider_timeout",
+      status: 504,
+      provider: metadata,
+      responseDetail: `request exceeded ${PROVIDER_REQUEST_TIMEOUT_MS / 1000}s deadline`
+    });
+  }
+  if (parentSignal?.aborted) {
+    return new ProviderError("Chat provider request was cancelled.", {
+      code: "provider_cancelled",
+      provider: metadata
+    });
+  }
+  return new ProviderError(
+    streaming ? "Chat provider streaming request failed." : "Chat provider request failed.",
+    {
+      code: "provider_request_failed",
+      provider: metadata,
+      cause
+    }
+  );
 }
 
 function nonEmpty(value: string | undefined): string | null {
@@ -654,155 +759,177 @@ export function createOpenAICompatibleProvider(options: OpenAICompatibleProvider
     return deltas;
   }
 
-  async function postChatCompletions(request: ChatCompletionRequest): Promise<Response> {
-    let lastError: unknown = null;
+  function serializeRequestBody(request: ChatCompletionRequest): string {
+    const serialized = JSON.stringify(buildRequestBody(request));
+    const payloadBytes = new TextEncoder().encode(serialized).byteLength;
+    if (payloadBytes > PROVIDER_REQUEST_MAX_BYTES) {
+      throw new ProviderError("Chat provider request payload was too large.", {
+        code: "provider_payload_too_large",
+        status: 413,
+        provider: metadata,
+        responseDetail: `serialized request exceeded ${PROVIDER_REQUEST_MAX_BYTES} byte limit`
+      });
+    }
+    return serialized;
+  }
+
+  async function postChatCompletions(request: ChatCompletionRequest, signal: AbortSignal): Promise<Response> {
     const init: RequestInit = {
       method: "POST",
       headers: {
         authorization: `Bearer ${options.apiKey}`,
         "content-type": "application/json"
       },
-      body: JSON.stringify(buildRequestBody(request)),
-      ...(request.signal ? { signal: request.signal } : {})
+      body: serializeRequestBody(request),
+      signal
     };
 
-    for (let attempt = 0; attempt <= PROVIDER_FETCH_MAX_RETRIES; attempt++) {
-      try {
-        const response = await fetchImpl(`${baseUrl}/chat/completions`, init);
-        if (!response.ok) {
-          const responseDetail = await readProviderErrorDetail(response);
-          throw new ProviderError("Chat provider returned an unsuccessful status.", {
-            code: "provider_http_error",
-            status: response.status,
-            provider: { ...metadata, status: String(response.status) },
-            ...(responseDetail ? { responseDetail } : {})
-          });
-        }
-        return response;
-      } catch (cause) {
-        lastError = cause instanceof ProviderError
-          ? cause
-          : new ProviderError("Chat provider request failed.", {
-              code: "provider_request_failed",
-              provider: metadata,
-              cause
-            });
-        if (attempt < PROVIDER_FETCH_MAX_RETRIES && isRetriableProviderError(lastError)) {
-          await sleep(providerRetryDelayMs(lastError, attempt));
-          continue;
-        }
-        throw lastError;
-      }
+    const response = await raceWithProviderSignal(fetchImpl(`${baseUrl}/chat/completions`, init), signal);
+    if (!response.ok) {
+      const responseDetail = await raceWithProviderSignal(readProviderErrorDetail(response), signal);
+      throw new ProviderError("Chat provider returned an unsuccessful status.", {
+        code: "provider_http_error",
+        status: response.status,
+        provider: { ...metadata, status: String(response.status) },
+        ...(responseDetail ? { responseDetail } : {})
+      });
     }
-
-    throw lastError;
+    return response;
   }
 
   return {
     metadata,
     async complete(request) {
-      const response = await postChatCompletions(request);
-
-      let body: unknown;
+      const deadline = createProviderDeadline(request.signal);
       try {
-        body = await response.json();
-      } catch (cause) {
-        throw new ProviderError("Chat provider returned malformed JSON.", {
-          code: "provider_malformed_response",
-          provider: metadata,
-          cause
-        });
-      }
-
-      const bodyRecord = body as Record<string, unknown>;
-      const choice = (bodyRecord.choices as Array<Record<string, unknown>> | undefined)?.[0];
-      const message = choice?.message as Record<string, unknown> | undefined;
-      const rawContent = typeof message?.content === "string" ? message.content : null;
-      const toolCalls = parseToolCalls(bodyRecord);
-
-      // Validate text content when present (only when no tool calls, to allow tool-only responses)
-      let text: string;
-      if (rawContent !== null && rawContent !== undefined) {
-        text = normalizeProviderText(rawContent, metadata);
-      } else if (toolCalls) {
-        text = "Calling tools...";
-      } else {
-        throw new ProviderError("Provider response did not include assistant text or tool calls.", {
-          code: "provider_malformed_response",
-          provider: metadata
-        });
-      }
-
-      const result: ChatCompletionResult = {
-        text,
-        provider: metadata,
-        fallbackUsed: false
-      };
-      if (toolCalls) result.toolCalls = toolCalls;
-      return result;
-    },
-
-    async *completeStream(request) {
-      let lastError: unknown = null;
-      for (let attempt = 0; attempt <= PROVIDER_FETCH_MAX_RETRIES; attempt++) {
-        let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-        try {
-          const response = await postChatCompletions({ ...request, stream: true });
-          reader = response.body?.getReader() ?? null;
-          if (!reader) {
-            throw new ProviderError("Chat provider streaming response had no body.", {
-              code: "provider_malformed_response",
-              provider: metadata
-            });
-          }
-
-          const decoder = new TextDecoder();
-          let buffer = "";
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const blocks = buffer.split(/\r?\n\r?\n/u);
-            buffer = blocks.pop() ?? "";
-
-            for (const block of blocks) {
-              if (block.includes("[DONE]")) {
-                return;
+        let lastError: ProviderError | null = null;
+        for (let attempt = 0; attempt <= PROVIDER_FETCH_MAX_RETRIES; attempt++) {
+          try {
+            const response = await postChatCompletions(request, deadline.signal);
+            let body: unknown;
+            try {
+              body = await raceWithProviderSignal(response.json(), deadline.signal);
+            } catch (cause) {
+              if (deadline.signal.aborted) {
+                throw cause;
               }
-              for (const delta of parseStreamingBlock(block)) {
-                yield delta;
-              }
-            }
-          }
-
-          if (buffer.includes("[DONE]")) {
-            return;
-          }
-          for (const delta of parseStreamingBlock(buffer)) {
-            yield delta;
-          }
-          return;
-        } catch (cause) {
-          lastError = cause instanceof ProviderError
-            ? cause
-            : new ProviderError("Chat provider streaming request failed.", {
-                code: "provider_request_failed",
+              throw new ProviderError("Chat provider returned malformed JSON.", {
+                code: "provider_malformed_response",
                 provider: metadata,
                 cause
               });
-          if (attempt < PROVIDER_FETCH_MAX_RETRIES && isRetriableProviderError(lastError)) {
-            await sleep(providerRetryDelayMs(lastError, attempt));
-            continue;
-          }
-          throw lastError;
-        } finally {
-          reader?.releaseLock();
-        }
-      }
+            }
 
-      throw lastError;
+            const bodyRecord = body as Record<string, unknown>;
+            const choice = (bodyRecord.choices as Array<Record<string, unknown>> | undefined)?.[0];
+            const message = choice?.message as Record<string, unknown> | undefined;
+            const rawContent = typeof message?.content === "string" ? message.content : null;
+            const toolCalls = parseToolCalls(bodyRecord);
+            let text: string;
+            if (rawContent !== null && rawContent !== undefined) {
+              text = normalizeProviderText(rawContent, metadata);
+            } else if (toolCalls) {
+              text = "Calling tools...";
+            } else {
+              throw new ProviderError("Provider response did not include assistant text or tool calls.", {
+                code: "provider_malformed_response",
+                provider: metadata
+              });
+            }
+
+            const result: ChatCompletionResult = { text, provider: metadata, fallbackUsed: false };
+            if (toolCalls) result.toolCalls = toolCalls;
+            return result;
+          } catch (cause) {
+            lastError = normalizeProviderRequestError(cause, metadata, deadline, request.signal);
+            if (attempt < PROVIDER_FETCH_MAX_RETRIES && isRetriableProviderError(lastError)) {
+              try {
+                await sleep(providerRetryDelayMs(lastError, attempt), deadline.signal);
+              } catch (delayCause) {
+                throw normalizeProviderRequestError(delayCause, metadata, deadline, request.signal);
+              }
+              continue;
+            }
+            throw lastError;
+          }
+        }
+        throw lastError;
+      } finally {
+        deadline.dispose();
+      }
+    },
+
+    async *completeStream(request) {
+      const deadline = createProviderDeadline(request.signal);
+      let lastError: ProviderError | null = null;
+      let emittedDelta = false;
+      try {
+        for (let attempt = 0; attempt <= PROVIDER_FETCH_MAX_RETRIES; attempt++) {
+          let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+          try {
+            const response = await postChatCompletions({ ...request, stream: true }, deadline.signal);
+            reader = response.body?.getReader() ?? null;
+            if (!reader) {
+              throw new ProviderError("Chat provider streaming response had no body.", {
+                code: "provider_malformed_response",
+                provider: metadata
+              });
+            }
+
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+              const { done, value } = await raceWithProviderSignal(reader.read(), deadline.signal);
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const blocks = buffer.split(/\r?\n\r?\n/u);
+              buffer = blocks.pop() ?? "";
+
+              for (const block of blocks) {
+                if (block.includes("[DONE]")) {
+                  return;
+                }
+                for (const delta of parseStreamingBlock(block)) {
+                  emittedDelta = true;
+                  yield delta;
+                }
+              }
+            }
+
+            if (buffer.includes("[DONE]")) {
+              return;
+            }
+            for (const delta of parseStreamingBlock(buffer)) {
+              emittedDelta = true;
+              yield delta;
+            }
+            return;
+          } catch (cause) {
+            lastError = normalizeProviderRequestError(cause, metadata, deadline, request.signal, true);
+            if (!emittedDelta && attempt < PROVIDER_FETCH_MAX_RETRIES && isRetriableProviderError(lastError)) {
+              try {
+                await sleep(providerRetryDelayMs(lastError, attempt), deadline.signal);
+              } catch (delayCause) {
+                throw normalizeProviderRequestError(delayCause, metadata, deadline, request.signal, true);
+              }
+              continue;
+            }
+            throw lastError;
+          } finally {
+            try {
+              reader?.releaseLock();
+            } catch {
+              // A provider that ignores AbortSignal may leave reader.read()
+              // pending. The logical request has still settled at the deadline.
+            }
+          }
+        }
+        throw lastError;
+      } finally {
+        deadline.dispose();
+      }
     }
   };
 }

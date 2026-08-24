@@ -37,6 +37,7 @@ import {
   ProviderError,
   createDeterministicMockProvider,
   formatProviderFailureMessage,
+  isRetriableProviderError,
   redactedProviderError,
   resolveChatProvider,
   shouldAllowProviderFallback,
@@ -1912,6 +1913,51 @@ function providerErrorCode(error: unknown): string {
   return "provider_unknown_error";
 }
 
+function canUseProviderFallback(error: unknown): boolean {
+  if (error instanceof ProviderError) {
+    return error.code === "provider_not_configured" || isRetriableProviderError(error);
+  }
+  // Fetch-compatible transports surface connection failures as TypeError. Do
+  // not turn arbitrary runtime/programming errors into a second agent turn.
+  return error instanceof TypeError;
+}
+
+function createAgentRequestDeadline(): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new ProviderError("Agent request deadline exceeded.", {
+      code: "agent_turn_timeout",
+      status: 504,
+      responseDetail: "request exceeded 180s deadline"
+    }));
+  }, 180_000);
+  timeout.unref?.();
+  return {
+    signal: controller.signal,
+    dispose: () => clearTimeout(timeout)
+  };
+}
+
+function raceWithAgentRequestSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
 function parseBooleanEnv(value: string | undefined): boolean {
   return value === "true" || value === "1" || value === "yes";
 }
@@ -2623,7 +2669,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const payload = JSON.stringify(data);
     for (const ws of sockets) {
       if (ws.readyState === WSWebSocket.OPEN) {
-        ws.send(payload);
+        try {
+          ws.send(payload);
+        } catch {
+          sockets.delete(ws);
+        }
       }
     }
   }
@@ -8439,52 +8489,75 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
     const dashboardIdsBeforeTurn = new Set((store.dashboardsByProject[projectId] ?? []).map((dashboard) => dashboard.id));
     let agentTurn;
-    const agentInputs = await buildAgentTurnInputs({
-      projectId,
-      conversation,
-      projectMessages: messages,
-      store
-    });
+    let agentInputs: Awaited<ReturnType<typeof buildAgentTurnInputs>>;
+    const requestDeadline = createAgentRequestDeadline();
     try {
-      agentTurn = await agentRuntime.runTurn({
+      agentInputs = await raceWithAgentRequestSignal(buildAgentTurnInputs({
         projectId,
-        userId: session.userId,
-        requestId: requestIdFor(request),
-        conversationId,
-        canConfigure: hasConfigurePermission(store, session.userId, projectId),
-        messages: agentInputs.conversationMessages,
-        providerMessages: agentInputs.providerMessages,
-        provider,
-        knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
-        repositoryArtifacts: agentInputs.repositoryArtifacts
-      });
-    } catch (error) {
-      if (!allowProviderFallback) {
-        messages.pop();
-        conversation.messageIds.pop();
-        return sendError(request, reply, 502, "provider_error", formatProviderFailureMessage(error));
-      }
+        conversation,
+        projectMessages: messages,
+        store
+      }), requestDeadline.signal);
+      try {
+        agentTurn = await agentRuntime.runTurn({
+          projectId,
+          userId: session.userId,
+          requestId: requestIdFor(request),
+          conversationId,
+          canConfigure: hasConfigurePermission(store, session.userId, projectId),
+          messages: agentInputs.conversationMessages,
+          providerMessages: agentInputs.providerMessages,
+          provider,
+          knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
+          repositoryArtifacts: agentInputs.repositoryArtifacts
+        }, requestDeadline.signal);
+      } catch (error) {
+        if (!allowProviderFallback || !canUseProviderFallback(error)) {
+          throw error;
+        }
 
-      request.log.warn(
-        { requestId: requestIdFor(request), providerError: redactedProviderError(error) },
-        "Chat provider failed; using deterministic fallback"
-      );
-      const fallbackProvider = createDeterministicMockProvider(
-        providerErrorCode(error),
-        error
-      );
-      agentTurn = await agentRuntime.runTurn({
+        request.log.warn(
+          { requestId: requestIdFor(request), providerError: redactedProviderError(error) },
+          "Chat provider failed; using deterministic fallback"
+        );
+        const fallbackProvider = createDeterministicMockProvider(
+          providerErrorCode(error),
+          error
+        );
+        agentTurn = await agentRuntime.runTurn({
+          projectId,
+          userId: session.userId,
+          requestId: requestIdFor(request),
+          conversationId,
+          canConfigure: hasConfigurePermission(store, session.userId, projectId),
+          messages: agentInputs.conversationMessages,
+          providerMessages: agentInputs.providerMessages,
+          provider: fallbackProvider,
+          knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
+          repositoryArtifacts: agentInputs.repositoryArtifacts
+        }, requestDeadline.signal);
+      }
+    } catch (error) {
+      const failureContent = formatProviderFailureMessage(error);
+      const failureMessage: ChatMessage = {
+        id: nextMessageId(),
         projectId,
         userId: session.userId,
-        requestId: requestIdFor(request),
-        conversationId,
-        canConfigure: hasConfigurePermission(store, session.userId, projectId),
-        messages: agentInputs.conversationMessages,
-        providerMessages: agentInputs.providerMessages,
-        provider: fallbackProvider,
-        knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
-        repositoryArtifacts: agentInputs.repositoryArtifacts
+        role: "assistant",
+        content: failureContent
+      };
+      messages.push(failureMessage);
+      conversation.messageIds.push(failureMessage.id);
+      trimProjectMessages(store, projectId, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+      sessionIndex.upsertMessage(failureMessage, conversationId, {
+        title: conversation.title,
+        messageCount: conversation.messageIds.length
       });
+      persistNow();
+      return sendError(request, reply, 502, "provider_error", failureContent);
+    } finally {
+      requestDeadline.dispose();
     }
 
     const assistantText = appendCreatedDashboardLinks(
@@ -8631,8 +8704,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
 
     let activeStreamConversationId: string | null = null;
+    let streamClientDisconnected = false;
+    const noteStreamClientClosed = (): void => {
+      streamClientDisconnected = true;
+    };
 
     const sseWrite = (event: string, data: unknown): void => {
+      if (activeStreamConversationId) {
+        applyStreamEventToActiveChatStream(projectId, activeStreamConversationId, reqId, event, data);
+      }
       if (
         event === "narration_token"
         || event === "final_answer_start"
@@ -8644,11 +8724,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           : undefined;
         request.log.info({ requestId: reqId, sseEvent: event, contentPreview }, "[SSE] event");
       }
-      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      const raw = reply.raw as NodeJS.WritableStream & { flush?: () => void };
-      raw.flush?.();
-      if (activeStreamConversationId) {
-        applyStreamEventToActiveChatStream(projectId, activeStreamConversationId, reqId, event, data);
+      const raw = reply.raw as NodeJS.WritableStream & {
+        closed?: boolean;
+        destroyed?: boolean;
+        writableEnded?: boolean;
+        flush?: () => void;
+      };
+      if (streamClientDisconnected || raw.destroyed || raw.writableEnded || raw.closed) {
+        return;
+      }
+      try {
+        raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        raw.flush?.();
+      } catch (writeError) {
+        streamClientDisconnected = true;
+        request.log.debug({ requestId: reqId, writeError: redactedProviderError(writeError) }, "Skipping closed SSE socket");
       }
     };
 
@@ -8791,7 +8881,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       workTimelinePaused: false,
       streamTimelineFinalized: false
     });
-    broadcastActiveChatStream(activeChatStreams.get(activeChatStreamKey(projectId, conversationId))!);
+    try {
+      broadcastActiveChatStream(activeChatStreams.get(activeChatStreamKey(projectId, conversationId))!);
+    } catch (broadcastError) {
+      request.log.warn({ requestId: reqId, broadcastError: redactedProviderError(broadcastError) }, "Active chat stream broadcast failed");
+    }
+    reply.raw.on("close", noteStreamClientClosed);
+    const requestDeadline = createAgentRequestDeadline();
     const pauseWorkTimeline = (): void => {
       const now = Date.now();
       if (workSegmentStartedAt != null) {
@@ -8837,14 +8933,42 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       }
       capturedActivities.push(captured);
     };
+    let terminalAssistantStored = false;
+    const storeTerminalFailure = (failureContent: string): void => {
+      if (terminalAssistantStored) return;
+      terminalAssistantStored = true;
+      const failureMessage: ChatMessage = {
+        id: nextMessageId(),
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: failureContent,
+        ...(capturedActivities.length > 0 ? { activities: capturedActivities } : {}),
+        workDuration: (() => {
+          pauseWorkTimeline();
+          return workElapsedMs;
+        })()
+      };
+      messages.push(failureMessage);
+      conversation.messageIds.push(failureMessage.id);
+      trimProjectMessages(store, projectId, store.maxChatMessages);
+      store.messagesByProject[projectId] = messages;
+      sessionIndex.upsertMessage(failureMessage, conversationId, {
+        title: conversation.title,
+        messageCount: conversation.messageIds.length
+      });
+      persistNow();
+    };
 
-    const agentInputs = await buildAgentTurnInputs({
+    try {
+    const agentInputs = await raceWithAgentRequestSignal(buildAgentTurnInputs({
       projectId,
       conversation,
       projectMessages: messages,
       store
-    });
+    }), requestDeadline.signal);
 
+    let primaryVisibleOutputEmitted = false;
     try {
       const seenActivities = new Map<string, number>();
       let activitySequence = 0;
@@ -8892,6 +9016,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const emitActivity = (payload: Record<string, unknown>): void => {
         activitySequence += 1;
         const enriched = { requestId: reqId, at: Date.now(), id: `act_${reqId}_${activitySequence}`, ...payload };
+        primaryVisibleOutputEmitted = true;
         sseWrite("activity", enriched);
         const captured = captureActivity(enriched);
         if (!captured) return;
@@ -8923,7 +9048,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         provider,
         knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
         repositoryArtifacts: agentInputs.repositoryArtifacts
-      });
+      }, requestDeadline.signal);
       let primaryStep = await primaryStream.next();
       while (!primaryStep.done) {
         const event = primaryStep.value;
@@ -8931,14 +9056,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           if (answerPhaseStarted) break;
           pendingWork += event.message;
           pauseWorkTimeline();
+          primaryVisibleOutputEmitted = true;
           sseWrite("narration_token", { content: event.message });
         } else if (event.type === "answer_start") {
           answerPhaseStarted = true;
           pendingWork = "";
           pauseWorkTimeline();
+          primaryVisibleOutputEmitted = true;
           sseWrite("final_answer_start", { requestId: reqId });
         } else if (event.type === "answer_token") {
           pauseWorkTimeline();
+          primaryVisibleOutputEmitted = true;
           sseWrite("answer_token", { content: event.message });
         } else if (event.type === "answer_end") {
           sseWrite("final_answer_end", { requestId: reqId });
@@ -8983,7 +9111,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
       finalProviderDiagnostics = providerDiagnostics(provider.metadata, false);
     } catch (error) {
-      if (allowProviderFallback) {
+      if (allowProviderFallback && !primaryVisibleOutputEmitted && canUseProviderFallback(error)) {
         request.log.warn(
           { requestId: reqId, providerError: redactedProviderError(error) },
           "Chat provider streaming failed; using deterministic fallback"
@@ -9068,7 +9196,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
             provider: fallbackProvider,
             knowledgeBaseDocuments: agentInputs.knowledgeBaseDocuments,
             repositoryArtifacts: agentInputs.repositoryArtifacts
-          });
+          }, requestDeadline.signal);
           let fallbackStep = await fallbackStream.next();
           while (!fallbackStep.done) {
             const event = fallbackStep.value;
@@ -9158,10 +9286,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     }
 
     if (streamError && !finalText) {
-      messages.pop();
-      conversation.messageIds.pop();
-      finishActiveChatStream(projectId, conversationId, reqId);
-      reply.raw.end();
+      storeTerminalFailure(streamError);
       return;
     }
 
@@ -9212,9 +9337,6 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       requestId: reqId
     });
 
-    reply.raw.end();
-    finishActiveChatStream(projectId, conversationId, reqId);
-
     if (isFirstConversationExchange(conversation, messages)) {
       void refineConversationTitleWithBuildingGptContext({
         conversation,
@@ -9230,6 +9352,32 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           });
         }
       });
+    }
+    } catch (error) {
+      const failureContent = formatProviderFailureMessage(error);
+      sseWrite("error", {
+        code: "provider_error",
+        message: failureContent,
+        requestId: reqId
+      });
+      storeTerminalFailure(failureContent);
+    } finally {
+      requestDeadline.dispose();
+      reply.raw.off("close", noteStreamClientClosed);
+      finishActiveChatStream(projectId, conversationId, reqId);
+      const raw = reply.raw as NodeJS.WritableStream & {
+        closed?: boolean;
+        destroyed?: boolean;
+        writableEnded?: boolean;
+        end: () => void;
+      };
+      if (!streamClientDisconnected && !raw.destroyed && !raw.writableEnded && !raw.closed) {
+        try {
+          raw.end();
+        } catch {
+          // The durable conversation and active-stream lifecycle are already finalized.
+        }
+      }
     }
   });
 
