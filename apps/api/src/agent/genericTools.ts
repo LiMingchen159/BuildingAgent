@@ -90,6 +90,13 @@ function textArg(args: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function frozenIsoTimestampArg(args: Record<string, unknown>, key: string): string {
+  const value = textArg(args, key);
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
+}
+
 function numArg(args: Record<string, unknown>, key: string, fallback: number): number {
   const value = args[key];
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
@@ -2828,10 +2835,12 @@ export function createGenericToolRegistry(
         const mode = textArg(args, "mode") || "latest";
         const includeHistory = mode === "history" || mode === "both";
         const includeLatest = mode !== "history";
+        const historyFrom = includeHistory ? frozenIsoTimestampArg(args, "from") : "";
+        const historyTo = includeHistory ? frozenIsoTimestampArg(args, "to") : "";
         const history = includeHistory
           ? derivedMetrics.readHistory(instance.instanceId, {
-              ...(textArg(args, "from") ? { from: textArg(args, "from") } : {}),
-              ...(textArg(args, "to") ? { to: textArg(args, "to") } : {}),
+              ...(historyFrom ? { from: historyFrom } : {}),
+              ...(historyTo ? { to: historyTo } : {}),
               limit: numArg(args, "limit", 720),
               order: textArg(args, "order") === "desc" ? "desc" : "asc"
             })

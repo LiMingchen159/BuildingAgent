@@ -8,6 +8,7 @@ import {
   toolCacheDataRelativePath,
   toolCacheManifestRelativePath
 } from "./toolCacheManifest.js";
+import { scheduleToolCacheMaintenance } from "./toolCacheRetention.js";
 import type { AgentToolContext } from "./types.js";
 import { safeToolCacheFilePath } from "./toolCacheSafety.js";
 
@@ -275,6 +276,7 @@ function spillFullPayload(
   }
   const serialized = serializedPayload ?? JSON.stringify(payload);
   writeFileSync(absolutePath, serialized, "utf8");
+  scheduleToolCacheMaintenance(dir);
   return createHash("sha256").update(serialized, "utf8").digest("hex");
 }
 

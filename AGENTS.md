@@ -56,11 +56,14 @@ The following owner-approved exceptions are active only when the current branch 
 
 - Issue #242, branch `m003-s10-local-history-data-bridge`: request-scoped derived-metric history caching, metadata profiling, the local Python data bridge/chart preparation, and directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/agent/**`, `apps/api/src/derivedMetrics.ts`, `apps/api/src/derivedMetrics.test.ts`.
 
+- Issue #243, branch `m003-s11-bound-tool-results`: request-scoped read-only tool deduplication, bounded and redacted tool audit persistence, request-cache retention, and directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/agent/**`, `apps/api/src/derivedMetrics.test.ts`.
+
 For these exceptions:
 - Work only in separate clean worktrees and preserve unrelated changes.
 - Do not change COP/FDD formulas, persisted metric values, production data, secrets, deployment configuration, reverse proxy, Web/Dashboard behavior, or unrelated M007/M010 code.
 - Deterministic code is the source of numerical facts; the LLM must not invent or silently alter measured values.
 - Preserve latest-value and small non-history compatibility.
+- Never deduplicate mutating tools or calls with materially different normalized arguments, and preserve one protocol response for every provider tool-call id.
 - Run focused tests, API typecheck, and independent review before commit or PR.
 - Do not merge or deploy without separate explicit authorization.
 
