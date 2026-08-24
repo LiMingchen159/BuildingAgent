@@ -8,6 +8,7 @@ import { createGenericToolRegistry } from "./agent/genericTools.js";
 import { AgentMemoryStore } from "./agent/memory.js";
 import { indexRepository, repoRootForProject } from "./agent/knowledgeBase.js";
 import { toolCacheDataRelativePath, toolCacheManifestRelativePath } from "./agent/toolCacheManifest.js";
+import { RequestToolExecutionPolicy } from "./agent/requestToolExecutionPolicy.js";
 
 function tempDir(): string {
   return mkdtempSync(path.join(tmpdir(), "ba-derived-metrics-"));
@@ -1083,6 +1084,77 @@ describe("derived metric agent tools", () => {
         toolCacheDataRelativePath(requestId, toolCallId)
       ))).toBe(false);
     }
+  });
+
+  it("freezes equivalent timezone ranges before SQLite and deduplicates the normalized read", async () => {
+    const dir = tempDir();
+    const memory = new AgentMemoryStore(dir);
+    const metrics = new DerivedMetricStore(dir);
+    const metric = metrics.registerMetric({
+      projectId: "project_element",
+      metricKey: "system_cop",
+      entityId: "WCC_01",
+      formula: "cooling_load_kw / power_kw",
+      dependencies: [
+        { role: "cooling_load_kw", sourceId: "WCC-L1-01_Q" },
+        { role: "power_kw", sourceId: "WCC-L1-01_P" }
+      ]
+    });
+    for (const [ts, valueNum] of [
+      ["2026-07-31T23:59:59.000Z", 1],
+      ["2026-08-01T00:00:00.000Z", 2],
+      ["2026-08-01T00:15:00.000Z", 3]
+    ] as const) {
+      metrics.recordSample({ instanceId: metric.instance.instanceId, ts, valueNum });
+    }
+    const registry = createGenericToolRegistry(
+      memory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      metrics
+    );
+    const read = registry.list().find((tool) => tool.name === "derived_metric_read")!;
+    const context = {
+      projectId: "project_element",
+      userId: "user_buildinggpt",
+      requestId: "req_timezone_range",
+      conversationId: "conv_timezone_range",
+      canConfigure: false,
+      messages: []
+    };
+    const offsetArgs = {
+      instanceId: metric.instance.instanceId,
+      mode: "history",
+      from: "2026-08-01T08:00:00+08:00",
+      to: "2026-08-01T08:15:00+08:00",
+      order: "asc"
+    };
+    const utcArgs = {
+      instanceId: metric.instance.instanceId,
+      mode: "history",
+      from: "2026-08-01T00:00:00.000Z",
+      to: "2026-08-01T00:15:00.000Z",
+      order: "asc"
+    };
+
+    const directOffset = await read.run(offsetArgs, context);
+    const directUtc = await read.run(utcArgs, context);
+    expect((directOffset.history as Array<{ valueNum: number }>).map((sample) => sample.valueNum)).toEqual([2, 3]);
+    expect(directOffset.history).toEqual(directUtc.history);
+
+    const readHistory = vi.spyOn(metrics, "readHistory");
+    const policy = new RequestToolExecutionPolicy();
+    const first = await policy.run("derived_metric_read", offsetArgs, () => read.run(offsetArgs, context));
+    const equivalent = await policy.run("derived_metric_read", utcArgs, () => read.run(utcArgs, context));
+    expect(equivalent.reused).toBe(true);
+    expect(equivalent.value).toEqual(first.value);
+    expect(readHistory).toHaveBeenCalledTimes(1);
   });
 
   it("registers a reusable metric and writes one idempotent project-memory pointer", async () => {

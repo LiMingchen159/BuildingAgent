@@ -44,6 +44,7 @@ import { normalizeRepositoryAssetPath } from "../repositoryDownloadLinks.js";
 import { toolActivityOutput, toolExitCode } from "./toolActivityPreview.js";
 import { isLocalHistoryProducerCall, RequestHistoryExecutionGuard } from "./requestHistoryExecutionGuard.js";
 import type { DashboardMutationInput, DashboardRecord } from "../dashboards.js";
+import { RequestToolExecutionPolicy } from "./requestToolExecutionPolicy.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -73,6 +74,13 @@ interface WorkingToolCall {
   result: Record<string, unknown>;
 }
 
+function plainToolArguments(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null
+    ? value as Record<string, unknown>
+    : {};
+}
 function parseGeneratedImages(result: Record<string, unknown>): ChatMessageImage[] {
   const images: ChatMessageImage[] = [];
   const seen = new Set<string>();
@@ -428,6 +436,7 @@ export class AgentRuntime {
     const toolCallHistory: Array<{ name: string; args: Record<string, unknown>; result: Record<string, unknown> }> = [];
     const generatedImages = new Map<string, ChatMessageImage>();
     const generatedDownloads = new Map<string, ChatMessageDownload>();
+    const requestToolPolicy = new RequestToolExecutionPolicy();
 
     const yieldEvent = (event: AgentLifecycleEvent) => {
       events.push(event);
@@ -744,10 +753,7 @@ export class AgentRuntime {
       const parsedToolCalls: WorkingToolCall[] = completion.toolCalls.map((tc) => {
         let args: Record<string, unknown>;
         try {
-          const parsedArgs = JSON.parse(tc.function.arguments) as unknown;
-          args = typeof parsedArgs === "object" && parsedArgs !== null && !Array.isArray(parsedArgs)
-            ? parsedArgs as Record<string, unknown>
-            : {};
+          args = plainToolArguments(JSON.parse(tc.function.arguments) as unknown);
         } catch {
           args = {};
         }
@@ -771,35 +777,41 @@ export class AgentRuntime {
       const dispatchStartedAt = Date.now();
       const dispatchEntry = (entry: WorkingToolCall) => async () => {
         const startedAt = Date.now();
-        const dispatchResult = await this.options.tools.dispatch(
+        const deduplicated = await requestToolPolicy.run(
           entry.call.function.name,
           entry.args,
-          {
-            projectId: request.projectId,
-            userId: request.userId,
-            requestId: request.requestId,
-            conversationId: request.conversationId,
-            canConfigure: request.canConfigure,
-            messages: request.messages,
-            toolCallId: entry.call.id,
-            ...historyExecutionGuard.contextFields(),
-            ...(this.options.dashboardOps
-              ? {
-                  dashboardOps: {
-                    create: (input: DashboardMutationInput) =>
-                      this.options.dashboardOps!.create(input, {
-                        projectId: request.projectId,
-                        userId: request.userId,
-                        conversationId: request.conversationId
-                      })
+          () => this.options.tools.dispatch(
+            entry.call.function.name,
+            entry.args,
+            {
+              projectId: request.projectId,
+              userId: request.userId,
+              requestId: request.requestId,
+              conversationId: request.conversationId,
+              canConfigure: request.canConfigure,
+              messages: request.messages,
+              toolCallId: entry.call.id,
+              ...historyExecutionGuard.contextFields(),
+              ...(this.options.dashboardOps
+                ? {
+                    dashboardOps: {
+                      create: (input: DashboardMutationInput) =>
+                        this.options.dashboardOps!.create(input, {
+                          projectId: request.projectId,
+                          userId: request.userId,
+                          conversationId: request.conversationId
+                        })
+                    }
                   }
-                }
-              : {})
-          }
+                : {})
+            }
+          )
         );
+        const dispatchResult = deduplicated.value;
         return {
           entry,
           dispatchResult,
+          deduplicated: deduplicated.reused,
           durationMs: Date.now() - startedAt,
           startedAt
         };
@@ -825,6 +837,9 @@ export class AgentRuntime {
         args: entry.args,
         result: dispatchResult.result
       })));
+      if (historyExecutionGuard.contextFields().localHistoryDatasetReady === true) {
+        requestToolPolicy.markHistoryDatasetReady();
+      }
       const remainingResults = await raceWithSignal(
         runWithConcurrency(remainingToolCalls.map(dispatchEntry), toolConcurrency),
         turnSignal
@@ -835,7 +850,7 @@ export class AgentRuntime {
           (resultOrder.get(left.entry.call.id) ?? 0) - (resultOrder.get(right.entry.call.id) ?? 0)
         );
 
-      for (const { entry, dispatchResult, durationMs, startedAt } of dispatchResults) {
+      for (const { entry, dispatchResult, deduplicated, durationMs, startedAt } of dispatchResults) {
         entry.result = dispatchResult.result;
 
         const exitCode = toolExitCode(dispatchResult.result);
@@ -845,6 +860,7 @@ export class AgentRuntime {
           durationMs,
           startedAt,
           iteration: iterations,
+          ...(deduplicated ? { deduplicated: true } : {}),
           ...(exitCode !== undefined ? { exitCode } : {}),
           resultPreview: toolActivityOutput(dispatchResult.result, 500) ?? JSON.stringify(dispatchResult.result).slice(0, 300)
         }));
