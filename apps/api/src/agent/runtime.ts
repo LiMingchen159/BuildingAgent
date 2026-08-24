@@ -42,6 +42,7 @@ type ProviderIterationResult = ChatCompletionResult & {
 };
 import { normalizeRepositoryAssetPath } from "../repositoryDownloadLinks.js";
 import { toolActivityOutput, toolExitCode } from "./toolActivityPreview.js";
+import { isLocalHistoryProducerCall, RequestHistoryExecutionGuard } from "./requestHistoryExecutionGuard.js";
 import type { DashboardMutationInput, DashboardRecord } from "../dashboards.js";
 
 export interface AgentRuntimeOptions {
@@ -665,6 +666,7 @@ export class AgentRuntime {
     const compressor = this.options.compressor ?? new ContextCompressor({
       contextLength: 128_000
     });
+    const historyExecutionGuard = new RequestHistoryExecutionGuard();
 
     while (iterations < maxIterations) {
       iterations += 1;
@@ -742,12 +744,19 @@ export class AgentRuntime {
       const parsedToolCalls: WorkingToolCall[] = completion.toolCalls.map((tc) => {
         let args: Record<string, unknown>;
         try {
-          args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+          const parsedArgs = JSON.parse(tc.function.arguments) as unknown;
+          args = typeof parsedArgs === "object" && parsedArgs !== null && !Array.isArray(parsedArgs)
+            ? parsedArgs as Record<string, unknown>
+            : {};
         } catch {
           args = {};
         }
         return { call: tc, args, result: {} };
       });
+      historyExecutionGuard.observeBatch(parsedToolCalls.map((entry) => ({
+        name: entry.call.function.name,
+        args: entry.args
+      })));
 
       for (const entry of parsedToolCalls) {
         yield yieldEvent(this.makeEvent("tool_started", `Running tool: ${entry.call.function.name}`, {
@@ -760,43 +769,71 @@ export class AgentRuntime {
 
       const toolConcurrency = DEFAULT_TOOL_CONCURRENCY;
       const dispatchStartedAt = Date.now();
-      const dispatchResults = await raceWithSignal(runWithConcurrency(
-        parsedToolCalls.map((entry) => async () => {
-          const startedAt = Date.now();
-          const dispatchResult = await this.options.tools.dispatch(
-            entry.call.function.name,
-            entry.args,
-            {
-              projectId: request.projectId,
-              userId: request.userId,
-              requestId: request.requestId,
-              conversationId: request.conversationId,
-              canConfigure: request.canConfigure,
-              messages: request.messages,
-              toolCallId: entry.call.id,
-              ...(this.options.dashboardOps
-                ? {
-                    dashboardOps: {
-                      create: (input: DashboardMutationInput) =>
-                        this.options.dashboardOps!.create(input, {
-                          projectId: request.projectId,
-                          userId: request.userId,
-                          conversationId: request.conversationId
-                        })
-                    }
+      const dispatchEntry = (entry: WorkingToolCall) => async () => {
+        const startedAt = Date.now();
+        const dispatchResult = await this.options.tools.dispatch(
+          entry.call.function.name,
+          entry.args,
+          {
+            projectId: request.projectId,
+            userId: request.userId,
+            requestId: request.requestId,
+            conversationId: request.conversationId,
+            canConfigure: request.canConfigure,
+            messages: request.messages,
+            toolCallId: entry.call.id,
+            ...historyExecutionGuard.contextFields(),
+            ...(this.options.dashboardOps
+              ? {
+                  dashboardOps: {
+                    create: (input: DashboardMutationInput) =>
+                      this.options.dashboardOps!.create(input, {
+                        projectId: request.projectId,
+                        userId: request.userId,
+                        conversationId: request.conversationId
+                      })
                   }
-                : {})
-            }
-          );
-          return {
-            entry,
-            dispatchResult,
-            durationMs: Date.now() - startedAt,
-            startedAt
-          };
-        }),
-        toolConcurrency
-      ), turnSignal);
+                }
+              : {})
+          }
+        );
+        return {
+          entry,
+          dispatchResult,
+          durationMs: Date.now() - startedAt,
+          startedAt
+        };
+      };
+      const historyProducers = parsedToolCalls.filter((entry) => isLocalHistoryProducerCall({
+        name: entry.call.function.name,
+        args: entry.args
+      }));
+      const remainingToolCalls = historyProducers.length > 0
+        ? parsedToolCalls.filter((entry) => !isLocalHistoryProducerCall({
+            name: entry.call.function.name,
+            args: entry.args
+          }))
+        : parsedToolCalls;
+      const producerResults = historyProducers.length > 0
+        ? await raceWithSignal(
+            runWithConcurrency(historyProducers.map(dispatchEntry), toolConcurrency),
+            turnSignal
+          )
+        : [];
+      historyExecutionGuard.completeProducerBatch(producerResults.map(({ entry, dispatchResult }) => ({
+        name: entry.call.function.name,
+        args: entry.args,
+        result: dispatchResult.result
+      })));
+      const remainingResults = await raceWithSignal(
+        runWithConcurrency(remainingToolCalls.map(dispatchEntry), toolConcurrency),
+        turnSignal
+      );
+      const resultOrder = new Map(parsedToolCalls.map((entry, index) => [entry.call.id, index]));
+      const dispatchResults = [...producerResults, ...remainingResults]
+        .sort((left, right) =>
+          (resultOrder.get(left.entry.call.id) ?? 0) - (resultOrder.get(right.entry.call.id) ?? 0)
+        );
 
       for (const { entry, dispatchResult, durationMs, startedAt } of dispatchResults) {
         entry.result = dispatchResult.result;

@@ -85,6 +85,10 @@ export interface AgentToolContext {
   messages: ChatMessage[];
   /** OpenAI tool_call id — used for compaction cache filenames. */
   toolCallId?: string;
+  /** Turn-local guard: a local derived-history producer was requested or completed. */
+  localHistoryMode?: boolean;
+  /** Turn-local guard: the current request has a validated local history dataset pointer. */
+  localHistoryDatasetReady?: boolean;
   dashboardOps?: {
     create: (input: DashboardMutationInput) => DashboardRecord;
   };

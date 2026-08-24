@@ -50,13 +50,17 @@ Create/update only:
 - .github/ISSUE_TEMPLATE/bug_report.md
 - scripts/setup-github-labels.sh
 
-The following owner-approved exception is active only when the current branch exactly matches the listed branch. It does not authorize changes on `main`, release branches, production state, or any unrelated branch:
+The following owner-approved exceptions are active only when the current branch exactly matches the listed branch. They do not authorize changes on `main`, release branches, production state, or any unrelated branch:
 
 - Issue #239, branch `m003-s8-bound-provider-requests`: provider payload limits, deadlines, cancellation propagation, retry ownership, durable chat failure handling, and directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/providers.ts`, `apps/api/src/providers.test.ts`, `apps/api/src/agent/runtime.ts`, `apps/api/src/agent/runtime.streamPhase.test.ts`, `apps/api/src/server.ts`, `apps/api/src/chat.test.ts`.
 
-For this exception:
-- Work only in a separate clean worktree and preserve unrelated changes.
+- Issue #242, branch `m003-s10-local-history-data-bridge`: request-scoped derived-metric history caching, metadata profiling, the local Python data bridge/chart preparation, and directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/agent/**`, `apps/api/src/derivedMetrics.ts`, `apps/api/src/derivedMetrics.test.ts`.
+
+For these exceptions:
+- Work only in separate clean worktrees and preserve unrelated changes.
 - Do not change COP/FDD formulas, persisted metric values, production data, secrets, deployment configuration, reverse proxy, Web/Dashboard behavior, or unrelated M007/M010 code.
+- Deterministic code is the source of numerical facts; the LLM must not invent or silently alter measured values.
+- Preserve latest-value and small non-history compatibility.
 - Run focused tests, API typecheck, and independent review before commit or PR.
 - Do not merge or deploy without separate explicit authorization.
 

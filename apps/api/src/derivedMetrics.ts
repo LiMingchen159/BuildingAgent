@@ -108,6 +108,38 @@ export interface DerivedMetricSample {
   createdAt: string;
 }
 
+export interface DerivedMetricHistoryRow {
+  ts: string;
+  valueNum?: number;
+  valueText?: string;
+  quality: string;
+  status: string;
+}
+
+export interface DerivedMetricHistoryBatchResult {
+  histories: Map<string, DerivedMetricHistoryRow[]>;
+  totalRows: number;
+  estimatedBytes: number;
+  complete: true;
+}
+
+export const DERIVED_METRIC_HISTORY_BATCH_MAX_ROWS = 250_000;
+export const DERIVED_METRIC_HISTORY_BATCH_MAX_BYTES = 128 * 1024 * 1024;
+
+export class DerivedMetricHistoryTooLargeError extends Error {
+  readonly code = "derived_metric_history_too_large";
+
+  constructor(
+    readonly totalRows: number,
+    readonly estimatedBytes: number,
+    readonly maxRows: number,
+    readonly maxBytes: number
+  ) {
+    super("derived_metric_history_too_large");
+    this.name = "DerivedMetricHistoryTooLargeError";
+  }
+}
+
 export interface DerivedMetricRegisterResult {
   created: boolean;
   instance: DerivedMetricInstance;
@@ -243,6 +275,11 @@ interface SampleRow {
   metadata_json: string | null;
   created_at: string;
 }
+
+type DerivedMetricHistoryBatchRow = Pick<
+  SampleRow,
+  "instance_id" | "ts" | "value_num" | "value_text" | "quality" | "status"
+>;
 
 interface MaterializationRow {
   instance_id: string;
@@ -904,6 +941,100 @@ export class DerivedMetricStore {
       LIMIT @limit
     `).all(params) as SampleRow[];
     return rows.map((row) => this.sampleFromRow(row));
+  }
+
+  readHistoryBatch(
+    instanceIds: string[],
+    options: {
+      from?: string;
+      to?: string;
+      maxRows?: number;
+      maxBytes?: number;
+    } = {}
+  ): DerivedMetricHistoryBatchResult {
+    const normalizedIds = [...new Set(instanceIds.map((value) => value.trim()).filter(Boolean))];
+    if (normalizedIds.length < 1 || normalizedIds.length > 32) {
+      throw new Error("instanceIds must contain 1-32 unique metric instance ids");
+    }
+    const placeholders = normalizedIds.map((_, index) => `@instance_${index}`);
+    const clauses = [`instance_id IN (${placeholders.join(", ")})`];
+    const params: Record<string, string> = {};
+    normalizedIds.forEach((instanceId, index) => {
+      params[`instance_${index}`] = instanceId;
+    });
+    if (options.from?.trim()) {
+      clauses.push("ts >= @from");
+      params.from = options.from.trim();
+    }
+    if (options.to?.trim()) {
+      clauses.push("ts <= @to");
+      params.to = options.to.trim();
+    }
+
+    const maxRows = Math.max(1, Math.trunc(options.maxRows ?? DERIVED_METRIC_HISTORY_BATCH_MAX_ROWS));
+    const maxBytes = Math.max(1, Math.trunc(options.maxBytes ?? DERIVED_METRIC_HISTORY_BATCH_MAX_BYTES));
+    return this.db.transaction(() => {
+      const count = this.db.prepare(`
+        SELECT
+          COUNT(*) AS total_rows,
+          COALESCE(SUM(
+            128
+            + LENGTH(CAST(ts AS BLOB))
+            + COALESCE(LENGTH(CAST(CAST(value_num AS TEXT) AS BLOB)), 4)
+            + COALESCE(LENGTH(CAST(value_text AS BLOB)), 0)
+            + LENGTH(CAST(quality AS BLOB))
+            + LENGTH(CAST(status AS BLOB))
+          ), 0) AS estimated_bytes
+        FROM metric_samples
+        WHERE ${clauses.join(" AND ")}
+      `).get(params) as { total_rows: number; estimated_bytes: number };
+      const totalRows = Number(count.total_rows);
+      const estimatedBytes = Number(count.estimated_bytes);
+      if (totalRows > maxRows || estimatedBytes > maxBytes) {
+        throw new DerivedMetricHistoryTooLargeError(totalRows, estimatedBytes, maxRows, maxBytes);
+      }
+
+      const histories = new Map<string, DerivedMetricHistoryRow[]>(
+        normalizedIds.map((instanceId) => [instanceId, []])
+      );
+      const rows = this.db.prepare(`
+        SELECT instance_id, ts, value_num, value_text, quality, status
+        FROM metric_samples
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY instance_id ASC, ts ASC
+      `).all(params) as DerivedMetricHistoryBatchRow[];
+      for (const row of rows) {
+        const sample: DerivedMetricHistoryRow = {
+          ts: row.ts,
+          quality: row.quality,
+          status: row.status
+        };
+        if (typeof row.value_num === "number") sample.valueNum = row.value_num;
+        if (row.value_text !== null) sample.valueText = row.value_text;
+        histories.get(row.instance_id)?.push(sample);
+      }
+      let actualJsonBytes = 2; // outer []
+      for (const [instanceIndex, instanceId] of normalizedIds.entries()) {
+        if (instanceIndex > 0) actualJsonBytes += 1; // comma between series
+        actualJsonBytes += Buffer.byteLength(
+          `{"instanceId":${JSON.stringify(instanceId)},"history":[`,
+          "utf8"
+        );
+        const history = histories.get(instanceId) ?? [];
+        for (const [rowIndex, row] of history.entries()) {
+          if (rowIndex > 0) actualJsonBytes += 1; // comma between rows
+          actualJsonBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
+          if (actualJsonBytes > maxBytes) {
+            throw new DerivedMetricHistoryTooLargeError(totalRows, actualJsonBytes, maxRows, maxBytes);
+          }
+        }
+        actualJsonBytes += 2; // ]}
+        if (actualJsonBytes > maxBytes) {
+          throw new DerivedMetricHistoryTooLargeError(totalRows, actualJsonBytes, maxRows, maxBytes);
+        }
+      }
+      return { histories, totalRows, estimatedBytes: actualJsonBytes, complete: true as const };
+    })();
   }
 
   configureMaterialization(input: DerivedMetricConfigureMaterializationInput): DerivedMetricMaterialization {

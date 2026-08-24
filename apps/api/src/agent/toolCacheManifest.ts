@@ -1,13 +1,15 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { repoRootForProject } from "./knowledgeBase.js";
 import type { AgentToolContext } from "./types.js";
+import { safeToolCacheFilePath } from "./toolCacheSafety.js";
 
 export interface ToolCacheManifestEntry {
   tool: string;
   toolCallId: string;
   data_file: string;
   label?: string;
+  data_key?: string;
 }
 
 export interface ToolCacheManifest {
@@ -15,19 +17,40 @@ export interface ToolCacheManifest {
   entries: ToolCacheManifestEntry[];
 }
 
+function safeCacheComponent(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  const source = trimmed || fallback;
+  const normalized = source.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const digest = createHash("sha256").update(source, "utf8").digest("hex").slice(0, 12);
+  const prefix = (normalized || fallback).slice(0, 83);
+  return `${prefix}_${digest}`;
+}
+
 export function toolCacheManifestRelativePath(requestId: string): string {
-  return path.posix.join("outputs", ".tool_cache", `${requestId}_manifest.json`);
+  return path.posix.join(
+    "outputs",
+    ".tool_cache",
+    `${safeCacheComponent(requestId, "request")}_manifest.json`
+  );
+}
+
+export function toolCacheDataRelativePath(requestId: string, toolCallId?: string): string {
+  return path.posix.join(
+    "outputs",
+    ".tool_cache",
+    `${safeCacheComponent(requestId, "request")}_${safeCacheComponent(toolCallId ?? "", "call")}.json`
+  );
 }
 
 export function registerToolCacheEntry(
   context: AgentToolContext,
   tool: string,
   dataFile: string,
-  label?: string
+  label?: string,
+  dataKey?: string
 ): string {
   const relativeManifest = toolCacheManifestRelativePath(context.requestId);
-  const repoRoot = repoRootForProject(context.projectId);
-  const absoluteManifest = path.join(repoRoot, relativeManifest);
+  const absoluteManifest = safeToolCacheFilePath(context.projectId, relativeManifest);
   const dir = path.dirname(absoluteManifest);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -41,16 +64,22 @@ export function registerToolCacheEntry(
       manifest = { requestId: context.requestId, entries: [] };
     }
   }
+  if (manifest.requestId !== context.requestId || !Array.isArray(manifest.entries)) {
+    manifest = { requestId: context.requestId, entries: [] };
+  }
 
   const toolCallId = context.toolCallId?.trim() || "call";
   const entry: ToolCacheManifestEntry = {
     tool,
     toolCallId,
     data_file: dataFile,
-    ...(label ? { label } : {})
+    ...(label ? { label } : {}),
+    ...(dataKey ? { data_key: dataKey } : {})
   };
   const existingIndex = manifest.entries.findIndex(
-    (row) => row.toolCallId === entry.toolCallId && row.data_file === entry.data_file
+    (row) => row.toolCallId === entry.toolCallId
+      && row.data_file === entry.data_file
+      && row.data_key === entry.data_key
   );
   if (existingIndex >= 0) {
     manifest.entries[existingIndex] = entry;
