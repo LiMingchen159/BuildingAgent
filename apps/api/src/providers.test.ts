@@ -278,14 +278,14 @@ describe("chat provider resolution and adapters", () => {
     expect(requestBody).not.toHaveProperty("thinking");
   });
 
-  it("retries transient provider failures before surfacing an error", async () => {
+  it("retries a transient provider failure exactly once", async () => {
     vi.useFakeTimers();
     let calls = 0;
     const provider = createOpenAICompatibleProvider({
       apiKey: "provider-test-key",
       fetch: async () => {
         calls += 1;
-        if (calls < 3) {
+        if (calls < 2) {
           return jsonResponse({ error: { message: "busy" } }, { status: 503 });
         }
         return jsonResponse({ choices: [{ message: { content: "Recovered" } }] });
@@ -301,7 +301,7 @@ describe("chat provider resolution and adapters", () => {
     await vi.runAllTimersAsync();
     const result = await promise;
 
-    expect(calls).toBe(3);
+    expect(calls).toBe(2);
     expect(result.text).toBe("Recovered");
     vi.useRealTimers();
   });
@@ -385,6 +385,31 @@ describe("chat provider resolution and adapters", () => {
     expect(message).toContain("deepseek-v4-pro");
   });
 
+  it("formats bounded payload and timeout failures with actionable local guidance", () => {
+    const payloadMessage = formatProviderFailureMessage(new ProviderError("must not echo raw body", {
+      code: "provider_payload_too_large",
+      status: 413,
+      responseDetail: "serialized request exceeded 4194304 byte limit"
+    }));
+    expect(payloadMessage).toContain("stopped this request locally");
+    expect(payloadMessage).toContain("4 MiB safety limit");
+    expect(payloadMessage).toContain("Reduce the requested time range or data volume");
+    expect(payloadMessage).not.toContain("credentials");
+    expect(payloadMessage).not.toContain("must not echo raw body");
+
+    const providerTimeoutMessage = formatProviderFailureMessage(new ProviderError("deadline", {
+      code: "provider_timeout",
+      status: 504
+    }));
+    const turnTimeoutMessage = formatProviderFailureMessage(new ProviderError("deadline", {
+      code: "agent_turn_timeout",
+      status: 504
+    }));
+    expect(providerTimeoutMessage).toContain("LLM provider request timed out");
+    expect(turnTimeoutMessage).toContain("agent turn timed out");
+    expect(providerTimeoutMessage).not.toContain("credentials");
+  });
+
   it("captures sanitized HTTP error bodies from the provider", async () => {
     const provider = createOpenAICompatibleProvider({
       apiKey: "provider-test-key",
@@ -408,5 +433,209 @@ describe("chat provider resolution and adapters", () => {
       status: 400,
       responseDetail: "maximum context length exceeded"
     });
+  });
+
+  it("rejects payloads over 4 MiB before fetch", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ choices: [{ message: { content: "unused" } }] }));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+
+    await expect(provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_oversize",
+      messages: [{ role: "user", content: "x".repeat(4 * 1024 * 1024) }]
+    })).rejects.toMatchObject({
+      code: "provider_payload_too_large",
+      status: 413,
+      responseDetail: "serialized request exceeded 4194304 byte limit"
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([429, 503])("retries HTTP %s once and then succeeds", async (status) => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "busy" } }, { status }))
+      .mockResolvedValueOnce(jsonResponse({ choices: [{ message: { content: "Recovered" } }] }));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+    const completion = provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: `req_${status}`,
+      messages: [{ role: "user", content: "Hello" }]
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(completion).resolves.toMatchObject({ text: "Recovered" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("retries an unknown transport failure once", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("socket closed"))
+      .mockResolvedValueOnce(jsonResponse({ choices: [{ message: { content: "Recovered" } }] }));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+    const completion = provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_transport",
+      messages: [{ role: "user", content: "Hello" }]
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(completion).resolves.toMatchObject({ text: "Recovered" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("fails fast for non-429 HTTP 4xx responses", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ error: { message: "bad request" } }, { status: 400 }));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+
+    await expect(provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_400",
+      messages: [{ role: "user", content: "Hello" }]
+    })).rejects.toMatchObject({ code: "provider_http_error", status: 400 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("enforces a 60 second provider deadline without retry", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Promise<Response>(() => undefined));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+    const completion = provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_timeout",
+      messages: [{ role: "user", content: "Hello" }]
+    });
+    const rejected = expect(completion).rejects.toMatchObject({ code: "provider_timeout", status: 504 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await rejected;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("propagates caller cancellation without retry", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => new Promise<Response>(() => undefined));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+    const completion = provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_cancel",
+      messages: [{ role: "user", content: "Hello" }],
+      signal: controller.signal
+    });
+    controller.abort();
+
+    await expect(completion).rejects.toMatchObject({ code: "provider_cancelled" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles the 60 second deadline when response body parsing ignores AbortSignal", async () => {
+    vi.useFakeTimers();
+    const response = {
+      ok: true,
+      json: () => new Promise<unknown>(() => undefined)
+    } as Response;
+    const provider = createOpenAICompatibleProvider({
+      apiKey: "provider-test-key",
+      fetch: async () => response
+    });
+    const completion = provider.complete({
+      projectId: "project_alpha",
+      userId: "user_ada",
+      requestId: "req_body_timeout",
+      messages: [{ role: "user", content: "Hello" }]
+    });
+    const rejected = expect(completion).rejects.toMatchObject({ code: "provider_timeout", status: 504 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await rejected;
+    vi.useRealTimers();
+  });
+
+  it("settles the 60 second deadline when stream reader ignores AbortSignal", async () => {
+    vi.useFakeTimers();
+    const provider = createOpenAICompatibleProvider({
+      apiKey: "provider-test-key",
+      fetch: async () => new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 })
+    });
+    const consume = async () => {
+      for await (const _delta of provider.completeStream!({
+        projectId: "project_alpha",
+        userId: "user_ada",
+        requestId: "req_reader_timeout",
+        messages: [{ role: "user", content: "Hello" }]
+      })) {
+        // The reader intentionally never yields.
+      }
+    };
+    const stream = consume();
+    const rejected = expect(stream).rejects.toMatchObject({ code: "provider_timeout", status: 504 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await rejected;
+    vi.useRealTimers();
+  });
+
+  it("does not replay a streaming request after a visible delta", async () => {
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Visible"}}]}\n\n'));
+        setTimeout(() => controller.error(new TypeError("socket closed")), 0);
+      }
+    }), { status: 200 }));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+    const received: string[] = [];
+    const consume = async () => {
+      for await (const delta of provider.completeStream!({
+        projectId: "project_alpha",
+        userId: "user_ada",
+        requestId: "req_stream_visible",
+        messages: [{ role: "user", content: "Hello" }]
+      })) {
+        if (delta.content) received.push(delta.content);
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({ code: "provider_request_failed" });
+    expect(received).toEqual(["Visible"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a streaming transport failure once before any delta", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("connect reset"))
+      .mockResolvedValueOnce(new Response(
+        'data: {"choices":[{"delta":{"content":"Recovered"}}]}\n\ndata: [DONE]\n\n',
+        { status: 200 }
+      ));
+    const provider = createOpenAICompatibleProvider({ apiKey: "provider-test-key", fetch: fetchMock });
+    const received: string[] = [];
+    const consume = (async () => {
+      for await (const delta of provider.completeStream!({
+        projectId: "project_alpha",
+        userId: "user_ada",
+        requestId: "req_stream_retry",
+        messages: [{ role: "user", content: "Hello" }]
+      })) {
+        if (delta.content) received.push(delta.content);
+      }
+    })();
+    await vi.runAllTimersAsync();
+    await consume;
+
+    expect(received).toEqual(["Recovered"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });
