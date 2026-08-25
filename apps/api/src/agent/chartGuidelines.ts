@@ -9,7 +9,7 @@ export function chartPlottingGuidelines(): string {
     "- Default timeseries = line chart via plot_series (dropna, gaps break lines). No interpolate/fill_between on analog signals unless user asks.",
     `- Enterprise presentation style (fixed): figsize (${w}, ${h}), dpi ${SCIENTIFIC_CHART_CONSTANTS.dpi}, whitegrid/talk theme, corporate palette, left-aligned title — do not override colors/fonts.`,
     "- ALL text on the figure MUST be English only: title, axis labels, legend, tick labels, annotations.",
-    "- Layout: rotate crowded x tick labels (rotation=30, ha='right'); legend outside when >1 series.",
+    "- Layout: rotate crowded x tick labels (rotation=30, ha='right'); keep 1–4-series legends inside and move legends outside when >=5 series.",
     "- Data labels on points/bars only when ≤12 points; otherwise use legend.",
     "- After save_chart: cite ![description](outputs/filename.png) with English alt text.",
     "- Never guess cache filenames; use build_combined_frame() or for label, df in load_all_series().items() — never for entry in load_all_series().",
