@@ -60,6 +60,8 @@ The following owner-approved exceptions are active only when the current branch 
 
 - Issue #247, branch `m003-s11-parse-mixed-history-timestamps`: parse mixed-precision ISO-8601 timestamps in the request-local chart bridge and add directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/agent/chartStyle.ts`, `apps/api/src/agent/chartStyle.test.ts`.
 
+- Issue #251, branch `m003-s13-chart-layout-selection`: default long-history charts with five to eight compatible series to deterministic small multiples, preserve stable series identity, labels, extrema, and true gaps, and add directly corresponding tests and chart guidance. Authorized paths: `AGENTS.md`, `apps/api/src/agent/chartStyle.ts`, `apps/api/src/agent/chartStyle.test.ts`, `apps/api/src/agent/chartGuidelines.ts`.
+
 For these exceptions:
 - Work only in separate clean worktrees and preserve unrelated changes.
 - Do not change COP/FDD formulas, persisted metric values, production data, secrets, deployment configuration, reverse proxy, Web/Dashboard behavior, or unrelated M007/M010 code.
