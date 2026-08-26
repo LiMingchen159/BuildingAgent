@@ -29,10 +29,12 @@ describe("chartStyle", () => {
     expect(hint).toContain("for label, df in load_all_series().items()");
     expect(hint).toContain("NEVER `for entry in load_all_series()`");
     expect(hint).toContain("build_combined_frame");
+    expect(hint).toContain("plot_timeseries_default");
     expect(hint).toContain("col_series");
     expect(hint).toContain("fillna(method=");
     expect(hint).toContain("no debug-only");
     expect(hint).toContain("data_coverage");
+    expect(hint).toContain("never drop a selected column");
     expect(hint).toContain("stdout/stderr are always hidden");
     expect(hint).toContain("non-image artifacts are hidden");
     expect(hint).toContain("saved charts only");
@@ -44,6 +46,11 @@ describe("chartStyle", () => {
     expect(hint).toContain("set_chart_title");
     expect(hint).toContain("finalize_legend");
     expect(hint).toContain("plot_series");
+    expect(hint).toContain("plot_timeseries_default");
+    expect(hint).toContain("small multiples");
+    expect(hint).toContain("compatible-unit");
+    expect(hint).toContain("incompatible units");
+    expect(hint).toContain("layout='overlay'");
     expect(hint).toContain("chart_color");
     expect(hint).toContain("line chart");
     expect(hint).toContain("format_hkt_axis");
@@ -57,12 +64,16 @@ describe("chartStyle", () => {
     const header = executeCodeInjectedHeader();
     expect(header).toContain("import matplotlib.dates as mdates");
     expect(header).toContain("def series_short_label");
+    expect(header).toContain("def series_display_label");
     expect(header).toContain("def _natural_sort_key");
     expect(header).toContain("def build_combined_frame");
     expect(header).toContain("def col_series");
     expect(header).toContain("def chart_color");
     expect(header).toContain("def data_coverage");
     expect(header).toContain("def plot_series");
+    expect(header).toContain("def plot_series_small_multiples");
+    expect(header).toContain("def plot_timeseries_default");
+    expect(header).toContain("Hourly median with P10-P90 band");
     expect(header).toContain("def plot_status_step");
     expect(header).toContain("def format_hkt_axis");
     expect(header).toContain("AutoDateLocator(tz=HKT, minticks=minticks, maxticks=maxticks)");
@@ -332,9 +343,136 @@ describe("chartStyle", () => {
       .toMatch(/2026|Jun|Jul/);
   });
 
+  it("defaults long eight-series histories to readable small multiples", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ba-chart-small-multiples-"));
+    const scriptFile = path.join(dir, "small-multiples.py");
+    writeFileSync(scriptFile, `${executeCodeInjectedHeader()}\n${[
+      "index = pd.date_range('2026-06-01T00:00:00Z', periods=60 * 24 * 4 + 1, freq='15min').tz_convert(HKT)",
+      "fleet = {}",
+      "for equipment in [5, 4, 8, 3, 7, 6, 1, 2]:",
+      "    values = 10.0 + equipment * 0.45 + np.sin(np.arange(len(index)) / (17.0 + equipment))",
+      "    values = values.astype(float)",
+      "    values[2200:2212] = np.nan",
+      "    fleet[f'WCC-L1-{equipment:02d}-CHWST'] = values",
+      "combined = pd.DataFrame(fleet, index=index)",
+      "fig, axes = plot_timeseries_default(combined, title='Chilled water temperatures', ylabel='Temperature (degC)')",
+      "flat = [ax for ax in axes.flatten() if ax.get_visible()]",
+      "fig.canvas.draw()",
+      "renderer = fig.canvas.get_renderer()",
+      "title_box = fig._suptitle.get_window_extent(renderer)",
+      "subtitle = next(text for text in fig.texts if 'Hourly median' in text.get_text())",
+      "subtitle_box = subtitle.get_window_extent(renderer)",
+      "first_row_title_top = max(ax._left_title.get_window_extent(renderer).y1 for ax in flat[:4])",
+      "panel_titles = [ax.get_title(loc='left') for ax in flat]",
+      "panel_line_counts = [len(ax.lines) for ax in flat]",
+      "panel_band_counts = [len(ax.collections) for ax in flat]",
+      "panel_colors = [ax.lines[0].get_color() for ax in flat]",
+      "panel_nan_counts = [int(np.isnan(np.asarray(ax.lines[0].get_ydata(), dtype=float)).sum()) for ax in flat]",
+      "shared_y = all(flat[0].get_shared_y_axes().joined(flat[0], ax) for ax in flat[1:])",
+      "small_path = save_chart(fig, 'small-multiples.png')",
+      "extreme = pd.DataFrame({f'cop:WCC_{equipment:02d}': 3.0 + np.sin(np.arange(len(index)) / 21.0) for equipment in range(1, 9)}, index=index)",
+      "extreme.loc[index[1000:2600], 'cop:WCC_08'] = 120.0",
+      "extreme_fig, extreme_axes = plot_timeseries_default(extreme, title='COP comparison', ylabel='COP')",
+      "extreme_flat = [ax for ax in extreme_axes.flatten() if ax.get_visible()]",
+      "extreme_shared_y = all(extreme_flat[0].get_shared_y_axes().joined(extreme_flat[0], ax) for ax in extreme_flat[1:])",
+      "extreme_scale_note = next(text.get_text() for text in extreme_fig.texts if 'y-scales' in text.get_text())",
+      "plt.close(extreme_fig)",
+      "constant_scale_split = not _small_multiples_share_y([pd.Series([3.0, 3.0])] * 7 + [pd.Series([120.0, 120.0])])",
+      "band_index = pd.date_range('2026-06-01T00:00:00Z', periods=8 * 24 * 10 + 1, freq='6min').tz_convert(HKT)",
+      "band_outlier = pd.DataFrame({f'cop:WCC_{equipment:02d}': np.full(len(band_index), 5.0) for equipment in range(1, 9)}, index=band_index)",
+      "band_outlier.loc[band_outlier.index.minute >= 48, 'cop:WCC_08'] = 120.0",
+      "band_fig, band_axes = plot_timeseries_default(band_outlier, title='COP band comparison', ylabel='COP')",
+      "band_flat = [ax for ax in band_axes.flatten() if ax.get_visible()]",
+      "band_outlier_scale_split = not all(band_flat[0].get_shared_y_axes().joined(band_flat[0], ax) for ax in band_flat[1:])",
+      "plt.close(band_fig)",
+      "four_fig, four_ax = plot_timeseries_default(combined.iloc[:, :4], title='Four series')",
+      "four_is_overlay = not hasattr(four_ax, 'flatten') and len(four_ax.lines) == 4",
+      "plt.close(four_fig)",
+      "overlay_fig, overlay_ax = plot_timeseries_default(combined, title='Explicit overlay', layout='overlay')",
+      "explicit_overlay = not hasattr(overlay_ax, 'flatten') and len(overlay_ax.lines) == 8",
+      "plt.close(overlay_fig)",
+      "route_shapes = {}",
+      "for route_count in [5, 6, 7, 8]:",
+      "    route_fig, route_axes = plot_timeseries_default(combined.iloc[:, :route_count], title=f'{route_count} series')",
+      "    route_shapes[str(route_count)] = list(route_axes.shape)",
+      "    plt.close(route_fig)",
+      "nine = combined.copy()",
+      "nine['WCC-L1-09-CHWST'] = combined.iloc[:, 0]",
+      "nine_fig, nine_ax = plot_timeseries_default(nine, title='Nine series')",
+      "nine_is_overlay = not hasattr(nine_ax, 'flatten') and len(nine_ax.lines) == 9",
+      "plt.close(nine_fig)",
+      "short_fig, short_ax = plot_timeseries_default(combined.iloc[-6 * 24 * 4:, :5], title='Short five series')",
+      "short_is_overlay = not hasattr(short_ax, 'flatten') and len(short_ax.lines) == 5",
+      "plt.close(short_fig)",
+      "known_index = pd.date_range('2026-06-01T00:00:00Z', periods=10, freq='5min').tz_convert(HKT)",
+      "known_profile = _hourly_series_profile(pd.Series(np.arange(10, dtype=float), index=known_index))",
+      "empty_sources = {column: pd.DataFrame({'value_num': combined[column]}) for column in combined.columns[:-1]}",
+      "empty_sources[combined.columns[-1]] = pd.DataFrame()",
+      "empty_combined = build_combined_frame(empty_sources)",
+      "empty_fig, empty_axes = plot_timeseries_default(empty_combined, title='Empty series retained', layout='small_multiples')",
+      "empty_flat = [ax for ax in empty_axes.flatten() if ax.get_visible()]",
+      "empty_panel_retained = len(empty_combined.columns) == 8 and len(empty_flat) == 8 and any(len(ax.lines) == 0 and any('No valid samples' in text.get_text() for text in ax.texts) for ax in empty_flat)",
+      "plt.close(empty_fig)",
+      "print(json.dumps({'axes_shape': list(axes.shape), 'panel_titles': panel_titles, 'panel_line_counts': panel_line_counts, 'panel_band_counts': panel_band_counts, 'panel_colors': panel_colors, 'panel_nan_counts': panel_nan_counts, 'shared_y': shared_y, 'subtitle': subtitle.get_text(), 'title_subtitle_gap': float(title_box.y0 - subtitle_box.y1), 'subtitle_panel_gap': float(subtitle_box.y0 - first_row_title_top), 'small_path': small_path, 'small_bytes': os.path.getsize(os.path.join(os.environ['OUTPUT_DIR'], 'small-multiples.png')), 'extreme_shared_y': extreme_shared_y, 'extreme_scale_note': extreme_scale_note, 'constant_scale_split': constant_scale_split, 'band_outlier_scale_split': band_outlier_scale_split, 'four_is_overlay': four_is_overlay, 'explicit_overlay': explicit_overlay, 'route_shapes': route_shapes, 'nine_is_overlay': nine_is_overlay, 'short_is_overlay': short_is_overlay, 'known_quantiles': [float(known_profile.iloc[0]['p10']), float(known_profile.iloc[0]['median']), float(known_profile.iloc[0]['p90'])], 'empty_panel_retained': empty_panel_retained}))"
+    ].join("\n")}\n`, "utf8");
+
+    const output = execFileSync("python3", [scriptFile], {
+      env: { ...process.env, OUTPUT_DIR: dir },
+      encoding: "utf8"
+    }).trim();
+    const result = JSON.parse(output) as Record<string, unknown>;
+    expect(result.axes_shape).toEqual([2, 4]);
+    expect(result.panel_titles).toEqual([
+      "WCC-01",
+      "WCC-02",
+      "WCC-03",
+      "WCC-04",
+      "WCC-05",
+      "WCC-06",
+      "WCC-07",
+      "WCC-08"
+    ]);
+    expect(result.panel_line_counts).toEqual(Array(8).fill(1));
+    expect(result.panel_band_counts).toEqual(Array(8).fill(1));
+    expect(new Set(result.panel_colors as string[]).size).toBe(8);
+    expect((result.panel_nan_counts as number[]).every((count) => count >= 1)).toBe(true);
+    expect(result.shared_y).toBe(true);
+    expect(result.subtitle).toContain("Hourly median with P10-P90 band");
+    expect(result.subtitle).toContain("HKT");
+    expect(result.subtitle).toContain("shared y-scale");
+    expect(result.title_subtitle_gap as number).toBeGreaterThan(6);
+    expect(result.subtitle_panel_gap as number).toBeGreaterThan(8);
+    expect(result.small_path).toBe("outputs/small-multiples.png");
+    expect(result.small_bytes as number).toBeGreaterThan(10_000);
+    expect(result.extreme_shared_y).toBe(false);
+    expect(result.extreme_scale_note).toContain("independent y-scales due to range disparity");
+    expect(result.constant_scale_split).toBe(true);
+    expect(result.band_outlier_scale_split).toBe(true);
+    expect(result.four_is_overlay).toBe(true);
+    expect(result.explicit_overlay).toBe(true);
+    expect(result.route_shapes).toEqual({
+      "5": [2, 3],
+      "6": [2, 3],
+      "7": [2, 4],
+      "8": [2, 4]
+    });
+    expect(result.nine_is_overlay).toBe(true);
+    expect(result.short_is_overlay).toBe(true);
+    expect(result.known_quantiles).toEqual([0.9, 4.5, 8.1]);
+    expect(result.empty_panel_retained).toBe(true);
+  }, 20_000);
+
   describe("chartSanityViolation", () => {
     it("flags chart code without save_chart when no PNG produced", () => {
       const msg = chartSanityViolation("fig, ax = new_figure()\nax.plot([1,2,3])", 0);
+      expect(msg).toContain("save_chart");
+    });
+
+    it("flags the default history helper without save_chart", () => {
+      const msg = chartSanityViolation(
+        "fig, axes = plot_timeseries_default(combined, title='Fleet')",
+        0
+      );
       expect(msg).toContain("save_chart");
     });
 
