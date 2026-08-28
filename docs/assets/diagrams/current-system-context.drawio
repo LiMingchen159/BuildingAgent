@@ -1,0 +1,94 @@
+<mxfile host="Electron" version="31.1.8">
+  <diagram id="current-system-context" name="Current System Context">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="context-title" value="&lt;b&gt;当前系统上下文 / Current System Context&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;单仓、单 Fastify 进程边界 / Monorepo and single Fastify process boundary&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=24;fontColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="250" y="20" width="1100" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-clients-bg" value="&lt;b&gt;客户端 / Clients&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="170" width="270" height="310" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-web" value="&lt;b&gt;React / Vite Web&lt;/b&gt;&lt;br&gt;工作区 / Workspace&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="100" y="245" width="190" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-cli" value="&lt;b&gt;Node CLI&lt;/b&gt;&lt;br&gt;login / use / chat / registry&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="100" y="365" width="190" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-api-bg" value="&lt;b&gt;Fastify API 组合根 / Composition Root&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;同一进程，不是微服务 / One process, not microservices&lt;/font&gt;" style="swimlane;html=1;rounded=1;startSize=58;horizontal=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="100" width="730" height="610" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-auth" value="&lt;b&gt;鉴权 + 项目隔离&lt;br&gt;Auth + project isolation&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="455" y="195" width="275" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-rest-events" value="&lt;b&gt;REST + SSE + WebSocket&lt;/b&gt;&lt;br&gt;路由与事件 / Routes and events&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="800" y="195" width="275" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-agent" value="&lt;b&gt;Agent Runtime&lt;/b&gt;&lt;br&gt;上下文 + provider/tool loop&lt;br&gt;Context + provider/tool loop&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="455" y="335" width="275" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-direct-domains" value="&lt;b&gt;直接域路由 / Direct domain routes&lt;/b&gt;&lt;br&gt;Dashboard · Scheduler · STT · Report&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;已实现 + 部分实现&lt;br&gt;Implemented + Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="800" y="335" width="275" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-agent-resources" value="&lt;b&gt;KB · Repository · Memory&lt;br&gt;Grounding · Tools · Skills&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="455" y="505" width="275" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-building-domains" value="&lt;b&gt;BMS · FDD · Derived Metrics · KPI&lt;/b&gt;&lt;br&gt;楼宇数据与分析 / Building data and analytics&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="800" y="505" width="275" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-external-bg" value="&lt;b&gt;外部系统 / External systems&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#dbeafe;strokeColor=#3b82f6;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="150" width="320" height="380" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-llm" value="&lt;b&gt;LLM Provider&lt;/b&gt;&lt;br&gt;mock 或 OpenAI-compatible&lt;br&gt;mock or OpenAI-compatible&lt;br&gt;&lt;font color=&quot;#245b8a&quot;&gt;外部能力 / External&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="235" width="220" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-bms" value="&lt;b&gt;BMS / Collector&lt;/b&gt;&lt;br&gt;点位、时序、现场连接&lt;br&gt;Points, series, site connection&lt;br&gt;&lt;font color=&quot;#245b8a&quot;&gt;外部能力 / External&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="385" width="220" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-storage-bg" value="&lt;b&gt;本地持久化 / Local persistence&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="780" width="1000" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-json-store" value="&lt;b&gt;apps/data/store.json&lt;/b&gt;&lt;br&gt;业务状态 / Business state&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="350" y="840" width="270" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-project-data" value="&lt;b&gt;data/&amp;lt;project&amp;gt;/**&lt;/b&gt;&lt;br&gt;KB · Repo · Memory · Outputs&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="665" y="840" width="270" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-sqlite" value="&lt;b&gt;SQLite + JSON logs/jobs&lt;/b&gt;&lt;br&gt;指标、索引、调度 / Metrics, indexes, jobs&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="980" y="840" width="270" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-web" value="REST / SSE / WS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;fontSize=12;" edge="1" parent="1" source="context-web" target="context-auth">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-cli" value="REST" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;fontSize=12;" edge="1" parent="1" source="context-cli" target="context-auth">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-auth-agent" value="项目上下文 / Project context" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="context-auth" target="context-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-auth-direct" value="direct" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="context-auth" target="context-direct-domains">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-agent-resources" value="工具与证据 / Tools and evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="context-agent" target="context-agent-resources">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-domain" value="确定性调用 / Deterministic calls" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;fontSize=11;" edge="1" parent="1" source="context-agent" target="context-building-domains">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-llm" value="provider API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeColor=#3b82f6;fontSize=11;" edge="1" parent="1" source="context-agent" target="context-llm">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-bms" value="collector / bridge" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeColor=#3b82f6;fontSize=11;" edge="1" parent="1" source="context-building-domains" target="context-bms">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-edge-storage" value="读写 / Read-write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeColor=#666666;fontSize=11;" edge="1" parent="1" source="context-api-bg" target="context-storage-bg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-legend" value="&lt;b&gt;状态 / Status&lt;/b&gt;　&lt;font color=&quot;#2d6a2d&quot;&gt;■ 已实现 / Implemented&lt;/font&gt;　&lt;font color=&quot;#8a5a00&quot;&gt;■ 部分实现 / Partial&lt;/font&gt;　&lt;font color=&quot;#555555&quot;&gt;■ 规划中 / Planned&lt;/font&gt;　&lt;font color=&quot;#245b8a&quot;&gt;■ 外部能力 / External&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="430" y="945" width="740" height="30" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
