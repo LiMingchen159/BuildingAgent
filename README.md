@@ -1,8 +1,16 @@
 # BuildingAgent
 
-BuildingAgent is currently a local development vertical slice: a Fastify API plus a React/Vite Web UI that exercise seeded authentication, project membership, and project-scoped chat.
+BuildingAgent is a TypeScript/npm-workspaces platform for project-scoped building operations. Its React/Vite Web workspace and Node CLI use a Fastify API to combine conversational agent workflows with knowledge, repository, BMS, FDD, KPI, dashboard, report, scheduling, realtime, and speech capabilities. Some capabilities are complete, some are partial, and some remain target architecture; the developer documentation records those boundaries against a named code baseline.
 
-## S01 local run
+## Developer documentation
+
+- [中文开发者文档](docs/developer/zh-CN/README.md)
+- [English developer documentation](docs/developer/en/README.md)
+- [Language selector / 语言选择](docs/developer/README.md)
+
+The repository includes public local-development fixtures, such as `example.test` users, deterministic mock responses, and seeded tokens/passwords. They are examples only—not production credentials. Never commit real API keys, bearer tokens, BMS passwords, private service URLs, or customer data; use environment variables and redacted placeholders.
+
+## Local development
 
 ### Seeded users
 
@@ -33,7 +41,7 @@ The API runs on `http://127.0.0.1:3000` by default. The Web app runs through Vit
 
 ### Chat provider configuration
 
-Project chat works without any external credentials. When no provider credentials are configured, or when the provider is explicitly set to `mock`, the API uses a deterministic local mock provider. That default path is what local smoke and CI verification use.
+Project chat works without any external credentials. When no provider credentials are configured, or when the provider is explicitly set to `mock`, the API uses a deterministic local mock provider. That default path is what the local smoke and verification commands use.
 
 Configure a real OpenAI-compatible provider only in environments that already have provider credentials available:
 
@@ -109,7 +117,7 @@ npm run build
 npm run smoke
 ```
 
-The full S04 gate can also be run as one command:
+The same focused local gate can also be run as one command:
 
 ```bash
 npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts && npm run typecheck && npm run build && npm run smoke
@@ -117,7 +125,7 @@ npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/
 
 The Web tests mock `fetch` only at the network boundary so the React flow still exercises the real API client, guarded screens, error banners, selected-project chat routing, assistant replies, and provider diagnostics.
 
-If real provider env vars are already available in your shell, you may run an optional manual smoke against that provider. This is not required for CI or local default verification, and examples must use placeholders rather than real credentials.
+If real provider env vars are already available in your shell, you may run an optional manual smoke against that provider. This is not required for the default local verification, and examples must use placeholders rather than real credentials.
 
 ```bash
 BUILDING_AGENT_LLM_PROVIDER=openai-compatible \
