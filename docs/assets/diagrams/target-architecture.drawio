@@ -1,0 +1,90 @@
+<mxfile host="Electron" version="31.1.8">
+  <diagram id="target-architecture" name="Target Architecture">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="target-title" value="&lt;b&gt;BuildingAgent 目标架构 / Target Architecture&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;目标叙事 + 当前实现状态 / Target narrative with current implementation status&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=24;fontColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="250" y="20" width="1100" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-frontend-bg" value="&lt;b&gt;前端 / Frontend&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="100" width="1400" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-custom-panels" value="&lt;b&gt;自定义面板&lt;br&gt;Custom panels&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="180" y="165" width="330" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-natural-chat" value="&lt;b&gt;自然语言对话&lt;br&gt;Natural-language chat&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="635" y="165" width="330" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-model-debug" value="&lt;b&gt;模型调试&lt;br&gt;Model debugging&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1090" y="165" width="330" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-data-bg" value="&lt;b&gt;数据 / Data&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="330" width="920" height="285" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-conversation-data" value="&lt;b&gt;对话 / Conversation&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="145" y="400" width="245" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-timeseries-data" value="&lt;b&gt;时序 / Time series&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;BMS owns source / BMS 为源&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="438" y="400" width="245" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-static-data" value="&lt;b&gt;静态 / Static&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="730" y="400" width="245" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-semantic-data" value="&lt;b&gt;语义 / Semantics&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="275" y="510" width="245" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-user-data" value="&lt;b&gt;用户 / Users&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="600" y="510" width="245" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-backend-bg" value="&lt;b&gt;后台 / Backend&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="330" width="420" height="285" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-fdd-feedback" value="&lt;b&gt;FDD 回馈 / FDD feedback&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="395" width="320" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-kpi-feedback" value="&lt;b&gt;KPI 回馈 / KPI feedback&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#555555&quot;&gt;规划中 / Planned&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="475" width="320" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-sim-data" value="&lt;b&gt;模拟数据 / Simulated data&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="555" width="320" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-business-bg" value="&lt;b&gt;业务 / Business&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="700" width="1400" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-auto-model" value="&lt;b&gt;自动建模&lt;br&gt;Automatic modeling&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="155" y="770" width="285" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-retrieval" value="&lt;b&gt;检索 / Retrieval&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="500" y="770" width="285" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-fdd-business" value="&lt;b&gt;FDD&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="845" y="770" width="285" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-world-model" value="&lt;b&gt;世界模型 / World model&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#555555&quot;&gt;规划中 / Planned&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="770" width="255" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-edge-front-data" value="项目上下文 / Project context" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;fontSize=12;" edge="1" parent="1" source="target-natural-chat" target="target-data-bg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-edge-front-backend" value="请求 / Requests" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;fontSize=12;" edge="1" parent="1" source="target-model-debug" target="target-backend-bg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-edge-data-business" value="证据 / Evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;fontSize=12;" edge="1" parent="1" source="target-data-bg" target="target-business-bg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-edge-backend-business" value="结果 / Results" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#b85450;fontSize=12;" edge="1" parent="1" source="target-backend-bg" target="target-business-bg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="target-edge-feedback" value="回馈 / Feedback" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1;strokeColor=#b85450;fontSize=12;" edge="1" parent="1" source="target-business-bg" target="target-data-bg">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="70" y="790"/><mxPoint x="70" y="480"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="target-legend" value="&lt;b&gt;状态 / Status&lt;/b&gt;　&lt;font color=&quot;#2d6a2d&quot;&gt;■ 已实现 / Implemented&lt;/font&gt;　&lt;font color=&quot;#8a5a00&quot;&gt;■ 部分实现 / Partial&lt;/font&gt;　&lt;font color=&quot;#555555&quot;&gt;■ 规划中 / Planned&lt;/font&gt;　&lt;font color=&quot;#245b8a&quot;&gt;■ 外部能力 / External&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9ca3af;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="310" y="915" width="980" height="45" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
