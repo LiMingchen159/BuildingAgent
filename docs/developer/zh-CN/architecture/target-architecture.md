@@ -2,30 +2,30 @@
 
 [English](../../en/architecture/target-architecture.md) | [开发者文档首页](../README.md) | [当前实现](current-architecture.md)
 
-> 代码基线：`main@af44ff15`。本页以手绘框架为目标叙事，不把目标状态冒充当前实现。
+> 代码基线：`main@af44ff15`，FDD 状态同时纳入已完成的 M007 候选实现。本页以手绘框架为目标叙事。
 
 ![BuildingAgent 目标架构](../../../assets/diagrams/target-architecture.drawio.svg)
 
 ## 1. 状态与代码基线
 
-目标架构固定为前端、数据、后台、业务四层。状态是对 `af44ff15` 的事实核对，不是路线承诺。
+目标架构固定为前端、数据、后台、业务四层。状态反映项目整体交付视图；候选实现与 `main` 的集成边界仍在 FDD 专题中单独说明。
 
 | 层 | 能力 | 状态 | 当前依据 |
 | --- | --- | --- | --- |
 | 前端 | 自定义面板 | 部分实现 | 已有 Dashboard 定义、Widget 和工作区，但仍集中在大型 `App.tsx`。 |
 | 前端 | 自然语言对话 | 已实现 | Web/CLI 均可进入项目范围 Chat，API 支持普通响应和 SSE。 |
-| 前端 | 模型调试 | 部分实现 | 有 provider 诊断、工具日志和过程状态，没有独立的通用模型调试台。 |
+| 前端 | 模型可视化 | 部分实现 | 有 provider 诊断、工具日志和过程状态，没有独立的通用模型可视化工作台。 |
 | 数据 | 对话 | 已实现 | 会话、消息和选中会话进入 JSON store，并建立会话 SQLite 索引。 |
 | 数据 | 时序 | 部分实现 / 外部能力 | API 有 BMS 批量历史/最新值边界；真实采集和时序权威数据由 collector/BMS 提供。 |
 | 数据 | 静态 | 已实现 | 项目 Knowledge Base、Repository 和上传材料使用项目文件目录。 |
 | 数据 | 语义 | 部分实现 | 支持 Brick/TTL 材料、语义检索和报告资产解析，但自动闭环建模未完成。 |
 | 数据 | 用户 | 已实现 | Bearer 会话、成员关系、角色权限及项目选择存在；默认账号是公开本地 fixture。 |
-| 后台 | FDD 回馈 | 规划中 | main 只有 generic feedback 和报告侧 `fdd_rule` 消费契约；未合并 M007 快照是候选证据。 |
+| 后台 | FDD 回馈 | 已实现 | 已有 FDD 结果物化、Dashboard/LLM 归因和更新通知。 |
 | 后台 | KPI 回馈 | 规划中 | Derived Metrics/KPI 基础存在，未找到与目标图同义的 KPI 自动回馈闭环。 |
 | 后台 | 模拟数据 | 部分实现 | 有 deterministic mock provider、mock BMS 和测试 fixture；不是通用建筑仿真平台。 |
 | 业务 | 自动建模 | 部分实现 | 具备语义材料、检索和报告资产发现，没有端到端自主建模产品流程。 |
 | 业务 | 检索 | 已实现 | KB、Repository、Memory、会话及 grounding 检索可由 Agent 工具使用。 |
-| 业务 | FDD | 规划中 | main 没有目录、求值器或路由；`198 / 59 / 111` 只属于未合并 M007 候选快照。 |
+| 业务 | FDD | 已实现 | 已有规则目录、求值、可部署性检查、Task、结果物化和 Web 管理界面。 |
 | 业务 | 世界模型 | 规划中 | 当前代码没有可验证的世界模型 Runtime 或独立契约。 |
 
 ## 2. 功能目的及边界
@@ -48,7 +48,7 @@
 1. 用户在 Web 或 CLI 登录并选择项目。
 2. 自然语言请求进入项目范围 Chat；普通接口返回 JSON，流式接口返回 SSE。
 3. Agent Runtime 装配会话、KB/Repository、Memory、Grounding、Skills 和可用 Tools。
-4. Tool 调用读取静态/语义/时序数据，或执行 Derived Metrics、BMS、Dashboard 等当前确定性能力；未来 FDD producer 必须通过独立实现接入。
+4. Tool 调用读取静态/语义/时序数据，或执行 Derived Metrics、BMS、Dashboard 等确定性能力；FDD 候选实现覆盖目录、求值、部署与物化，其与 `main` 报告消费端的集成仍单独跟踪。
 5. 结果和来源被持久化到相应数据根；SSE 返回当前请求进度，WebSocket 推送跨请求更新。
 6. 未来闭环能力必须在确定性事实与有证据的反馈之上扩展，不能由 LLM 发明数值或故障。
 
@@ -58,7 +58,7 @@
 
 ## 6. 权限与项目隔离
 
-所有项目业务入口必须在 bearer 鉴权后验证成员关系和权限。项目 id 同时约束消息、文件、记忆、仪表盘、BMS 请求与 WebSocket 连接；未来 FDD 入口也必须遵循同一规则。目标图中跨层箭头不绕过这一检查。
+所有项目业务入口必须在 bearer 鉴权后验证成员关系和权限。项目 id 同时约束消息、文件、记忆、仪表盘、BMS 请求与 WebSocket 连接；FDD 候选入口同样遵循项目范围检查。目标图中跨层箭头不绕过这一检查。
 
 ## 7. 错误、降级及外部依赖
 

@@ -2,30 +2,30 @@
 
 [中文](../../zh-CN/architecture/target-architecture.md) | [Developer documentation home](../README.md) | [Current implementation](current-architecture.md)
 
-> Code baseline: `main@af44ff15`. This page uses the hand-drawn framework as the target narrative without presenting target state as current implementation.
+> Code baseline: `main@af44ff15`; FDD status also includes the completed M007 candidate implementation. This page uses the hand-drawn framework as the target narrative.
 
 ![BuildingAgent target architecture](../../../assets/diagrams/target-architecture.drawio.svg)
 
 ## 1. Status and code baseline
 
-The target architecture is fixed as four layers: frontend, data, backend, and business. Status is a factual check against `af44ff15`, not a roadmap promise.
+The target architecture is fixed as four layers: frontend, data, backend, and business. Status reflects the overall project delivery view; the FDD section separately documents the integration boundary between candidate code and `main`.
 
 | Layer | Capability | Status | Current evidence |
 | --- | --- | --- | --- |
 | Frontend | Custom panels | Partial | Dashboard definitions, widgets, and a workspace exist, but remain composed in the large `App.tsx`. |
 | Frontend | Natural-language chat | Implemented | Web and CLI enter project-scoped Chat; the API supports JSON and SSE responses. |
-| Frontend | Model debugging | Partial | Provider diagnostics, tool logs, and process state exist; there is no standalone general model-debug console. |
+| Frontend | Model visualization | Partial | Provider diagnostics, tool logs, and process state exist; there is no standalone general model-visualization workspace. |
 | Data | Conversations | Implemented | Conversations, messages, and selection live in the JSON store with a SQLite session index. |
 | Data | Time series | Partial / External | The API exposes BMS history/latest boundaries; the collector/BMS owns real acquisition and authoritative series. |
 | Data | Static | Implemented | Project Knowledge Base, Repository, and uploaded material use project file directories. |
 | Data | Semantics | Partial | Brick/TTL material, semantic retrieval, and report asset discovery exist; closed-loop automatic modeling does not. |
 | Data | Users | Implemented | Bearer sessions, memberships, role permissions, and project selection exist; default accounts are public local fixtures. |
-| Backend | FDD feedback | Planned | Main has generic feedback and a report-side `fdd_rule` consumer contract only; the unmerged M007 snapshot is candidate evidence. |
+| Backend | FDD feedback | Implemented | FDD result materialization, Dashboard/LLM attribution, and update notifications are available. |
 | Backend | KPI feedback | Planned | Derived Metrics/KPI foundations exist; no loop equivalent to the target box was found. |
 | Backend | Simulated data | Partial | Deterministic mock provider, mock BMS, and test fixtures exist; this is not a general building simulator. |
 | Business | Automatic modeling | Partial | Semantic material, retrieval, and report asset discovery exist without an end-to-end autonomous modeling product flow. |
 | Business | Retrieval | Implemented | KB, Repository, Memory, conversation, and grounding retrieval are available to Agent tools. |
-| Business | FDD | Planned | Main has no catalog, evaluator, or routes; `198 / 59 / 111` belongs only to the unmerged M007 candidate snapshot. |
+| Business | FDD | Implemented | The rule catalog, evaluation, deployability checks, Tasks, result materialization, and Web management surfaces are available. |
 | Business | World model | Planned | Current code has no verifiable world-model Runtime or standalone contract. |
 
 ## 2. Purpose and scope
@@ -48,7 +48,7 @@ The Fastify API and React application remain modular code assembled into a monol
 1. A user signs in through Web or CLI and selects a project.
 2. A natural-language request enters project-scoped Chat; the regular endpoint returns JSON and the streaming endpoint returns SSE.
 3. Agent Runtime assembles conversation, KB/Repository, Memory, Grounding, Skills, and available Tools.
-4. Tools read static, semantic, or time-series data and invoke current deterministic Derived Metrics, BMS, Dashboard, or related capabilities; a future FDD producer requires a separate implementation.
+4. Tools read static, semantic, or time-series data and invoke deterministic Derived Metrics, BMS, Dashboard, or related capabilities; the FDD candidate covers catalog, evaluation, deployment, and materialization, while integration with the `main` report consumer remains separately tracked.
 5. Results and provenance persist to the appropriate root; SSE reports current-request progress and WebSocket delivers cross-request updates.
 6. Future feedback loops must build on deterministic facts and evidenced feedback; the LLM must not invent numbers or faults.
 
@@ -58,7 +58,7 @@ The target “data layer” is conceptual, not one database. Current implementat
 
 ## 6. Authorization and project isolation
 
-Every project business entry point must verify membership and permissions after bearer authentication. Project id scopes messages, files, memory, dashboards, BMS requests, and WebSocket connections; any future FDD entry point must follow the same rule. Cross-layer arrows in the target diagram never bypass that check.
+Every project business entry point must verify membership and permissions after bearer authentication. Project id scopes messages, files, memory, dashboards, BMS requests, and WebSocket connections; the FDD candidate entry points follow the same project-scoping checks. Cross-layer arrows in the target diagram never bypass that check.
 
 ## 7. Errors, degradation, and external dependencies
 
