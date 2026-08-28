@@ -10,7 +10,7 @@
 
 BuildingAgent 是 npm workspaces 管理的 TypeScript 单仓库：`@building-agent/web` 是 React/Vite SPA，`@building-agent/api` 是 Fastify/Node 服务，`@building-agent/cli` 是 Node CLI。它们共享 API 契约行为，但没有独立的共享类型发布包。
 
-[server.ts](../../../../apps/api/src/server.ts) 同时装配鉴权、项目、Chat、WebSocket、BMS、FDD、Dashboard、Scheduler 等路由和服务；[App.tsx](../../../../apps/web/src/App.tsx) 同时装配登录、导航、工作区和多类功能 UI。两者是大型组合根，文档按责任域拆解只是阅读方式，不表示代码已经拆成微服务或微前端。
+[server.ts](../../../../apps/api/src/server.ts) 同时装配鉴权、项目、Chat、WebSocket、BMS、Dashboard、Scheduler 等路由和服务；[App.tsx](../../../../apps/web/src/App.tsx) 同时装配登录、导航、工作区和多类功能 UI。两者是大型组合根，文档按责任域拆解只是阅读方式，不表示代码已经拆成微服务或微前端。该 main 基线仅定义报告侧 `fdd_rule` 证据消费契约，没有 FDD producer、目录、求值器或路由。
 
 ## 2. 功能目的及边界
 
@@ -26,7 +26,8 @@ BuildingAgent 是 npm workspaces 管理的 TypeScript 单仓库：`@building-age
 | CLI | [apps/cli/src/index.ts](../../../../apps/cli/src/index.ts) | 保存本地连接/令牌配置后调用同一 API。 |
 | API | [apps/api/src/index.ts](../../../../apps/api/src/index.ts)、[server.ts](../../../../apps/api/src/server.ts) | 启动 Fastify 并装配全部路由。 |
 | Agent | [apps/api/src/agent/runtime.ts](../../../../apps/api/src/agent/runtime.ts) | 管理 provider 输出、工具调用、并行/循环限制与流事件。 |
-| 楼宇能力 | `apps/api/src/{bms*,fdd*,derivedMetrics*}` | BMS 桥接、FDD 目录/求值、派生指标。 |
+| 楼宇数据与指标 | `apps/api/src/bms*`、[derivedMetrics.ts](../../../../apps/api/src/derivedMetrics.ts) | BMS 桥接、时序读取和派生指标。 |
+| FDD | [reports/contracts.ts](../../../../apps/api/src/reports/contracts.ts)、[evidenceExecutor.ts](../../../../apps/api/src/reports/evidenceExecutor.ts) | main 为规划中：只具备报告 evidence-consumer 契约；未合并候选快照另见 [FDD 总览](../fdd/overview.md)。 |
 | 持久化 | [persistence.ts](../../../../apps/api/src/persistence.ts)、[knowledgeBase.ts](../../../../apps/api/src/agent/knowledgeBase.ts) | 分别解析 JSON store 和项目数据根。 |
 
 ## 4. 正常数据流
@@ -85,4 +86,3 @@ CLI 配置和浏览器状态不是服务端授权来源。服务端必须独立�
 - 前端部分 BMS client 方法没有对应 Fastify 路由；参阅[BMS 集成](../features/bms-integration.md)。
 - 仓库当前没有实际 GitHub Actions workflow；参阅[测试与验证](../development/testing.md)。
 - 事件细节见 [REST、SSE 与 WebSocket 契约](api-events.md)。
-

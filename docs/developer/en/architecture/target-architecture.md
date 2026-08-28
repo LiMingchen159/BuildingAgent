@@ -18,14 +18,14 @@ The target architecture is fixed as four layers: frontend, data, backend, and bu
 | Data | Conversations | Implemented | Conversations, messages, and selection live in the JSON store with a SQLite session index. |
 | Data | Time series | Partial / External | The API exposes BMS history/latest boundaries; the collector/BMS owns real acquisition and authoritative series. |
 | Data | Static | Implemented | Project Knowledge Base, Repository, and uploaded material use project file directories. |
-| Data | Semantics | Partial | Brick/TTL material, semantic retrieval, and FDD point evidence exist; closed-loop automatic modeling does not. |
+| Data | Semantics | Partial | Brick/TTL material, semantic retrieval, and report asset discovery exist; closed-loop automatic modeling does not. |
 | Data | Users | Implemented | Bearer sessions, memberships, role permissions, and project selection exist; default accounts are public local fixtures. |
-| Backend | FDD feedback | Partial | Feedback, attribution, grounding rules, and FDD result paths exist, but not a complete self-learning loop. |
+| Backend | FDD feedback | Planned | Main has generic feedback and a report-side `fdd_rule` consumer contract only; the unmerged M007 snapshot is candidate evidence. |
 | Backend | KPI feedback | Planned | Derived Metrics/KPI foundations exist; no loop equivalent to the target box was found. |
 | Backend | Simulated data | Partial | Deterministic mock provider, mock BMS, and test fixtures exist; this is not a general building simulator. |
-| Business | Automatic modeling | Partial | Semantic material, point candidates, and deployment assistance exist without an end-to-end autonomous modeling product flow. |
+| Business | Automatic modeling | Partial | Semantic material, retrieval, and report asset discovery exist without an end-to-end autonomous modeling product flow. |
 | Business | Retrieval | Implemented | KB, Repository, Memory, conversation, and grounding retrieval are available to Agent tools. |
-| Business | FDD | Partial | The algorithm catalog is broader than executable Runtime; semantic points and evidence are still checked before deployment. |
+| Business | FDD | Planned | Main has no catalog, evaluator, or routes; `198 / 59 / 111` belongs only to the unmerged M007 candidate snapshot. |
 | Business | World model | Planned | Current code has no verifiable world-model Runtime or standalone contract. |
 
 ## 2. Purpose and scope
@@ -48,7 +48,7 @@ The Fastify API and React application remain modular code assembled into a monol
 1. A user signs in through Web or CLI and selects a project.
 2. A natural-language request enters project-scoped Chat; the regular endpoint returns JSON and the streaming endpoint returns SSE.
 3. Agent Runtime assembles conversation, KB/Repository, Memory, Grounding, Skills, and available Tools.
-4. Tools read static, semantic, or time-series data and invoke deterministic Derived Metrics, BMS, FDD, Dashboard, or related capabilities.
+4. Tools read static, semantic, or time-series data and invoke current deterministic Derived Metrics, BMS, Dashboard, or related capabilities; a future FDD producer requires a separate implementation.
 5. Results and provenance persist to the appropriate root; SSE reports current-request progress and WebSocket delivers cross-request updates.
 6. Future feedback loops must build on deterministic facts and evidenced feedback; the LLM must not invent numbers or faults.
 
@@ -58,7 +58,7 @@ The target “data layer” is conceptual, not one database. Current implementat
 
 ## 6. Authorization and project isolation
 
-Every project business entry point must verify membership and permissions after bearer authentication. Project id scopes messages, files, memory, dashboards, FDD/BMS requests, and WebSocket connections. Cross-layer arrows in the target diagram never bypass that check.
+Every project business entry point must verify membership and permissions after bearer authentication. Project id scopes messages, files, memory, dashboards, BMS requests, and WebSocket connections; any future FDD entry point must follow the same rule. Cross-layer arrows in the target diagram never bypass that check.
 
 ## 7. Errors, degradation, and external dependencies
 

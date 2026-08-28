@@ -34,7 +34,7 @@
         <mxCell id="context-agent-resources" value="&lt;b&gt;KB · Repository · Memory&lt;br&gt;Grounding · Tools · Skills&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="455" y="505" width="275" height="100" as="geometry"/>
         </mxCell>
-        <mxCell id="context-building-domains" value="&lt;b&gt;BMS · FDD · Derived Metrics · KPI&lt;/b&gt;&lt;br&gt;楼宇数据与分析 / Building data and analytics&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="context-building-domains" value="&lt;b&gt;BMS · Derived Metrics · KPI&lt;/b&gt;&lt;br&gt;楼宇数据与分析 / Building data and analytics&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;FDD producer: 规划中 / Planned on main&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="800" y="505" width="275" height="100" as="geometry"/>
         </mxCell>
         <mxCell id="context-external-bg" value="&lt;b&gt;外部系统 / External systems&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#dbeafe;strokeColor=#3b82f6;fontSize=17;fontStyle=1;" vertex="1" parent="1">
