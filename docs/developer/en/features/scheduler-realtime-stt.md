@@ -121,7 +121,7 @@ Run source tests under an isolated data root:
 
 ```bash
 npm --workspace @building-agent/api exec -- vitest run --dir src
-npm --workspace @building-agent/web exec -- vitest run --dir src
+npm --workspace @building-agent/web exec -- vitest run
 ```
 
 ## 10. Known limitations and related documentation

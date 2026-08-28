@@ -121,7 +121,7 @@ STT 扩展应把 provider 抽成显式 adapter，验证真实音频格式而不�
 
 ```bash
 npm --workspace @building-agent/api exec -- vitest run --dir src
-npm --workspace @building-agent/web exec -- vitest run --dir src
+npm --workspace @building-agent/web exec -- vitest run
 ```
 
 ## 10. 已知限制及关联文档

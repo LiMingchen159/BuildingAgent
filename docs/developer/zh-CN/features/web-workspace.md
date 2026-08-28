@@ -83,7 +83,7 @@ Web 工作区把“用户是谁、正在操作哪个项目、当前打开哪个�
 推荐在仓库根运行：
 
 ```bash
-npm --workspace @building-agent/web exec -- vitest run --dir src
+npm --workspace @building-agent/web exec -- vitest run
 ```
 
 ## 10. 已知限制及关联文档

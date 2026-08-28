@@ -113,10 +113,10 @@ Configuration-schema changes must continue rejecting non-string values for known
 - [`config.test.ts`](../../../../apps/cli/src/config.test.ts): isolated home, read/write, shape validation, error diagnostics, and token redaction.
 - [`registry.test.ts`](../../../../apps/cli/src/registry.test.ts): registry/management placeholder shapes, auth requirements, and malformed-payload fail-closed behavior.
 
-There are 9 CLI tests under `src`. The uniform source-only command is:
+There are 9 CLI tests under `src`. To prevent test files from contending for shared SQLite state, the stable reproduction command used for this milestone is:
 
 ```bash
-npm --workspace @building-agent/cli exec -- vitest run --dir src
+npm --workspace @building-agent/cli exec -- vitest run --dir src --no-file-parallelism
 ```
 
 See [Testing and verification](../development/testing.md) for final milestone results. CLI tests start an API test server and write configuration under a temporary directory; new tests must preserve that isolation and never touch real user configuration.
