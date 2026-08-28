@@ -7,73 +7,81 @@ hide:
 
 <div class="ba-hero" markdown>
 
-<span class="ba-eyebrow">BUILDING OPERATIONS · AGENT RUNTIME · FDD</span>
+<span class="ba-eyebrow">BUILDING INTELLIGENCE · AGENT RUNTIME · FDD</span>
 
-# BuildingAgent Developer Documentation
+# BuildingAgent
 
-Architecture, runtime boundaries, feature guides, FDD traceability, and verified development workflows in Chinese and English.
+A source-linked technical handbook for the platform that connects natural-language workflows, building data, deterministic analytics, and fault detection.
 
-面向 BuildingAgent 的双语开发者文档：架构、运行时边界、功能指南、FDD 溯源与经过核验的开发流程。
+面向 BuildingAgent 实现者的技术手册：从自然语言工作流到楼宇数据、确定性分析与故障检测，每项说明都回到代码与验证证据。
 
 [进入中文文档](developer/zh-CN/README.md){ .md-button .md-button--primary }
 [Read in English](developer/en/README.md){ .md-button }
 
+<div class="ba-hero__meta">
+  <span><strong>4</strong> architecture layers</span>
+  <span><strong>2</strong> mirrored editions</span>
+  <span><strong>Draw.io</strong> editable diagrams</span>
+  <span><strong>Source</strong> linked evidence</span>
 </div>
 
-<div class="grid cards ba-card-grid" markdown>
+</div>
 
--   :material-sitemap:{ .lg .middle } **Architecture / 架构**
+<div class="ba-section-intro">
+  <div><span class="ba-kicker">START WITH AN OUTCOME</span></div>
+  <div>
+    <h2>Choose a path / 按目标阅读</h2>
+    <p>Skip the document tree. Begin with the task you need to complete, then follow the linked implementation boundary.</p>
+  </div>
+</div>
 
-    ---
+<div class="grid cards ba-route-grid" markdown>
 
-    Compare the target architecture with the current implementation, runtime, storage, and event contracts.
+-   :material-sitemap:{ .lg .middle } **Understand the system / 理解系统**
 
-    对照目标架构、当前实现、运行时、存储以及事件契约。
+    Target architecture, current implementation, runtime, storage, and event contracts.
 
     [中文](developer/zh-CN/architecture/target-architecture.md) · [English](developer/en/architecture/target-architecture.md)
 
--   :material-robot-outline:{ .lg .middle } **Features / 功能**
+-   :material-console-line:{ .lg .middle } **Run it locally / 本地运行**
 
-    ---
-
-    Follow Web, Chat, Agent Runtime, tools, knowledge, BMS, analytics, dashboards, scheduling, and CLI flows.
-
-    阅读 Web、Chat、Agent Runtime、工具、知识、BMS、分析、仪表盘、调度与 CLI 链路。
-
-    [中文](developer/zh-CN/features/chat-agent-runtime.md) · [English](developer/en/features/chat-agent-runtime.md)
-
--   :material-alert-decagram-outline:{ .lg .middle } **FDD**
-
-    ---
-
-    Separate product-main contracts from unmerged candidate catalogs, deployability checks, runtime, and verification evidence.
-
-    区分产品主线契约与未合并候选目录、可部署性检查、运行时和验证证据。
-
-    [中文](developer/zh-CN/fdd/overview.md) · [English](developer/en/fdd/overview.md)
-
--   :material-hammer-wrench:{ .lg .middle } **Development / 开发**
-
-    ---
-
-    Configure a local environment, run the verified test commands, and diagnose known contract gaps safely.
-
-    配置本地环境、执行已验证的测试命令，并安全排查已知契约差距。
+    Configuration, verified commands, regression boundaries, and troubleshooting.
 
     [中文](developer/zh-CN/development/configuration.md) · [English](developer/en/development/configuration.md)
 
+-   :material-robot-outline:{ .lg .middle } **Extend the Agent / 扩展 Agent**
+
+    Chat Runtime, tools, skills, memory, grounding, Knowledge Base, and Repository.
+
+    [中文](developer/zh-CN/features/chat-agent-runtime.md) · [English](developer/en/features/chat-agent-runtime.md)
+
+-   :material-alert-decagram-outline:{ .lg .middle } **Implement FDD / 实施 FDD**
+
+    Rule sources, Brick deployability, runtime materialization, and verification evidence.
+
+    [中文](developer/zh-CN/fdd/overview.md) · [English](developer/en/fdd/overview.md)
+
 </div>
 
-## System at a glance / 系统一览
+<div class="ba-trust-strip">
+  <span>中英结构镜像</span>
+  <span>Current vs target separated</span>
+  <span>接口差距显式标注</span>
+  <span>Verification is reproducible</span>
+</div>
+
+<div class="ba-diagram-heading">
+  <h2>System at a glance / 系统一览</h2>
+  <p>The target narrative and implementation status share one editable architecture map.</p>
+</div>
 
 ![BuildingAgent target architecture](assets/diagrams/target-architecture.drawio.svg)
 
-The diagram is shared by both language editions. Its editable [Draw.io source](assets/diagrams/target-architecture.drawio) is versioned alongside the SVG export.
+The diagram is shared by both language editions. Open the [target architecture guide](developer/zh-CN/architecture/target-architecture.md) or inspect the editable [Draw.io source](assets/diagrams/target-architecture.drawio).
 
-中英文版本共用这张架构图；可编辑的 [Draw.io 源文件](assets/diagrams/target-architecture.drawio) 与 SVG 导出物一同纳入版本管理。
-
-!!! info "Status labels / 状态标签"
-
-    Every architecture and feature page distinguishes **Implemented**, **Partial**, **Planned**, and **External** capabilities. The target architecture is the main narrative, while the current-implementation pages remain the product truth.
-
-    每篇架构和功能文档都会区分**已实现、部分实现、规划中、外部能力**。目标架构负责主叙事，当前实现页面负责校正产品事实。
+<div class="ba-status-strip">
+  <span class="is-implemented">已实现 / Implemented</span>
+  <span class="is-partial">部分实现 / Partial</span>
+  <span class="is-planned">规划中 / Planned</span>
+  <span class="is-external">外部能力 / External</span>
+</div>
