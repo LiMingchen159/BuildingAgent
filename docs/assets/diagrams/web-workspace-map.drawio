@@ -1,0 +1,122 @@
+<mxfile host="Electron" version="31.1.8">
+  <diagram id="web-workspace-map" name="Web Workspace Map">
+    <mxGraphModel dx="1800" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="webmap-title" value="&lt;b&gt;Web 工作区地图 / Web Workspace Map&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;当前 React/Vite 组合根、导航与三栏界面 / Current React/Vite composition root, navigation, and three-column surface&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=24;fontColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="250" y="20" width="1300" height="65" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="webmap-login" value="&lt;b&gt;登录与 session 恢复&lt;br&gt;Login and session restore&lt;/b&gt;&lt;br&gt;token + user + selected project&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="230" y="120" width="300" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-project" value="&lt;b&gt;项目选择与 URL 恢复&lt;br&gt;Project picker and URL restore&lt;/b&gt;&lt;br&gt;selection/restore: Implemented&lt;br&gt;chrome/metrics: mock or non-persistent&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="750" y="120" width="300" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-route" value="&lt;b&gt;/projects/:projectId/:section&lt;/b&gt;&lt;br&gt;Dashboard supports :dashboardId and ?view=solo&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1270" y="120" width="300" height="105" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="webmap-shell" value="&lt;b&gt;React/Vite Web 工作区 / React/Vite Web workspace&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;App.tsx 是大型组合根，不是微前端 / App.tsx is a large composition root, not micro-frontends&lt;/font&gt;" style="swimlane;html=1;rounded=1;startSize=58;horizontal=1;fillColor=#f8f9fa;strokeColor=#6b7280;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="45" y="285" width="1710" height="570" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="webmap-left-bg" value="&lt;b&gt;左侧项目栏 / Left project sidebar&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="75" y="375" width="350" height="425" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-left-project" value="&lt;b&gt;项目切换、新对话、最近对话&lt;br&gt;Project switch, new/recent chats&lt;/b&gt;&lt;br&gt;rename · delete · select&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="105" y="445" width="290" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-left-assets" value="&lt;b&gt;资产快捷入口 / Asset shortcuts&lt;/b&gt;&lt;br&gt;BMS (Partial) · KB / Repo (Implemented)&lt;br&gt;Auto Report (Partial)&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;混合状态 / Mixed status&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="105" y="585" width="290" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-left-account" value="&lt;b&gt;账户菜单 / Account menu&lt;/b&gt;&lt;br&gt;local sign-out only; token not revoked&lt;br&gt;API key / Base URL / Model / Settings: UI only&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="105" y="720" width="290" height="65" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="webmap-center-bg" value="&lt;b&gt;中央工作区 / Center workspace&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;URL 可寻址功能面；无可见 tab 栏 / URL-addressable surfaces; no rendered tab bar&lt;/font&gt;" style="swimlane;html=1;rounded=1;startSize=55;horizontal=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="455" y="375" width="870" height="425" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-center-chat" value="&lt;b&gt;Chat&lt;/b&gt;&lt;br&gt;SSE activity, tools, artifacts, stop&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="490" y="465" width="245" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-center-kb" value="&lt;b&gt;Knowledge Base + Repository&lt;/b&gt;&lt;br&gt;project documents and artifacts&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="765" y="465" width="245" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-center-dashboard" value="&lt;b&gt;Dashboards&lt;/b&gt;&lt;br&gt;edit · layout · bindings · solo view&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="465" width="245" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-center-bms" value="&lt;b&gt;BMS Data Config&lt;/b&gt;&lt;br&gt;implemented reads + known route gaps&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="490" y="605" width="245" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-center-report" value="&lt;b&gt;Auto Report&lt;/b&gt;&lt;br&gt;dashboard-based Web workflow; server-kernel gap&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="765" y="605" width="245" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-center-platform" value="&lt;b&gt;Registry · Gateways · Building&lt;/b&gt;&lt;br&gt;placeholderOnly inventories&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="605" width="245" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-center-note" value="浮动按钮折叠左右栏；打开 Dashboard 时左栏自动收起&lt;br&gt;Floating controls collapse sidebars; opening a Dashboard collapses the left sidebar" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#7a5b00;" vertex="1" parent="1">
+          <mxGeometry x="570" y="730" width="640" height="45" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="webmap-right-bg" value="&lt;b&gt;右侧资产面板 / Right asset panel&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1355" y="375" width="370" height="425" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-right-tasks" value="&lt;b&gt;Scheduled / rule tasks&lt;/b&gt;&lt;br&gt;hard-coded cards and countdown&lt;br&gt;&lt;font color=&quot;#555555&quot;&gt;规划中 / Planned backend binding&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1390" y="445" width="300" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-right-skills" value="&lt;b&gt;Skills + Tools&lt;/b&gt;&lt;br&gt;static cards mixed with registry counts&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1390" y="565" width="300" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-right-dashboards" value="&lt;b&gt;Dashboard assets&lt;/b&gt;&lt;br&gt;open · rename · duplicate · merge · delete&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1390" y="685" width="300" height="85" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="webmap-browser-state" value="&lt;b&gt;浏览器状态 / Browser state&lt;/b&gt;&lt;br&gt;localStorage session · sessionStorage flag · History API&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;已实现，含本地 token 风险 / Implemented, local-token risk&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="895" width="370" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-app-root" value="&lt;b&gt;App.tsx orchestration&lt;/b&gt;&lt;br&gt;fetch/state/routing/SSE/WS/dashboard mutation&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;已实现；大型组合根 / Implemented; large composition root&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="450" y="895" width="370" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-api" value="&lt;b&gt;Fastify 产品接口 / Fastify product surface&lt;/b&gt;&lt;br&gt;REST/SSE/WS core · login + authenticated calls&lt;br&gt;project guards vary · Reports API planned&lt;br&gt;&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="840" y="895" width="420" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-external" value="&lt;b&gt;外部 provider 与现场系统&lt;br&gt;External providers and field systems&lt;/b&gt;&lt;br&gt;LLM · STT · BMS collector · gateways&lt;br&gt;&lt;font color=&quot;#245b8a&quot;&gt;外部能力 / External&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="895" width="460" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-legend" value="&lt;b&gt;状态 / Status&lt;/b&gt;　&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;　&lt;font color=&quot;#7a5b00&quot;&gt;部分实现 / Partial&lt;/font&gt;　&lt;font color=&quot;#555555&quot;&gt;规划中 / Planned&lt;/font&gt;　&lt;font color=&quot;#245b8a&quot;&gt;外部能力 / External&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9ca3af;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="440" y="1010" width="920" height="50" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="webmap-edge-login-project" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#82b366;" edge="1" parent="1" source="webmap-login" target="webmap-project">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-project-route" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#82b366;" edge="1" parent="1" source="webmap-project" target="webmap-route">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-route-shell" value="restore / navigate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#82b366;fontSize=10;" edge="1" parent="1" source="webmap-route" target="webmap-shell">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-left-center" value="shortcut / conversation" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;fontSize=10;" edge="1" parent="1" source="webmap-left-assets" target="webmap-center-bg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-right-center" value="open asset" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;fontSize=10;" edge="1" parent="1" source="webmap-right-dashboards" target="webmap-center-dashboard">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-browser-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeColor=#d6b656;" edge="1" parent="1" source="webmap-browser-state" target="webmap-app-root">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-app-api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeColor=#d6b656;fontSize=10;" edge="1" parent="1" source="webmap-app-root" target="webmap-api">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-api-external" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeColor=#6c8ebf;fontSize=10;" edge="1" parent="1" source="webmap-api" target="webmap-external">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="webmap-edge-shell-app" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;startArrow=block;strokeColor=#d6b656;" edge="1" parent="1" source="webmap-shell" target="webmap-app-root">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
