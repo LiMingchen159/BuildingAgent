@@ -76,6 +76,17 @@ For `M008 - Generic recurring building performance reports`, issue branches may 
 
 This permission is scoped to M008 report work; it is not permission for unrelated cleanup or refactoring.
 
+For `M011: Bilingual developer documentation`, issue branches may update only:
+
+- `AGENTS.md` in M011-S1, solely to establish this documentation authorization
+- `README.md`
+- `docs/developer/**`
+- `docs/assets/diagrams/**`
+
+M011 may document and diagram the current implementation, target architecture, interfaces, test baseline, and known gaps. It must not modify business code, REST/SSE/WebSocket contracts, data structures, TypeScript types, dependencies, CI, deployment configuration, fixtures, or secrets. The Chinese and English documentation trees must remain structurally mirrored, and editable Draw.io sources must be committed with their SVG exports.
+
+M011 documentation commits may use an issue-appropriate conventional scope such as `docs(navigation)`, `docs(architecture)`, `docs(agent)`, `docs(fdd)`, or `docs(validation)`. This is an exception to any workflow-maintenance commit wording and does not authorize non-documentation changes.
+
 The active authorization for this branch is:
 
 - Milestone: `M008 - Generic recurring building performance reports`
@@ -108,6 +119,8 @@ Workflow-only changes may update only:
 - `.github/ISSUE_TEMPLATE/feature_request.md`
 - `.github/ISSUE_TEMPLATE/bug_report.md`
 - `scripts/setup-github-labels.sh`
+
+The explicitly authorized M011 documentation paths above are documentation deliverables, not workflow-only maintenance. They do not expand the workflow-only file list for other milestones.
 
 The labels script should create only these core labels:
 
