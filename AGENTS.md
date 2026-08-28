@@ -87,6 +87,27 @@ M011 may document and diagram the current implementation, target architecture, i
 
 M011 documentation commits may use an issue-appropriate conventional scope such as `docs(navigation)`, `docs(architecture)`, `docs(agent)`, `docs(fdd)`, or `docs(validation)`. This is an exception to any workflow-maintenance commit wording and does not authorize non-documentation changes.
 
+For `M012: Developer documentation site`, issue branches may update only the
+paths required by their explicitly planned slice under:
+
+- `AGENTS.md` in M012-S1, solely to establish this site authorization
+- `README.md`
+- `.gitignore`
+- `mkdocs.yml`
+- `requirements-docs.txt`
+- `docs/**`
+- `scripts/docs/**`
+- `.github/workflows/docs-pages.yml`
+
+M012 may configure a documentation-only Python toolchain, build the existing
+Chinese and English Markdown trees as a static site, add deterministic
+documentation link handling, and publish the generated artifact through GitHub
+Pages. It must not modify `apps/**`, runtime npm dependencies, application
+code, REST/SSE/WebSocket contracts, schemas, fixtures, secrets, customer data,
+or unrelated CI and deployment configuration. Generated site output must not
+be committed. M012 changes must remain scoped to one issue, one branch, and one
+PR per slice.
+
 The active authorization for this branch is:
 
 - Milestone: `M008 - Generic recurring building performance reports`
