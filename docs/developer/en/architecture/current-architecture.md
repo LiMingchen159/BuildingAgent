@@ -10,7 +10,7 @@
 
 BuildingAgent is a TypeScript monorepo managed by npm workspaces: `@building-agent/web` is a React/Vite SPA, `@building-agent/api` is a Fastify/Node service, and `@building-agent/cli` is a Node CLI. They agree on API behavior without publishing a separate shared-contract package.
 
-[server.ts](../../../../apps/api/src/server.ts) assembles authentication, projects, Chat, WebSocket, BMS, FDD, Dashboard, Scheduler, and other routes/services. [App.tsx](../../../../apps/web/src/App.tsx) assembles sign-in, navigation, workspace, and many feature UIs. They are large composition roots. Responsibility-oriented documentation is a reading model, not evidence of microservices or micro-frontends.
+[server.ts](../../../../apps/api/src/server.ts) assembles authentication, projects, Chat, WebSocket, BMS, Dashboard, Scheduler, and other routes/services. [App.tsx](../../../../apps/web/src/App.tsx) assembles sign-in, navigation, workspace, and many feature UIs. They are large composition roots. Responsibility-oriented documentation is a reading model, not evidence of microservices or micro-frontends. This main baseline defines only the report-side `fdd_rule` evidence-consumer contract; it has no FDD producer, catalog, evaluator, or routes.
 
 ## 2. Purpose and scope
 
@@ -26,7 +26,8 @@ Diagram boundaries are not deployment guarantees. Except for external systems, m
 | CLI | [apps/cli/src/index.ts](../../../../apps/cli/src/index.ts) | Calls the same API after saving local connection/token config. |
 | API | [apps/api/src/index.ts](../../../../apps/api/src/index.ts), [server.ts](../../../../apps/api/src/server.ts) | Starts Fastify and assembles all routes. |
 | Agent | [apps/api/src/agent/runtime.ts](../../../../apps/api/src/agent/runtime.ts) | Manages provider output, tool calls, parallel/loop limits, and stream events. |
-| Building domain | `apps/api/src/{bms*,fdd*,derivedMetrics*}` | BMS bridge, FDD catalog/evaluation, and derived metrics. |
+| Building data and metrics | `apps/api/src/bms*`, [derivedMetrics.ts](../../../../apps/api/src/derivedMetrics.ts) | BMS bridge, time-series reads, and derived metrics. |
+| FDD | [reports/contracts.ts](../../../../apps/api/src/reports/contracts.ts), [evidenceExecutor.ts](../../../../apps/api/src/reports/evidenceExecutor.ts) | Planned on main: report evidence-consumer contract only; see [FDD overview](../fdd/overview.md) for the unmerged candidate snapshot. |
 | Persistence | [persistence.ts](../../../../apps/api/src/persistence.ts), [knowledgeBase.ts](../../../../apps/api/src/agent/knowledgeBase.ts) | Resolve the JSON store and project data root respectively. |
 
 ## 4. Normal data flow
@@ -85,4 +86,3 @@ Within the current monolith, place implementation in a clear domain module and r
 - Some frontend BMS client methods lack matching Fastify routes; see [BMS integration](../features/bms-integration.md).
 - The repository has no actual GitHub Actions workflow; see [testing and verification](../development/testing.md).
 - Event details are in [REST, SSE, and WebSocket contracts](api-events.md).
-
