@@ -113,10 +113,10 @@ CLI 不应允许 project id、token 或 API URL 从不受信输出拼接进 shel
 - [`config.test.ts`](../../../../apps/cli/src/config.test.ts)：隔离 home、读写、结构校验、错误诊断与 token 脱敏。
 - [`registry.test.ts`](../../../../apps/cli/src/registry.test.ts)：registry/management 占位 shape、认证要求与 malformed payload 失败关闭。
 
-源码目录共有 9 项 CLI 测试。统一的 source-only 命令是：
+源码目录共有 9 项 CLI 测试。为避免测试文件争用共享 SQLite，本次采用的稳定复现命令是：
 
 ```bash
-npm --workspace @building-agent/cli exec -- vitest run --dir src
+npm --workspace @building-agent/cli exec -- vitest run --dir src --no-file-parallelism
 ```
 
 最终里程碑结果见[测试与验证](../development/testing.md)。CLI 测试会启动 API test server，并把配置写入临时目录；新增测试也应保持这一隔离，不能触碰真实用户配置。

@@ -83,7 +83,7 @@ Put substantial features in dedicated `apps/web/src/ui/` components, keep `App.t
 Recommended from the repository root:
 
 ```bash
-npm --workspace @building-agent/web exec -- vitest run --dir src
+npm --workspace @building-agent/web exec -- vitest run
 ```
 
 ## 10. Known limitations and related documentation

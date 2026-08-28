@@ -41,7 +41,11 @@ The API runs on `http://127.0.0.1:3000` by default. The Web app runs through Vit
 
 ### Chat provider configuration
 
-Project chat works without any external credentials. When no provider credentials are configured, or when the provider is explicitly set to `mock`, the API uses a deterministic local mock provider. That default path is what the local smoke and verification commands use.
+Project chat does not silently select a mock merely because credentials are absent. For deterministic, no-secret local development, select the mock explicitly:
+
+```bash
+BUILDING_AGENT_LLM_PROVIDER=mock npm run dev:api
+```
 
 Configure a real OpenAI-compatible provider only in environments that already have provider credentials available:
 
@@ -54,9 +58,11 @@ BUILDING_AGENT_LLM_MODEL=<provider-model>
 
 `BUILDING_AGENT_LLM_PROVIDER` accepts `mock` or `openai-compatible`. `BUILDING_AGENT_LLM_BASE_URL` defaults to the OpenAI-compatible API base URL when omitted, and `BUILDING_AGENT_LLM_MODEL` defaults to the built-in chat model name when omitted. The `BUILDING_AGENT_LLM_*` names are preferred for new configuration; legacy OpenAI-compatible env names remain supported for local compatibility.
 
-Provider failure semantics are explicit:
+Provider selection and failure semantics are explicit:
 
-- No credentials, or `BUILDING_AGENT_LLM_PROVIDER=mock`: chat succeeds through the deterministic mock provider with `fallbackUsed: true` and `fallbackReason: "local_default"`.
+- `BUILDING_AGENT_LLM_PROVIDER=mock`: chat succeeds through the deterministic mock provider with `fallbackUsed: true` and `fallbackReason: "local_default"`.
+- No usable API key with fallback disabled or unset: chat returns the canonical `provider_error` envelope; the underlying provider state is `provider_not_configured`.
+- No usable API key with `BUILDING_AGENT_LLM_ALLOW_FALLBACK=true`: chat falls back to the deterministic mock after the configuration error, with a non-secret fallback reason such as `provider_not_configured`.
 - Real provider configured and healthy: chat uses the configured provider with `mode: "real"` and `fallbackUsed: false`.
 - Real provider configured and failing: chat returns the canonical API error envelope by default.
 - Real provider configured and failing with `BUILDING_AGENT_LLM_ALLOW_FALLBACK=true`: chat falls back to the deterministic mock provider and includes a non-secret `fallbackReason` such as `provider_request_failed`.
@@ -97,40 +103,34 @@ BUILDING_AGENT_CLI_HOME=/tmp/building-agent-cli \
 
 CLI output is JSON and includes backend `requestId` values where the API provides them. Chat command output also includes the redaction-safe provider diagnostics described above. Saved bearer tokens are redacted from command output and should not be copied into logs or documentation.
 
-To prove the local API, Web UI proxy, CLI, and default no-secret chat provider agree on the same seeded contracts, run:
+To exercise the local API, Web UI proxy, CLI, and deterministic no-secret chat path, select the mock explicitly:
 
 ```bash
-npm run smoke
+BUILDING_AGENT_LLM_PROVIDER=mock npm run smoke
 ```
 
-The smoke runner builds all workspaces, probes or starts the API and Web dev servers, invokes the CLI through the workspace-linked built entrypoint, performs login → session → project selection → registry → management → chat checks, and cleans up child processes and the temporary CLI config directory on success, failure, or timeout. Its logs are prefixed with `[smoke]` stage markers plus child process exit codes so startup, reachability, CLI, provider fallback, and cleanup failures are easy to localize without printing auth material.
+The smoke runner inherits provider environment variables; it does not set mock mode itself. It builds all workspaces, probes or starts the API and Web dev servers, invokes the CLI through the workspace-linked built entrypoint, performs login → session → project selection → registry → management → chat checks, and cleans up child processes and the temporary CLI config directory on success, failure, or timeout. Its assertions specifically expect `deterministic-mock` with `fallbackReason: "local_default"`, so it is not a real-provider smoke test. On the documented baseline, the flow reaches a successful Chat response but the runner then fails because it expects the mock answer to echo the input while the mock returns a fixed unavailable message. Treat this command as a known-gap reproducer until that contract is fixed. Logs are prefixed with `[smoke]` stage markers plus child process exit codes without printing auth material.
 
 ## Verification commands
 
-Default verification never requires provider credentials and must be run from the repository root:
+Run the source-directed regression from a clean worktree at the repository root:
 
 ```bash
-npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts
-npm test -- --run apps/web/src/App.test.tsx apps/cli/src/commands.test.ts
+npm --workspace @building-agent/api exec -- vitest run --dir src
+npm --workspace @building-agent/cli exec -- vitest run --dir src --no-file-parallelism
+npm --workspace @building-agent/web exec -- vitest run
 npm run typecheck
 npm run build
-npm run smoke
 ```
 
-The same focused local gate can also be run as one command:
+Using `--dir src` prevents API/CLI Vitest from collecting local `dist.pre*` backup trees; CLI file parallelism is disabled because its files share SQLite state. Web already limits discovery through Vite's `src/**/*.test.*` include, and adding `--dir src` from the Web workspace currently collects zero tests. The Web tests mock `fetch` only at the network boundary so the React flow still exercises the real API client, guarded screens, error banners, selected-project chat routing, assistant replies, and provider diagnostics.
+
+The current API and CLI suites retain documented failures, and the explicit-mock smoke retains the final text-assertion failure described above. Reproduce smoke separately with:
 
 ```bash
-npm test -- --run apps/api/src/chat.test.ts apps/api/src/providers.test.ts apps/web/src/App.test.tsx apps/cli/src/commands.test.ts && npm run typecheck && npm run build && npm run smoke
+BUILDING_AGENT_LLM_PROVIDER=mock npm run smoke
 ```
 
-The Web tests mock `fetch` only at the network boundary so the React flow still exercises the real API client, guarded screens, error banners, selected-project chat routing, assistant replies, and provider diagnostics.
+See the bilingual [testing guide](docs/developer/en/development/testing.md) for exact counts, fixture cautions, and the complete failing-test names.
 
-If real provider env vars are already available in your shell, you may run an optional manual smoke against that provider. This is not required for the default local verification, and examples must use placeholders rather than real credentials.
-
-```bash
-BUILDING_AGENT_LLM_PROVIDER=openai-compatible \
-BUILDING_AGENT_LLM_BASE_URL=https://provider.example/v1 \
-BUILDING_AGENT_LLM_API_KEY=<provider-api-key> \
-BUILDING_AGENT_LLM_MODEL=<provider-model> \
-npm run smoke
-```
+Validate a real provider manually through Web or CLI Chat instead; `npm run smoke` intentionally asserts the mock provider contract. Never put provider credentials or raw upstream error bodies in the command transcript.
