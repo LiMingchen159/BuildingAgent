@@ -7,6 +7,7 @@ BuildingAgent is a TypeScript/npm-workspaces platform for project-scoped buildin
 - [中文开发者文档](docs/developer/zh-CN/README.md)
 - [English developer documentation](docs/developer/en/README.md)
 - [Language selector / 语言选择](docs/developer/README.md)
+- [Published documentation / 在线文档](https://limingchen.world/BuildingAgent/)
 
 ### Documentation website
 
