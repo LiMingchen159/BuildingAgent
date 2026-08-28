@@ -22,11 +22,13 @@ build/
 __pycache__/
 *.pyc
 .venv/
+.venv-docs/
 venv/
 target/
 vendor/
 *.log
 coverage/
+/site/
 .cache/
 tmp/
 .temp/

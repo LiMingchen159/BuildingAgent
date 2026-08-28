@@ -8,6 +8,35 @@ BuildingAgent is a TypeScript/npm-workspaces platform for project-scoped buildin
 - [English developer documentation](docs/developer/en/README.md)
 - [Language selector / 语言选择](docs/developer/README.md)
 
+### Documentation website
+
+The bilingual documentation is also configured as a Material for MkDocs site.
+Install its isolated Python dependencies and start a local preview without
+changing the application workspaces:
+
+```bash
+python3 -m venv .venv-docs
+source .venv-docs/bin/activate
+python -m pip install -r requirements-docs.txt
+mkdocs serve
+```
+
+Before publishing documentation, run the link-hook tests and the same strict,
+clean build used by the documentation workflow:
+
+```bash
+python -m unittest discover -s scripts/docs -p '*_test.py' -v
+mkdocs build --strict --clean
+python scripts/docs/check_built_site.py site
+```
+
+The generated `site/` directory is local build output and is intentionally not
+committed. Repository-source links are converted only in generated pages to
+immutable GitHub links for the documentation's named code baseline. The strict
+build verifies those objects through local Git history; fetch the baseline
+commit first when working from a shallow clone. A source archive without Git
+history cannot run this immutable-link check.
+
 The repository includes public local-development fixtures, such as `example.test` users, deterministic mock responses, and seeded tokens/passwords. They are examples only—not production credentials. Never commit real API keys, bearer tokens, BMS passwords, private service URLs, or customer data; use environment variables and redacted placeholders.
 
 ## Local development
