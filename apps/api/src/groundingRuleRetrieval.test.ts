@@ -4,7 +4,8 @@ import { GroundingRuleIndex } from "./groundingRuleIndex.js";
 import {
   extractExactIdentifiers,
   resetGroundingRetrievalConfigForTests,
-  retrieveGroundingRules
+  retrieveGroundingRules,
+  shouldAttemptGroundingRuleRetrieval
 } from "./groundingRuleRetrieval.js";
 import type { ProjectGroundingRule } from "./projectGrounding.js";
 import { tmpdir } from "node:os";
@@ -89,6 +90,32 @@ describe("groundingRuleRetrieval", () => {
     const result = await retrieveGroundingRules(index, "project_element", "BLDG40 设备列表", [runningRule, operatorRule]);
     expect(result.retrieved).toHaveLength(0);
     expect(result.alwaysOn.map((rule) => rule.id)).toContain("ground_op_1");
+  });
+
+  it("skips retrieval for low-signal chat messages", async () => {
+    const index = makeIndex();
+    await index.upsertRule(runningRule);
+    const ftsSpy = vi.spyOn(index, "searchFts");
+    const denseSpy = vi.spyOn(index, "searchDense");
+
+    const result = await retrieveGroundingRules(index, "project_element", "hello", [runningRule, operatorRule]);
+
+    expect(result.retrieved).toHaveLength(0);
+    expect(result.alwaysOn.map((rule) => rule.id)).toContain("ground_op_1");
+    expect(result.diagnostics).toMatchObject({
+      mode: "skipped_low_signal",
+      skippedDense: true,
+      skipReason: "low_signal_message",
+      selectedRuleIds: []
+    });
+    expect(ftsSpy).not.toHaveBeenCalled();
+    expect(denseSpy).not.toHaveBeenCalled();
+  });
+
+  it("attempts retrieval for task-like messages even without explicit equipment ids", () => {
+    expect(shouldAttemptGroundingRuleRetrieval("hello")).toBe(false);
+    expect(shouldAttemptGroundingRuleRetrieval("create dashboard")).toBe(true);
+    expect(shouldAttemptGroundingRuleRetrieval("how many chillers are running")).toBe(true);
   });
 
   it("works in degraded keyword-only mode without embeddings", async () => {

@@ -20,7 +20,7 @@ import type { ChatMessage } from "../seed.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
-import type { DerivedMetricDependencyInput, DerivedMetricStore } from "../derivedMetrics.js";
+import type { DerivedMetricDependencyInput, DerivedMetricInstance, DerivedMetricStore } from "../derivedMetrics.js";
 import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
 import { parseCancelCommand, parseListCommand, parseTimeExpression, nextCronTime } from "../scheduler.js";
 import type { ProcessRegistry } from "./processRegistry.js";
@@ -29,6 +29,13 @@ import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
 import { bmsCollectorBaseUrl } from "../bmsCollectorUrl.js";
 import { fetchTimeseries, type BmsTimeseriesRow } from "../bmsTimeseries.js";
+import {
+  alignNumericSeries,
+  DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS,
+  normalizeDerivedMetricAlignmentPolicy,
+  normalizeDerivedMetricAlignmentToleranceSeconds,
+  type DerivedMetricAlignmentPolicy
+} from "../derivedMetricAlignment.js";
 import { DASHBOARD_GRID_COLUMNS, DASHBOARD_LAYOUT_VERSION, dashboardPath, parseDashboardMutationInput } from "../dashboards.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -92,6 +99,13 @@ function stringValueFrom(record: Record<string, unknown>, keys: string[]): strin
   return "";
 }
 
+function optionalBoolValueFrom(record: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    if (typeof record[key] === "boolean") return record[key];
+  }
+  return undefined;
+}
+
 function normalizeDashboardId(value: string, fallback: string): string {
   const source = value || fallback;
   const normalized = source
@@ -100,6 +114,32 @@ function normalizeDashboardId(value: string, fallback: string): string {
     .replace(/^_+|_+$/g, "")
     .slice(0, 48);
   return normalized || fallback;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripEquipmentTitlePrefix(title: string, equipmentLabels: string[]): string {
+  const candidates = [...new Set(equipmentLabels.flatMap((label) => [
+    label,
+    label.replace(/-/g, "_"),
+    label.replace(/_/g, "-")
+  ]).map((label) => label.trim()).filter(Boolean))]
+    .sort((left, right) => right.length - left.length);
+  let next = title.trim();
+  for (const label of candidates) {
+    const escaped = escapeRegExp(label);
+    if (new RegExp(`^${escaped}$`, "iu").test(next)) return "";
+    const stripped = next
+      .replace(new RegExp(`^${escaped}(?:\\s*(?:-|:|\\||—|–)\\s*|\\s+)`, "iu"), "")
+      .trim();
+    if (stripped !== next) {
+      next = stripped;
+      break;
+    }
+  }
+  return next;
 }
 
 function normalizeDashboardBinding(value: unknown): Record<string, unknown> | null {
@@ -115,7 +155,7 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
   const metricKey = stringValueFrom(value, ["metricKey", "metric_key"]);
   const entityId = stringValueFrom(value, ["entityId", "entity_id", "equipmentId", "equipment_id"]);
   const sourceRaw = stringValueFrom(value, ["source", "sourceType", "source_type", "type"]);
-  const source = sourceRaw === "derived_metric" || sourceRaw === "derived" || sourceRaw === "metric" || metricInstanceId || metricKey || entityId
+  const source = sourceRaw === "derived_metric" || sourceRaw === "derived" || sourceRaw === "metric" || metricInstanceId || metricKey
     ? "derived_metric"
     : sourceRaw === "bms" || sourceRaw === "raw_point" || sourceRaw === "point"
       ? "bms"
@@ -125,6 +165,9 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
 
   const label = stringValueFrom(value, ["label", "title", "name"]);
   const role = stringValue(value.role);
+  const dependencyRole = stringValueFrom(value, ["dependencyRole", "dependency_role", "inputRole", "input_role"]);
+  const defaultVisible = optionalBoolValueFrom(value, ["defaultVisible", "default_visible"]);
+  const groupId = stringValueFrom(value, ["groupId", "group_id"]);
   const unit = stringValue(value.unit);
   return {
     ...(source ? { source } : {}),
@@ -135,6 +178,9 @@ function normalizeDashboardBinding(value: unknown): Record<string, unknown> | nu
     ...(entityId ? { entityId } : {}),
     ...(label && label !== pointName ? { label } : {}),
     ...(role ? { role } : {}),
+    ...(dependencyRole ? { dependencyRole } : {}),
+    ...(defaultVisible !== undefined ? { defaultVisible } : {}),
+    ...(groupId ? { groupId } : {}),
     ...(unit ? { unit } : {})
   };
 }
@@ -195,27 +241,43 @@ function normalizeDashboardWidget(value: unknown, index: number): Record<string,
 }
 
 function equipmentLabelFromBinding(binding: Record<string, unknown>): string | null {
+  const explicit = stringValue(binding.groupId) || stringValue(binding.entityId);
+  if (explicit) {
+    const normalized = explicit
+      .replace(/[_\s]+/g, "-")
+      .trim();
+    const match = normalized.match(/\b([A-Za-z]{2,8})(?:-?L\d+)?-?0?(\d{1,3})(?=\D|$)/i);
+    if (match) {
+      const prefix = match[1]?.toUpperCase() ?? "EQ";
+      const number = String(Number(match[2])).padStart(2, "0");
+      return `${prefix}-${number}`;
+    }
+    return normalized;
+  }
   const source = [
-    stringValue(binding.entityId),
     stringValue(binding.pointName),
-    stringValue(binding.objectRef),
-    stringValue(binding.label)
+    stringValue(binding.label),
+    stringValue(binding.objectRef)
   ].find(Boolean) ?? "";
-  const match = source.match(/\b(WCC|CH)(?:[-_]?L1)?[-_]?0?(\d{1,2})(?=\D|$)/i);
+  const match = source.match(/\b([A-Za-z]{2,8})(?:[-_]?L\d+)?[-_]?0?(\d{1,3})(?=\D|$)/i);
   if (!match) return null;
-  const prefix = match[1]?.toUpperCase() === "CH" ? "CH" : "WCC";
+  const prefix = match[1]?.toUpperCase() ?? "EQ";
   const number = String(Number(match[2])).padStart(2, "0");
   return `${prefix}-${number}`;
 }
 
-function equipmentLabelFromWidget(widget: Record<string, unknown>): string {
-  const bindings = Array.isArray(widget.pointBindings)
-    ? widget.pointBindings.filter((entry): entry is Record<string, unknown> => isPlainRecord(entry))
-    : [];
+function explicitEquipmentLabelFromWidget(widget: Record<string, unknown>): string | null {
+  const bindings = dashboardWidgetBindings(widget);
   for (const binding of bindings) {
     const equipment = equipmentLabelFromBinding(binding);
     if (equipment) return equipment;
   }
+  return null;
+}
+
+function equipmentLabelFromWidget(widget: Record<string, unknown>): string {
+  const equipment = explicitEquipmentLabelFromWidget(widget);
+  if (equipment) return equipment;
   return stringValue(widget.title) || stringValue(widget.id);
 }
 
@@ -304,8 +366,15 @@ function groupedDashboardWidgets(widgets: Array<Record<string, unknown>>): Array
 
     splitAny = true;
     const baseTitle = stringValue(widget.title) || (stringValue(widget.kind) === "timeseries_chart" ? "Trend" : "Live");
+    const equipmentLabels = [...groups.keys()];
     for (const [equipment, equipmentBindings] of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-      const titlePrefix = baseTitle.replace(/\ball\s+chillers?\b/iu, "").replace(/所有\s*(chiller|冷机|机组)/iu, "").trim();
+      const titlePrefix = stripEquipmentTitlePrefix(
+        baseTitle
+          .replace(/\ball\s+chillers?\b/iu, "")
+          .replace(/所有\s*(chiller|冷机|机组)/iu, "")
+          .trim(),
+        equipmentLabels
+      );
       next.push({
         ...widget,
         id: normalizeDashboardId(`${stringValue(widget.id)}_${equipment}`, `widget_${next.length + 1}`),
@@ -326,12 +395,325 @@ function groupedDashboardWidgets(widgets: Array<Record<string, unknown>>): Array
   return splitAny ? next : widgets;
 }
 
+function dashboardBindingSourceIdentity(binding: Record<string, unknown>): string {
+  const source = stringValue(binding.source) || (stringValue(binding.pointName) || stringValue(binding.objectRef) ? "bms" : "");
+  return [
+    source,
+    stringValue(binding.metricInstanceId),
+    stringValue(binding.metricKey),
+    stringValue(binding.entityId),
+    stringValue(binding.pointName),
+    stringValue(binding.objectRef)
+  ].join("|");
+}
+
+function humanizeDashboardIdentifier(value: string): string {
+  const words = value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_./-]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return words
+    .map((word) => {
+      const upper = word.toUpperCase();
+      if (upper.length <= 4) return upper;
+      return `${upper.slice(0, 1)}${upper.slice(1).toLowerCase()}`;
+    })
+    .join(" ");
+}
+
+function removeDashboardEquipmentPrefix(value: string): string {
+  return value
+    .replace(/^\s*[A-Za-z]{2,8}(?:[-_\s]?L\d+)?[-_\s]?0?\d{1,3}\s*(?:[-_:|/]|—)?\s*/iu, "")
+    .trim();
+}
+
+function semanticSuffixFromDashboardPoint(value: string): string {
+  const withoutEquipment = removeDashboardEquipmentPrefix(value)
+    .replace(/^[A-Za-z]{2,8}(?:[-_]?L\d+)?[-_]?0?\d{1,3}/iu, "")
+    .replace(/^[-_:|/\s]+/u, "")
+    .trim();
+  return withoutEquipment || value.trim();
+}
+
+function dashboardComparisonFamily(binding: Record<string, unknown>): { key: string; label: string; rank: number } {
+  const source = stringValue(binding.source);
+  const dependencyRole = stringValue(binding.dependencyRole);
+  const label = removeDashboardEquipmentPrefix(stringValue(binding.label));
+  const role = stringValue(binding.role);
+  if (source === "derived_metric" || (dependencyRole === "output" && stringValue(binding.metricKey))) {
+    const metricKey = stringValue(binding.metricKey);
+    const rawLabel = label || metricKey || role || "system metric";
+    return {
+      key: `derived:${normalizeDashboardId(metricKey || rawLabel, "derived_output")}`,
+      label: humanizeDashboardIdentifier(rawLabel),
+      rank: 1
+    };
+  }
+
+  const pointSuffix = semanticSuffixFromDashboardPoint(stringValue(binding.pointName) || stringValue(binding.objectRef));
+  const rawLabel = label || role || pointSuffix || "BMS output";
+  return {
+    key: `raw:${normalizeDashboardId(role || pointSuffix || rawLabel, "raw_output")}`,
+    label: humanizeDashboardIdentifier(rawLabel),
+    rank: 0
+  };
+}
+
+function derivedMetricInstanceForDashboardBinding(
+  binding: Record<string, unknown>,
+  derivedMetrics: DerivedMetricStore | undefined,
+  projectId: string
+): DerivedMetricInstance | null {
+  if (!derivedMetrics || stringValue(binding.source) !== "derived_metric") return null;
+  const instanceId = stringValue(binding.metricInstanceId);
+  if (instanceId) return derivedMetrics.getInstance(instanceId);
+  const metricKey = stringValue(binding.metricKey);
+  const entityId = stringValue(binding.entityId);
+  if (!metricKey || !entityId) return null;
+  return derivedMetrics.lookup({ projectId, metricKey, entityId, limit: 1 })[0] ?? null;
+}
+
+function annotateDerivedMetricOutputBinding(
+  binding: Record<string, unknown>,
+  instance: DerivedMetricInstance
+): Record<string, unknown> {
+  return {
+    ...binding,
+    source: "derived_metric",
+    metricInstanceId: stringValue(binding.metricInstanceId) || instance.instanceId,
+    metricKey: stringValue(binding.metricKey) || instance.metricKey,
+    entityId: stringValue(binding.entityId) || instance.entityId,
+    groupId: stringValue(binding.groupId) || instance.entityId,
+    label: stringValue(binding.label) || instance.displayName,
+    role: stringValue(binding.role) || "output",
+    dependencyRole: stringValue(binding.dependencyRole) || "output",
+    defaultVisible: typeof binding.defaultVisible === "boolean" ? binding.defaultVisible : true,
+    unit: stringValue(binding.unit) || instance.unit
+  };
+}
+
+function enrichWidgetDerivedMetricBindings(
+  widget: Record<string, unknown>,
+  derivedMetrics: DerivedMetricStore | undefined,
+  projectId: string
+): Record<string, unknown> {
+  if (!derivedMetrics) return widget;
+  const kind = stringValue(widget.kind);
+  const includeAuditInputs = kind === "live_value_grid" || kind === "timeseries_chart";
+  const bindings = dashboardWidgetBindings(widget);
+  if (bindings.length === 0) return widget;
+
+  const nextBindings: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const binding of bindings) {
+    const instance = derivedMetricInstanceForDashboardBinding(binding, derivedMetrics, projectId);
+    if (!instance) {
+      const key = dashboardBindingSourceIdentity(binding);
+      if (!seen.has(key)) {
+        seen.add(key);
+        nextBindings.push(binding);
+      }
+      continue;
+    }
+
+    const outputBinding = annotateDerivedMetricOutputBinding(binding, instance);
+    const outputKey = dashboardBindingSourceIdentity(outputBinding);
+    if (!seen.has(outputKey)) {
+      seen.add(outputKey);
+      nextBindings.push(outputBinding);
+    }
+    if (!includeAuditInputs) continue;
+
+    for (const inputBinding of derivedMetricInputDashboardBindings(instance.entityId, derivedMetricInstanceDependencyInputs(instance))) {
+      const enrichedInput = {
+        ...inputBinding,
+        defaultVisible: kind === "timeseries_chart" ? false : true
+      };
+      const inputKey = dashboardBindingSourceIdentity(enrichedInput);
+      if (seen.has(inputKey)) continue;
+      seen.add(inputKey);
+      nextBindings.push(enrichedInput);
+    }
+  }
+
+  return { ...widget, pointBindings: nextBindings };
+}
+
+function enrichDashboardDerivedMetricBindings(
+  widgets: Array<Record<string, unknown>>,
+  derivedMetrics: DerivedMetricStore | undefined,
+  projectId: string
+): Array<Record<string, unknown>> {
+  return widgets.map((widget) => enrichWidgetDerivedMetricBindings(widget, derivedMetrics, projectId));
+}
+
+function mergeEquipmentOverviewWidgets(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const overviewGroups = new Map<string, Array<Record<string, unknown>>>();
+  for (const widget of widgets) {
+    const kind = stringValue(widget.kind);
+    if (kind !== "live_value_grid" && kind !== "stat_value") continue;
+    const equipment = explicitEquipmentLabelFromWidget(widget);
+    if (!equipment) continue;
+    overviewGroups.set(equipment, [...(overviewGroups.get(equipment) ?? []), widget]);
+  }
+
+  const mergedEquipment = new Set(
+    [...overviewGroups.entries()]
+      .filter(([, group]) => group.length > 1)
+      .map(([equipment]) => equipment)
+  );
+  if (mergedEquipment.size === 0) return widgets;
+
+  const emitted = new Set<string>();
+  return widgets.flatMap((widget) => {
+    const kind = stringValue(widget.kind);
+    if (kind !== "live_value_grid" && kind !== "stat_value") return [widget];
+    const equipment = explicitEquipmentLabelFromWidget(widget);
+    if (!equipment || !mergedEquipment.has(equipment)) return [widget];
+    if (emitted.has(equipment)) return [];
+    emitted.add(equipment);
+
+    const seen = new Set<string>();
+    const pointBindings = (overviewGroups.get(equipment) ?? [])
+      .flatMap((entry) => dashboardWidgetBindings(entry))
+      .filter((binding) => {
+        const key = dashboardBindingSourceIdentity(binding);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((binding) => ({ ...binding }));
+
+    return [{
+      ...widget,
+      id: normalizeDashboardId(`${equipment}_overview`, `${stringValue(widget.id)}_overview`),
+      kind: "live_value_grid",
+      title: `${equipment} Overview`,
+      pointBindings
+    }];
+  });
+}
+
+function mergeEquipmentTrendWidgets(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const trendGroups = new Map<string, Array<Record<string, unknown>>>();
+  for (const widget of widgets) {
+    if (stringValue(widget.kind) !== "timeseries_chart") continue;
+    const equipment = explicitEquipmentLabelFromWidget(widget);
+    if (!equipment) continue;
+    trendGroups.set(equipment, [...(trendGroups.get(equipment) ?? []), widget]);
+  }
+
+  const mergedEquipment = new Set(
+    [...trendGroups.entries()]
+      .filter(([, group]) => group.length > 1)
+      .map(([equipment]) => equipment)
+  );
+  if (mergedEquipment.size === 0) return widgets;
+
+  const emitted = new Set<string>();
+  return widgets.flatMap((widget) => {
+    if (stringValue(widget.kind) !== "timeseries_chart") return [widget];
+    const equipment = explicitEquipmentLabelFromWidget(widget);
+    if (!equipment || !mergedEquipment.has(equipment)) return [widget];
+    if (emitted.has(equipment)) return [];
+    emitted.add(equipment);
+
+    const seen = new Set<string>();
+    const pointBindings = (trendGroups.get(equipment) ?? [])
+      .flatMap((entry) => dashboardWidgetBindings(entry))
+      .filter((binding) => {
+        const key = dashboardBindingSourceIdentity(binding);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((binding) => ({ ...binding }));
+
+    return [{
+      ...widget,
+      id: normalizeDashboardId(`${equipment}_trend`, `${stringValue(widget.id)}_trend`),
+      kind: "timeseries_chart",
+      title: `${equipment} Trends`,
+      pointBindings,
+      defaultTimeRange: stringValue(widget.defaultTimeRange) || "24h"
+    }];
+  });
+}
+
+function expandDerivedComparisonWidgets(widgets: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const outputGroups = new Map<string, Array<Record<string, unknown>>>();
+  for (const widget of widgets) {
+    const kind = stringValue(widget.kind);
+    if (kind !== "live_value_grid" && kind !== "stat_value") continue;
+    const equipment = explicitEquipmentLabelFromWidget(widget);
+    if (!equipment) continue;
+    const outputs = dashboardWidgetBindings(widget).filter((binding) => stringValue(binding.dependencyRole) !== "input");
+    if (!outputs.some((binding) => stringValue(binding.source) === "derived_metric" || stringValue(binding.dependencyRole) === "output")) continue;
+    outputGroups.set(equipment, outputs.map((binding) => ({ ...binding })));
+  }
+  if (outputGroups.size <= 1) return widgets;
+
+  const families = new Map<string, {
+    key: string;
+    label: string;
+    rank: number;
+    bindings: Array<Record<string, unknown>>;
+  }>();
+  for (const [, bindings] of [...outputGroups.entries()].sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }))) {
+    for (const binding of bindings) {
+      const family = dashboardComparisonFamily(binding);
+      const existing = families.get(family.key) ?? { ...family, bindings: [] };
+      if (!existing.bindings.some((candidate) => dashboardBindingSourceIdentity(candidate) === dashboardBindingSourceIdentity(binding))) {
+        existing.bindings.push({ ...binding });
+      }
+      families.set(family.key, existing);
+    }
+  }
+  if (families.size === 0) return widgets;
+
+  const sortedFamilies = [...families.values()]
+    .filter((family) => family.bindings.length > 0)
+    .sort((left, right) => left.rank - right.rank || left.label.localeCompare(right.label, undefined, { numeric: true, sensitivity: "base" }));
+  const titleBaseFor = (widget: Record<string, unknown>) => {
+    const title = stringValue(widget.title) || "Latest comparison";
+    return title
+      .replace(/\s+[—-]\s+.*\bvs\b.*$/iu, "")
+      .replace(/\s+\bvs\b.*$/iu, "")
+      .trim() || title;
+  };
+
+  return widgets.flatMap((widget) => {
+    if (stringValue(widget.kind) !== "bar_comparison") return [widget];
+    const bindings = dashboardWidgetBindings(widget);
+    if (!bindings.some((binding) => stringValue(binding.source) === "derived_metric" || stringValue(binding.dependencyRole) === "output")) {
+      return [widget];
+    }
+    const requestedFamilyKeys = new Set(bindings.map((binding) => dashboardComparisonFamily(binding).key));
+    const selectedFamilies = sortedFamilies.filter((family) => requestedFamilyKeys.has(family.key));
+    const familiesToRender = selectedFamilies.length > 0 ? selectedFamilies : sortedFamilies;
+    const hasMixedFamilies = familiesToRender.length > 1;
+    const baseTitle = titleBaseFor(widget);
+
+    return familiesToRender.map((family, index) => ({
+      ...widget,
+      id: index === 0
+        ? stringValue(widget.id)
+        : normalizeDashboardId(`${stringValue(widget.id)}_${family.key}`, `comparison_${index + 1}`),
+      title: hasMixedFamilies ? `${baseTitle} — ${family.label}` : stringValue(widget.title),
+      pointBindings: family.bindings.map((binding) => ({ ...binding }))
+    }));
+  });
+}
+
 function widgetsByEquipment(widgets: Array<Record<string, unknown>>): Map<string, Array<Record<string, unknown>>> {
   const groups = new Map<string, Array<Record<string, unknown>>>();
   for (const widget of widgets) {
     const kind = stringValue(widget.kind);
     if (kind === "note") continue;
-    const equipment = equipmentLabelFromWidget(widget);
+    const equipment = explicitEquipmentLabelFromWidget(widget);
+    if (!equipment) continue;
     groups.set(equipment, [...(groups.get(equipment) ?? []), widget]);
   }
   return groups;
@@ -410,7 +792,7 @@ function preferredDashboardLayoutSize(widget: Record<string, unknown>): { w: num
   const kind = stringValue(widget.kind);
   const bindingCount = Array.isArray(widget.pointBindings) ? widget.pointBindings.length : 0;
   if (kind === "timeseries_chart") return { w: 6, h: 4 };
-  if (kind === "bar_comparison") return { w: 6, h: 3 };
+  if (kind === "bar_comparison") return { w: 6, h: Math.max(3, Math.min(6, 3 + Math.ceil(Math.max(0, bindingCount - 8) / 4))) };
   if (kind === "live_value_grid") return { w: 3, h: bindingCount > 2 ? 3 : 2 };
   return { w: 3, h: 2 };
 }
@@ -530,14 +912,25 @@ function normalizeDashboardSections(
     .sort((left, right) => sectionRank(left) - sectionRank(right) || stringValue(left.title).localeCompare(stringValue(right.title)));
 }
 
-function normalizeDashboardCreateArgs(args: Record<string, unknown>): Record<string, unknown> {
+function normalizeDashboardCreateArgs(
+  args: Record<string, unknown>,
+  derivedMetrics?: DerivedMetricStore,
+  projectId = ""
+): Record<string, unknown> {
   const normalizedWidgets = Array.isArray(args.widgets)
     ? args.widgets
       .map((entry, index) => normalizeDashboardWidget(entry, index))
       .filter((entry): entry is Record<string, unknown> => entry !== null)
     : [];
-  const groupedWidgets = ensureUniqueDashboardWidgetIds(groupedDashboardWidgets(ensureUniqueDashboardWidgetIds(normalizedWidgets)));
-  const widgets = sortDashboardWidgets(ensureDefaultDashboardWidgets(groupedWidgets, args));
+  const groupedWidgets = groupedDashboardWidgets(ensureUniqueDashboardWidgetIds(normalizedWidgets));
+  const overviewMergedWidgets = ensureUniqueDashboardWidgetIds(mergeEquipmentOverviewWidgets(groupedWidgets));
+  const defaultedWidgets = ensureDefaultDashboardWidgets(overviewMergedWidgets, args);
+  const enrichedWidgets = enrichDashboardDerivedMetricBindings(defaultedWidgets, derivedMetrics, projectId);
+  const regroupedWidgets = groupedDashboardWidgets(ensureUniqueDashboardWidgetIds(enrichedWidgets));
+  const remergedOverviewWidgets = ensureUniqueDashboardWidgetIds(mergeEquipmentOverviewWidgets(regroupedWidgets));
+  const remergedWidgets = ensureUniqueDashboardWidgetIds(mergeEquipmentTrendWidgets(remergedOverviewWidgets));
+  const comparisonExpandedWidgets = ensureUniqueDashboardWidgetIds(expandDerivedComparisonWidgets(remergedWidgets));
+  const widgets = sortDashboardWidgets(comparisonExpandedWidgets);
   return {
     ...args,
     layoutVersion: DASHBOARD_LAYOUT_VERSION,
@@ -747,13 +1140,33 @@ const MEMORY_ACTIONS = new Set<MemoryAction>(["add", "replace", "remove", "read"
 const MEMORY_TARGETS = new Set<MemoryTarget>(["user", "project"]);
 const DERIVED_METRIC_SOURCE_TYPES = new Set(["raw_point", "metric"]);
 const DERIVED_METRIC_FORMULA_KINDS = new Set(["ratio", "difference"]);
+const DERIVED_METRIC_INVALID_VALUE_POLICIES = new Set(["null", "zero"]);
+const DERIVED_METRIC_MIN_HISTORY_DAYS = 30;
+const DERIVED_METRIC_MIN_HISTORY_MS = DERIVED_METRIC_MIN_HISTORY_DAYS * 24 * 60 * 60 * 1000;
+const DERIVED_METRIC_SOURCE_LIMIT = 20_000;
 
 type DerivedMetricFormulaKind = "ratio" | "difference";
+type DerivedMetricInvalidValuePolicy = "null" | "zero";
 
 interface DerivedMetricCalculationSample {
   ts: string;
-  value: number;
+  value?: number;
+  valueText?: string;
   inputs: Record<string, number>;
+  inputTimestamps?: Record<string, string>;
+  inputLagSeconds?: Record<string, number>;
+  alignmentPolicy?: DerivedMetricAlignmentPolicy;
+  alignmentToleranceSeconds?: number;
+  quality?: string;
+  status?: string;
+  invalidReason?: string;
+}
+
+interface DerivedMetricCalculationWindow {
+  from: string;
+  to: string;
+  defaultedFrom: boolean;
+  expandedFrom: boolean;
 }
 
 function normalizeDerivedMetricDependency(value: unknown): DerivedMetricDependencyInput | null {
@@ -782,6 +1195,13 @@ function normalizeDerivedMetricFormulaKind(value: string): DerivedMetricFormulaK
   return DERIVED_METRIC_FORMULA_KINDS.has(normalized) ? normalized as DerivedMetricFormulaKind : null;
 }
 
+function normalizeDerivedMetricInvalidValuePolicy(value: string): DerivedMetricInvalidValuePolicy {
+  const normalized = value.trim().toLowerCase();
+  return DERIVED_METRIC_INVALID_VALUE_POLICIES.has(normalized)
+    ? normalized as DerivedMetricInvalidValuePolicy
+    : "null";
+}
+
 function roleOrFallback(args: Record<string, unknown>, keys: string[], fallback: string): string {
   for (const key of keys) {
     const value = textArg(args, key);
@@ -802,6 +1222,165 @@ function dependencyForRole(
 
 function formulaForDerivedMetric(kind: DerivedMetricFormulaKind, leftRole: string, rightRole: string): string {
   return kind === "ratio" ? `${leftRole} / ${rightRole}` : `${leftRole} - ${rightRole}`;
+}
+
+function inferDerivedMetricFormulaKind(formula: string): DerivedMetricFormulaKind | null {
+  const normalized = formula.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("/") || normalized.includes("ratio")) return "ratio";
+  if (normalized.includes("-") || normalized.includes("difference") || normalized.includes("delta")) return "difference";
+  return null;
+}
+
+function configureDerivedMetricMaterialization(
+  derivedMetrics: DerivedMetricStore,
+  instance: DerivedMetricInstance,
+  input: {
+    enabled: boolean;
+    formulaKind?: DerivedMetricFormulaKind;
+    leftRole?: string;
+    rightRole?: string;
+    invalidValuePolicy?: DerivedMetricInvalidValuePolicy;
+    alignmentPolicy?: DerivedMetricAlignmentPolicy;
+    alignmentToleranceSeconds?: number;
+    status?: string;
+  }
+) {
+  try {
+    return derivedMetrics.configureMaterialization({
+      instanceId: instance.instanceId,
+      enabled: input.enabled,
+      intervalSeconds: 300,
+      lookbackSeconds: 3_600,
+      ...(input.formulaKind ? { formulaKind: input.formulaKind } : {}),
+      ...(input.leftRole ? { leftRole: input.leftRole } : {}),
+      ...(input.rightRole ? { rightRole: input.rightRole } : {}),
+      ...(input.invalidValuePolicy ? { invalidValuePolicy: input.invalidValuePolicy } : {}),
+      ...(input.alignmentPolicy ? { alignmentPolicy: input.alignmentPolicy } : {}),
+      ...(typeof input.alignmentToleranceSeconds === "number" ? { alignmentToleranceSeconds: input.alignmentToleranceSeconds } : {}),
+      ...(input.status ? { status: input.status } : {})
+    });
+  } catch {
+    return null;
+  }
+}
+
+function derivedMetricOutputDashboardBinding(
+  instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string },
+  unitFallback = ""
+): Record<string, unknown> {
+  return {
+    source: "derived_metric",
+    metricInstanceId: instance.instanceId,
+    metricKey: instance.metricKey,
+    entityId: instance.entityId,
+    groupId: instance.entityId,
+    label: instance.displayName,
+    role: "output",
+    dependencyRole: "output",
+    defaultVisible: true,
+    unit: instance.unit ?? unitFallback
+  };
+}
+
+function derivedMetricInputDashboardBindings(entityId: string, dependencies: DerivedMetricDependencyInput[]): Array<Record<string, unknown>> {
+  return dependencies.map((dependency) => {
+    const base = {
+      entityId,
+      groupId: entityId,
+      label: dependency.label || dependency.role,
+      role: dependency.role,
+      dependencyRole: "input",
+      defaultVisible: false,
+      ...(dependency.unit ? { unit: dependency.unit } : {})
+    };
+    if (dependency.sourceType === "metric") {
+      return {
+        ...base,
+        source: "derived_metric",
+        metricInstanceId: dependency.sourceId
+      };
+    }
+    return {
+      ...base,
+      source: "bms",
+      ...(dependency.pointName ? { pointName: dependency.pointName } : dependency.objectRef ? {} : { pointName: dependency.sourceId }),
+      ...(dependency.objectRef ? { objectRef: dependency.objectRef } : {})
+    };
+  });
+}
+
+function derivedMetricInstanceDependencyInputs(instance: {
+  dependencies?: Array<{
+    role: string;
+    sourceType?: DerivedMetricDependencyInput["sourceType"];
+    sourceId: string;
+    pointName?: string;
+    objectRef?: string;
+    unit?: string;
+    label?: string;
+    metadata?: Record<string, unknown>;
+  }>;
+}): DerivedMetricDependencyInput[] {
+  return (instance.dependencies ?? []).map((dependency) => ({
+    role: dependency.role,
+    sourceId: dependency.sourceId,
+    ...(dependency.sourceType ? { sourceType: dependency.sourceType } : {}),
+    ...(dependency.pointName ? { pointName: dependency.pointName } : {}),
+    ...(dependency.objectRef ? { objectRef: dependency.objectRef } : {}),
+    ...(dependency.unit ? { unit: dependency.unit } : {}),
+    ...(dependency.label ? { label: dependency.label } : {}),
+    ...(dependency.metadata ? { metadata: dependency.metadata } : {})
+  }));
+}
+
+function timestampMs(value: string): number | null {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeDerivedMetricCalculationWindow(args: Record<string, unknown>): DerivedMetricCalculationWindow {
+  const toInput = textArg(args, "to");
+  const toMs = timestampMs(toInput) ?? Date.now();
+  const to = new Date(toMs).toISOString();
+  const requestedFrom = textArg(args, "from");
+  const requestedFromMs = timestampMs(requestedFrom);
+  let fromMs = requestedFromMs ?? toMs - DERIVED_METRIC_MIN_HISTORY_MS;
+  let defaultedFrom = requestedFromMs === null;
+  let expandedFrom = false;
+
+  if (fromMs > toMs) {
+    fromMs = toMs - DERIVED_METRIC_MIN_HISTORY_MS;
+    defaultedFrom = true;
+  } else if (toMs - fromMs < DERIVED_METRIC_MIN_HISTORY_MS) {
+    fromMs = toMs - DERIVED_METRIC_MIN_HISTORY_MS;
+    expandedFrom = true;
+  }
+
+  return {
+    from: new Date(fromMs).toISOString(),
+    to,
+    defaultedFrom,
+    expandedFrom
+  };
+}
+
+function fallbackDerivedMetricSample(
+  ts: string,
+  leftRole: string,
+  rightRole: string,
+  reason: string,
+  policy: DerivedMetricInvalidValuePolicy,
+  inputs: Record<string, number> = {}
+): DerivedMetricCalculationSample {
+  return {
+    ts,
+    ...(policy === "zero" ? { value: 0 } : { valueText: "N/A" }),
+    inputs,
+    quality: "invalid",
+    status: policy === "zero" ? "fallback_zero" : "not_calculable",
+    invalidReason: reason || "not_calculable"
+  };
 }
 
 function numericSeriesFromRows(rows: BmsTimeseriesRow[]): Map<string, number> {
@@ -857,32 +1436,65 @@ function calculateAlignedDerivedMetricSamples(
   leftRole: string,
   rightRole: string,
   leftSeries: Map<string, number>,
-  rightSeries: Map<string, number>
-): { samples: DerivedMetricCalculationSample[]; skipped: number } {
-  const timestamps = [...leftSeries.keys()]
-    .filter((ts) => rightSeries.has(ts))
-    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  rightSeries: Map<string, number>,
+  invalidValuePolicy: DerivedMetricInvalidValuePolicy,
+  alignmentPolicy: DerivedMetricAlignmentPolicy,
+  alignmentToleranceSeconds: number
+): { samples: DerivedMetricCalculationSample[]; skipped: number; fallbackCount: number } {
+  const alignedSamples = alignNumericSeries(leftSeries, rightSeries, alignmentPolicy, alignmentToleranceSeconds);
   const samples: DerivedMetricCalculationSample[] = [];
   let skipped = 0;
-  for (const ts of timestamps) {
-    const left = leftSeries.get(ts);
-    const right = rightSeries.get(ts);
+  let fallbackCount = 0;
+  for (const aligned of alignedSamples) {
+    const { ts, left, right } = aligned;
+    const alignmentMetadata = {
+      inputTimestamps: { [leftRole]: aligned.leftTs, [rightRole]: aligned.rightTs },
+      inputLagSeconds: { [leftRole]: aligned.leftLagSeconds, [rightRole]: aligned.rightLagSeconds },
+      alignmentPolicy,
+      alignmentToleranceSeconds
+    };
     if (typeof left !== "number" || typeof right !== "number" || !Number.isFinite(left) || !Number.isFinite(right)) {
       skipped += 1;
+      fallbackCount += 1;
+      samples.push({
+        ...fallbackDerivedMetricSample(ts, leftRole, rightRole, "non_numeric_input", invalidValuePolicy),
+        ...alignmentMetadata
+      });
       continue;
     }
     if (kind === "ratio" && right === 0) {
       skipped += 1;
+      fallbackCount += 1;
+      samples.push({
+        ...fallbackDerivedMetricSample(ts, leftRole, rightRole, "division_by_zero", invalidValuePolicy, {
+          [leftRole]: left,
+          [rightRole]: right
+        }),
+        ...alignmentMetadata
+      });
       continue;
     }
     const value = kind === "ratio" ? left / right : left - right;
     if (!Number.isFinite(value)) {
       skipped += 1;
+      fallbackCount += 1;
+      samples.push({
+        ...fallbackDerivedMetricSample(ts, leftRole, rightRole, "non_finite_result", invalidValuePolicy, {
+          [leftRole]: left,
+          [rightRole]: right
+        }),
+        ...alignmentMetadata
+      });
       continue;
     }
-    samples.push({ ts, value, inputs: { [leftRole]: left, [rightRole]: right } });
+    samples.push({
+      ts,
+      value,
+      inputs: { [leftRole]: left, [rightRole]: right },
+      ...alignmentMetadata
+    });
   }
-  return { samples, skipped };
+  return { samples, skipped, fallbackCount };
 }
 
 function latestDerivedMetricPreview(samples: DerivedMetricCalculationSample[]): DerivedMetricCalculationSample | null {
@@ -1188,7 +1800,7 @@ export function createGenericToolRegistry(
             entityName: { type: "string", description: "Human-readable entity name." },
             displayName: { type: "string", description: "Metric display name." },
             unit: { type: "string", description: "Metric unit." },
-            metricType: { type: "string", description: "derived, kpi, fd_score, etc." },
+            metricType: { type: "string", description: "Asset type: kpi for performance/efficiency, fdd/fd_score for detection, derived for neutral intermediate values." },
             formulaKind: { type: "string", enum: ["ratio", "difference"], description: "ratio computes left/right; difference computes left-right." },
             formulaVersion: { type: "string", description: "Formula version, default v1." },
             formula: { type: "string", description: "Optional formula string stored if the user later saves this metric." },
@@ -1208,6 +1820,17 @@ export function createGenericToolRegistry(
             to: { type: "string", description: "Source window end UTC ISO8601; defaults to now." },
             limit: { type: "number", description: "Max source samples per dependency, default 2000." },
             previewLimit: { type: "number", description: "Max preview samples returned, default 50." },
+            invalidValuePolicy: {
+              type: "string",
+              enum: ["null", "zero"],
+              description: "How to represent non-calculable samples. The agent should choose by metric semantics; default null records valueText=N/A with invalid quality, zero records numeric 0 with invalid quality."
+            },
+            alignmentPolicy: {
+              type: "string",
+              enum: ["exact", "nearest"],
+              description: "Input alignment: exact requires identical timestamps; nearest pairs closest samples within tolerance."
+            },
+            alignmentToleranceSeconds: { type: "number", description: "Tolerance for nearest alignment, default 300 seconds." },
             metadata: { type: "object", description: "Optional metadata copied into persistCandidate args." }
           },
           required: ["formulaKind", "from"]
@@ -1221,6 +1844,9 @@ export function createGenericToolRegistry(
         const metricKey = textArg(args, "metricKey");
         const entityId = textArg(args, "entityId");
         const kind = normalizeDerivedMetricFormulaKind(textArg(args, "formulaKind"));
+        const invalidValuePolicy = normalizeDerivedMetricInvalidValuePolicy(textArg(args, "invalidValuePolicy"));
+        const alignmentPolicy = normalizeDerivedMetricAlignmentPolicy(textArg(args, "alignmentPolicy"));
+        const alignmentToleranceSeconds = normalizeDerivedMetricAlignmentToleranceSeconds(numArg(args, "alignmentToleranceSeconds", DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS));
         const from = textArg(args, "from");
         const to = textArg(args, "to") || new Date().toISOString();
         if (!kind) {
@@ -1239,14 +1865,8 @@ export function createGenericToolRegistry(
             })[0] ?? null
           : null;
         const existingLatest = existing ? derivedMetrics.readLatest(existing.instanceId) : null;
-        const dashboardBinding = (instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string }) => ({
-          source: "derived_metric",
-          metricInstanceId: instance.instanceId,
-          metricKey: instance.metricKey,
-          entityId: instance.entityId,
-          label: instance.displayName,
-          unit: instance.unit ?? textArg(args, "unit")
-        });
+        const dashboardBinding = (instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string }) =>
+          derivedMetricOutputDashboardBinding(instance, textArg(args, "unit"));
 
         if (existing && existingLatest) {
           return {
@@ -1257,6 +1877,7 @@ export function createGenericToolRegistry(
             instance: existing,
             latest: existingLatest,
             dashboardBinding: dashboardBinding(existing),
+            inputDashboardBindings: derivedMetricInputDashboardBindings(existing.entityId, derivedMetricInstanceDependencyInputs(existing)),
             reuseHint: "A persisted derived metric already exists. Use derived_metric_read/dashboard binding instead of recalculating or saving a duplicate."
           };
         }
@@ -1296,19 +1917,24 @@ export function createGenericToolRegistry(
         }
 
         try {
-          const limit = Math.min(Math.max(1, numArg(args, "limit", 2000)), 20_000);
+          const limit = Math.min(Math.max(1, numArg(args, "limit", 2000)), DERIVED_METRIC_SOURCE_LIMIT);
           const [leftSeries, rightSeries] = await Promise.all([
             readDerivedMetricDependencySeries(derivedMetrics, leftDependency, from, to, limit),
             readDerivedMetricDependencySeries(derivedMetrics, rightDependency, from, to, limit)
           ]);
-          const calculated = calculateAlignedDerivedMetricSamples(kind, leftRole, rightRole, leftSeries, rightSeries);
+          const calculated = calculateAlignedDerivedMetricSamples(
+            kind,
+            leftRole,
+            rightRole,
+            leftSeries,
+            rightSeries,
+            invalidValuePolicy,
+            alignmentPolicy,
+            alignmentToleranceSeconds
+          );
           if (calculated.samples.length === 0) {
-            return {
-              error: "no_aligned_samples",
-              inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
-              skipped: calculated.skipped,
-              message: "No aligned numeric samples were available for the requested source window."
-            };
+            calculated.samples.push(fallbackDerivedMetricSample(to, leftRole, rightRole, "no_aligned_samples", invalidValuePolicy));
+            calculated.fallbackCount += 1;
           }
 
           const metadata = isPlainRecord(args.metadata) ? args.metadata : undefined;
@@ -1323,6 +1949,9 @@ export function createGenericToolRegistry(
             to,
             dependencies,
             formula,
+            invalidValuePolicy,
+            alignmentPolicy,
+            alignmentToleranceSeconds,
             ...(textArg(args, "entityName") ? { entityName: textArg(args, "entityName") } : {}),
             ...(textArg(args, "displayName") ? { displayName: textArg(args, "displayName") } : {}),
             ...(textArg(args, "unit") ? { unit: textArg(args, "unit") } : {}),
@@ -1337,12 +1966,16 @@ export function createGenericToolRegistry(
             persisted: false,
             calculated: true,
             formulaKind: kind,
+            alignmentPolicy,
+            alignmentToleranceSeconds,
             formula,
             latestPreview: latestDerivedMetricPreview(calculated.samples),
             samples: limitedDerivedMetricPreviewSamples(calculated.samples, numArg(args, "previewLimit", 50)),
             sampleCount: calculated.samples.length,
             skipped: calculated.skipped,
+            fallbackCount: calculated.fallbackCount,
             inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
+            inputDashboardBindings: entityId ? derivedMetricInputDashboardBindings(entityId, dependencies) : [],
             persistCandidate: metricKey && entityId
               ? { tool: "derived_metric_calculate", args: persistArgs }
               : null,
@@ -1362,7 +1995,7 @@ export function createGenericToolRegistry(
       schema: {
         name: "derived_metric_calculate",
         description:
-          "Lookup first, then calculate and persist a reusable derived metric when needed. Supports safe formulaKind values: ratio (left/right) and difference (left-right). Returns dashboard-ready binding metadata.",
+          "Lookup first, then calculate and persist a reusable derived metric when needed. Supports safe formulaKind values: ratio (left/right) and difference (left-right). Defaults/expands persisted calculations to at least 30 days of history. The agent chooses invalidValuePolicy by metric semantics instead of the tool guessing whether unavailable samples should be null or zero. Returns dashboard-ready binding metadata.",
         parameters: {
           type: "object",
           properties: {
@@ -1371,7 +2004,7 @@ export function createGenericToolRegistry(
             entityName: { type: "string", description: "Human-readable entity name." },
             displayName: { type: "string", description: "Metric display name." },
             unit: { type: "string", description: "Metric unit." },
-            metricType: { type: "string", description: "derived, kpi, fd_score, etc." },
+            metricType: { type: "string", description: "Asset type: kpi for performance/efficiency, fdd/fd_score for detection, derived for neutral intermediate values." },
             formulaKind: { type: "string", enum: ["ratio", "difference"], description: "ratio computes left/right; difference computes left-right." },
             formulaVersion: { type: "string", description: "Formula version, default v1." },
             formula: { type: "string", description: "Optional formula string stored with the metric definition." },
@@ -1387,14 +2020,25 @@ export function createGenericToolRegistry(
               description:
                 "Dependencies [{role, sourceType: raw_point|metric, sourceId, pointName?, objectRef?, unit?, label?}]. Required unless reusing an existing metric with latest value."
             },
-            from: { type: "string", description: "Source window start UTC ISO8601." },
+            from: { type: "string", description: "Source window start UTC ISO8601; if omitted or shorter than 30 days, the tool expands to a 30-day window." },
             to: { type: "string", description: "Source window end UTC ISO8601; defaults to now." },
-            limit: { type: "number", description: "Max source samples per dependency, default 2000." },
+            limit: { type: "number", description: "Max source samples per dependency, default/minimum 20000 for persisted metrics." },
+            invalidValuePolicy: {
+              type: "string",
+              enum: ["null", "zero"],
+              description: "How to persist non-calculable samples. Choose null for unknown/not applicable/ambiguous states; choose zero only when numeric zero is semantically valid for this metric or explicitly requested."
+            },
+            alignmentPolicy: {
+              type: "string",
+              enum: ["exact", "nearest"],
+              description: "Input alignment: exact requires identical timestamps; nearest pairs closest samples within tolerance."
+            },
+            alignmentToleranceSeconds: { type: "number", description: "Tolerance for nearest alignment, default 300 seconds." },
             forceRecalculate: { type: "boolean", description: "If false and latest exists, reuse without recalculating." },
             calculationRunId: { type: "string", description: "Optional deterministic calculation run id." },
             metadata: { type: "object", description: "Optional metadata stored with the metric definition and samples." }
           },
-          required: ["metricKey", "entityId", "formulaKind", "from"]
+          required: ["metricKey", "entityId", "formulaKind"]
         }
       },
       async run(args, context) {
@@ -1408,16 +2052,16 @@ export function createGenericToolRegistry(
         const metricKey = textArg(args, "metricKey");
         const entityId = textArg(args, "entityId");
         const kind = normalizeDerivedMetricFormulaKind(textArg(args, "formulaKind"));
-        const from = textArg(args, "from");
-        const to = textArg(args, "to") || new Date().toISOString();
+        const invalidValuePolicy = normalizeDerivedMetricInvalidValuePolicy(textArg(args, "invalidValuePolicy"));
+        const alignmentPolicy = normalizeDerivedMetricAlignmentPolicy(textArg(args, "alignmentPolicy"));
+        const alignmentToleranceSeconds = normalizeDerivedMetricAlignmentToleranceSeconds(numArg(args, "alignmentToleranceSeconds", DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS));
+        const window = normalizeDerivedMetricCalculationWindow(args);
+        const { from, to } = window;
         if (!metricKey || !entityId) {
           return { error: "metricKey and entityId are required" };
         }
         if (!kind) {
           return { error: "formulaKind must be ratio or difference" };
-        }
-        if (!from) {
-          return { error: "from is required" };
         }
 
         const existing = derivedMetrics.lookup({
@@ -1428,16 +2072,31 @@ export function createGenericToolRegistry(
         })[0] ?? null;
         const existingLatest = existing ? derivedMetrics.readLatest(existing.instanceId) : null;
         const forceRecalculate = boolArg(args, "forceRecalculate");
-        const dashboardBinding = (instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string }) => ({
-          source: "derived_metric",
-          metricInstanceId: instance.instanceId,
-          metricKey: instance.metricKey,
-          entityId: instance.entityId,
-          label: instance.displayName,
-          unit: instance.unit ?? textArg(args, "unit")
-        });
+        const dashboardBinding = (instance: { instanceId: string; metricKey: string; entityId: string; displayName: string; unit?: string }) =>
+          derivedMetricOutputDashboardBinding(instance, textArg(args, "unit"));
 
         if (existing && existingLatest && !forceRecalculate) {
+          const existingDependencies = derivedMetricInstanceDependencyInputs(existing);
+          const leftRole = roleOrFallback(
+            args,
+            kind === "ratio" ? ["leftRole", "numeratorRole"] : ["leftRole", "minuendRole"],
+            existingDependencies[0]?.role ?? "left"
+          );
+          const rightRole = roleOrFallback(
+            args,
+            kind === "ratio" ? ["rightRole", "denominatorRole"] : ["rightRole", "subtrahendRole"],
+            existingDependencies[1]?.role ?? "right"
+          );
+          const materialization = configureDerivedMetricMaterialization(derivedMetrics, existing, {
+            enabled: true,
+            formulaKind: kind,
+            leftRole,
+            rightRole,
+            invalidValuePolicy,
+            alignmentPolicy,
+            alignmentToleranceSeconds,
+            status: "active"
+          });
           const memoryPointer = writeDerivedMetricMemoryPointer(memory, context, existing);
           return {
             reused: true,
@@ -1445,7 +2104,9 @@ export function createGenericToolRegistry(
             created: false,
             instance: existing,
             latest: existingLatest,
+            materialization,
             dashboardBinding: dashboardBinding(existing),
+            inputDashboardBindings: derivedMetricInputDashboardBindings(existing.entityId, existingDependencies),
             memoryPointer,
             reuseHint: "Existing latest value reused; no BMS dependency reads or recalculation were performed."
           };
@@ -1486,19 +2147,24 @@ export function createGenericToolRegistry(
         }
 
         try {
-          const limit = Math.min(Math.max(1, numArg(args, "limit", 2000)), 20_000);
+          const limit = DERIVED_METRIC_SOURCE_LIMIT;
           const [leftSeries, rightSeries] = await Promise.all([
             readDerivedMetricDependencySeries(derivedMetrics, leftDependency, from, to, limit),
             readDerivedMetricDependencySeries(derivedMetrics, rightDependency, from, to, limit)
           ]);
-          const calculated = calculateAlignedDerivedMetricSamples(kind, leftRole, rightRole, leftSeries, rightSeries);
+          const calculated = calculateAlignedDerivedMetricSamples(
+            kind,
+            leftRole,
+            rightRole,
+            leftSeries,
+            rightSeries,
+            invalidValuePolicy,
+            alignmentPolicy,
+            alignmentToleranceSeconds
+          );
           if (calculated.samples.length === 0) {
-            return {
-              error: "no_aligned_samples",
-              inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
-              skipped: calculated.skipped,
-              message: "No aligned numeric samples were available for the requested source window."
-            };
+            calculated.samples.push(fallbackDerivedMetricSample(to, leftRole, rightRole, "no_aligned_samples", invalidValuePolicy));
+            calculated.fallbackCount += 1;
           }
 
           const metadata = isPlainRecord(args.metadata) ? args.metadata : undefined;
@@ -1527,18 +2193,37 @@ export function createGenericToolRegistry(
             derivedMetrics.recordSample({
               instanceId: registerResult.instance.instanceId,
               ts: sample.ts,
-              valueNum: sample.value,
+              ...(typeof sample.value === "number" && Number.isFinite(sample.value) ? { valueNum: sample.value } : {}),
+              ...(sample.valueText ? { valueText: sample.valueText } : {}),
               calculationRunId,
               sourceWindowStart: from,
               sourceWindowEnd: to,
+              ...(sample.quality ? { quality: sample.quality } : {}),
+              ...(sample.status ? { status: sample.status } : {}),
               metadata: {
                 ...(metadata ?? {}),
                 formulaKind: kind,
-                inputs: sample.inputs
+                inputs: sample.inputs,
+                invalidValuePolicy,
+                alignmentPolicy,
+                alignmentToleranceSeconds,
+                ...(sample.inputTimestamps ? { inputTimestamps: sample.inputTimestamps } : {}),
+                ...(sample.inputLagSeconds ? { inputLagSeconds: sample.inputLagSeconds } : {}),
+                ...(sample.invalidReason ? { invalidReason: sample.invalidReason } : {})
               }
             });
           }
           const latest = derivedMetrics.readLatest(registerResult.instance.instanceId);
+          const materialization = configureDerivedMetricMaterialization(derivedMetrics, registerResult.instance, {
+            enabled: true,
+            formulaKind: kind,
+            leftRole,
+            rightRole,
+            invalidValuePolicy,
+            alignmentPolicy,
+            alignmentToleranceSeconds,
+            status: "active"
+          });
           const memoryPointer = writeDerivedMetricMemoryPointer(memory, context, registerResult.instance);
           return {
             reused: false,
@@ -1546,11 +2231,25 @@ export function createGenericToolRegistry(
             created: registerResult.created,
             instance: registerResult.instance,
             latest,
+            materialization,
             sampleCount: calculated.samples.length,
             skipped: calculated.skipped,
+            fallbackCount: calculated.fallbackCount,
             inputCounts: { [leftRole]: leftSeries.size, [rightRole]: rightSeries.size },
+            sourceWindow: {
+              from,
+              to,
+              minimumDays: DERIVED_METRIC_MIN_HISTORY_DAYS,
+              defaultedFrom: window.defaultedFrom,
+              expandedFrom: window.expandedFrom,
+              limit
+            },
+            invalidValuePolicy,
+            alignmentPolicy,
+            alignmentToleranceSeconds,
             formulaKind: kind,
             dashboardBinding: dashboardBinding(registerResult.instance),
+            inputDashboardBindings: derivedMetricInputDashboardBindings(registerResult.instance.entityId, dependencies),
             memoryPointer,
             reuseHint: "Metric samples persisted. Future requests should call derived_metric_lookup/read before recalculating."
           };
@@ -1575,10 +2274,16 @@ export function createGenericToolRegistry(
             entityName: { type: "string", description: "Human readable entity name." },
             displayName: { type: "string", description: "Metric display name." },
             unit: { type: "string", description: "Metric unit." },
-            metricType: { type: "string", description: "derived, kpi, fd_score, etc." },
+            metricType: { type: "string", description: "Asset type: kpi for performance/efficiency, fdd/fd_score for detection, derived for neutral intermediate values." },
             formulaVersion: { type: "string", description: "Formula version, default v1." },
             formula: { type: "string", description: "Formula expression or concise calculation rule." },
             formulaDescription: { type: "string", description: "Plain-language formula description." },
+            formulaKind: { type: "string", enum: ["ratio", "difference"], description: "Optional executable kind for background materialization." },
+            leftRole: { type: "string", description: "Optional left/numerator/minuend role for background materialization." },
+            rightRole: { type: "string", description: "Optional right/denominator/subtrahend role for background materialization." },
+            invalidValuePolicy: { type: "string", enum: ["null", "zero"], description: "Optional non-calculable sample policy for background materialization." },
+            alignmentPolicy: { type: "string", enum: ["exact", "nearest"], description: "Optional input alignment policy for background materialization." },
+            alignmentToleranceSeconds: { type: "number", description: "Tolerance for nearest alignment, default 300 seconds." },
             dependencies: {
               type: "array",
               description:
@@ -1604,11 +2309,19 @@ export function createGenericToolRegistry(
         }
         const metadata = isPlainRecord(args.metadata) ? args.metadata : undefined;
         try {
+          const formula = textArg(args, "formula");
+          const formulaKind = normalizeDerivedMetricFormulaKind(textArg(args, "formulaKind"))
+            ?? inferDerivedMetricFormulaKind(formula);
+          const leftRole = roleOrFallback(args, ["leftRole", "numeratorRole", "minuendRole"], dependencies[0]?.role ?? "left");
+          const rightRole = roleOrFallback(args, ["rightRole", "denominatorRole", "subtrahendRole"], dependencies[1]?.role ?? "right");
+          const invalidValuePolicy = normalizeDerivedMetricInvalidValuePolicy(textArg(args, "invalidValuePolicy"));
+          const alignmentPolicy = normalizeDerivedMetricAlignmentPolicy(textArg(args, "alignmentPolicy"));
+          const alignmentToleranceSeconds = normalizeDerivedMetricAlignmentToleranceSeconds(numArg(args, "alignmentToleranceSeconds", DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS));
           const result = derivedMetrics.registerMetric({
             projectId: context.projectId,
             metricKey: textArg(args, "metricKey"),
             entityId: textArg(args, "entityId"),
-            formula: textArg(args, "formula"),
+            formula,
             dependencies,
             ...(textArg(args, "entityName") ? { entityName: textArg(args, "entityName") } : {}),
             ...(textArg(args, "displayName") ? { displayName: textArg(args, "displayName") } : {}),
@@ -1619,9 +2332,25 @@ export function createGenericToolRegistry(
             createdBy: context.userId,
             ...(metadata ? { metadata } : {})
           });
+          const materialization = configureDerivedMetricMaterialization(derivedMetrics, result.instance, formulaKind
+            ? {
+                enabled: true,
+                formulaKind,
+                leftRole,
+                rightRole,
+                invalidValuePolicy,
+                alignmentPolicy,
+                alignmentToleranceSeconds,
+                status: "active"
+              }
+            : {
+                enabled: false,
+                status: "unsupported"
+              });
           const memoryPointer = writeDerivedMetricMemoryPointer(memory, context, result.instance);
           return {
             ...result,
+            materialization,
             memoryPointer,
             reuseHint: result.created
               ? "Metric persisted. Future requests should call derived_metric_lookup/read first."
@@ -1731,6 +2460,8 @@ export function createGenericToolRegistry(
         const includeLatest = mode !== "history";
         return {
           instance,
+          dashboardBinding: derivedMetricOutputDashboardBinding(instance),
+          inputDashboardBindings: derivedMetricInputDashboardBindings(instance.entityId, derivedMetricInstanceDependencyInputs(instance)),
           ...(includeLatest ? { latest: derivedMetrics.readLatest(instance.instanceId) } : {}),
           ...(includeHistory
             ? {
@@ -2139,7 +2870,7 @@ export function createGenericToolRegistry(
       schema: {
         name: "dashboard_create",
         description:
-          "Create a dashboard with typed widgets. Provide title and widgets; layout and sections are optional because this tool normalizes them into a canonical 12-column layout. Never generate raw HTML/JS. Supported widgets: live_value_grid for compact live tables, stat_value for one prominent current/latest value, timeseries_chart for history, bar_comparison for comparing latest numeric values across equipment or points, and note for operator annotations without point bindings. For multi-equipment monitoring, group live/stat widgets by equipment; one focused trend per equipment/asset is added when trends are not explicitly disabled. This tool repairs missing/invalid sections into Overview, Comparison, Trends, and conditional Notes. Preferred widget fields are id, kind, title, pointBindings; note widgets should use content and optional tone. The tool accepts raw BMS bindings ({pointName,label,unit}) and derived metric bindings ({source:\"derived_metric\",metricInstanceId} or {source:\"derived_metric\",metricKey,entityId,label,unit}).",
+          "Create a dashboard with typed widgets. Provide title and widgets; layout and sections are optional because this tool normalizes them into a canonical 12-column layout. Never generate raw HTML/JS. Supported widgets: live_value_grid for compact live tables, stat_value for one prominent current/latest value, timeseries_chart for history, bar_comparison for comparing latest numeric values across equipment or points, and note for operator annotations without point bindings. For multi-equipment monitoring, group live/stat widgets by equipment; one focused trend per equipment/asset is added when trends are not explicitly disabled. This tool repairs missing/invalid sections into Overview, Comparison, Trends, and conditional Notes. Preferred widget fields are id, kind, title, pointBindings; note widgets should use content and optional tone. The tool accepts raw BMS bindings ({pointName,label,unit}) and derived metric bindings ({source:\"derived_metric\",metricInstanceId} or {source:\"derived_metric\",metricKey,entityId,label,unit}). Bindings may include entityId/groupId, dependencyRole, and defaultVisible=false for audit/input trend series.",
         parameters: {
           type: "object",
           properties: {
@@ -2150,7 +2881,7 @@ export function createGenericToolRegistry(
             widgets: {
               type: "array",
               description:
-                "Widget definitions. Supported kinds: live_value_grid, stat_value, timeseries_chart, bar_comparison, note. Use pointBindings with raw BMS bindings [{pointName,label,role,unit}] or derived metric bindings [{source:\"derived_metric\",metricInstanceId,metricKey,entityId,label,unit}]. Use stat_value for one key current value; use bar_comparison for latest-value comparisons; use note with content/tone for board annotations."
+                "Widget definitions. Supported kinds: live_value_grid, stat_value, timeseries_chart, bar_comparison, note. Use pointBindings with raw BMS bindings [{pointName,label,role,unit}] or derived metric bindings [{source:\"derived_metric\",metricInstanceId,metricKey,entityId,label,unit}]. Optional binding fields: entityId/groupId, dependencyRole, defaultVisible. Use stat_value for one key current value; use bar_comparison for latest-value comparisons; use note with content/tone for board annotations."
             },
             layout: {
               type: "array",
@@ -2179,7 +2910,7 @@ export function createGenericToolRegistry(
           return { error: "dashboard_create_unavailable" };
         }
         const parsed = parseDashboardMutationInput({
-          ...normalizeDashboardCreateArgs(args),
+          ...normalizeDashboardCreateArgs(args, derivedMetrics, context.projectId),
           ...(textArg(args, "visibility") ? {} : { visibility: "project" }),
           sourceConversationId: textArg(args, "sourceConversationId") || context.conversationId
         });

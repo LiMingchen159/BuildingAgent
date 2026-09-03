@@ -20,6 +20,7 @@ import {
   createSeedStore,
   ensureStoreDashboardsByProject,
   type ChatMessage,
+  type ChatMessageActivity,
   type ChatMessageDownload,
   type ChatMessageImage,
   type Conversation,
@@ -64,7 +65,19 @@ import {
   restoreFeedbackSequence
 } from "./projectFeedback.js";
 import { createEmbeddingProvider } from "./embeddingProvider.js";
-import { DerivedMetricStore, type DerivedMetricInstance, type DerivedMetricSample } from "./derivedMetrics.js";
+import {
+  DerivedMetricStore,
+  type DerivedMetricFormulaKind,
+  type DerivedMetricInstance,
+  type DerivedMetricInvalidValuePolicy,
+  type DerivedMetricMaterialization,
+  type DerivedMetricSample
+} from "./derivedMetrics.js";
+import {
+  alignNumericSeries,
+  DEFAULT_DERIVED_METRIC_ALIGNMENT_POLICY,
+  DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS
+} from "./derivedMetricAlignment.js";
 import { GroundingRuleIndex } from "./groundingRuleIndex.js";
 import { hasConfigurePermission, platformBoundsPayload } from "./platformBounds.js";
 import {
@@ -125,6 +138,23 @@ interface BmsDashboardLatestBatchQuery {
   metric_instance_id?: string;
   metric_key?: string;
   entity_id?: string;
+}
+
+interface ActiveChatStreamSnapshot {
+  projectId: string;
+  conversationId: string;
+  requestId: string;
+  startedAt: number;
+  updatedAt: number;
+  userMessage: ChatMessage;
+  assistantMessage: ChatMessage;
+  activities: ChatMessageActivity[];
+  interimNarration: string;
+  answerPhase: boolean;
+  workElapsedMs: number;
+  workSegmentStartedAt: number | null;
+  workTimelinePaused: boolean;
+  streamTimelineFinalized: boolean;
 }
 
 interface BuildServerOptions {
@@ -498,6 +528,40 @@ function finalizeAssistantContent(
   };
 }
 
+function markdownLinkLabel(value: string): string {
+  return value.replace(/([\\[\]])/g, "\\$1");
+}
+
+function dashboardsCreatedAfter(
+  store: SeedStore,
+  projectId: string,
+  existingDashboardIds: ReadonlySet<string>
+): DashboardRecord[] {
+  return (store.dashboardsByProject[projectId] ?? [])
+    .filter((dashboard) => !existingDashboardIds.has(dashboard.id));
+}
+
+function appendCreatedDashboardLinks(
+  content: string,
+  projectId: string,
+  dashboards: DashboardRecord[]
+): string {
+  const missingLinks = dashboards
+    .map((dashboard) => ({
+      dashboard,
+      path: dashboardPath(projectId, dashboard.id)
+    }))
+    .filter(({ path }) => !content.includes(path));
+  if (missingLinks.length === 0) {
+    return content;
+  }
+  const linkLines = missingLinks
+    .map(({ dashboard, path }) => `- [${markdownLinkLabel(dashboard.title)}](${path})`)
+    .join("\n");
+  const heading = missingLinks.length === 1 ? "Dashboard link:" : "Dashboard links:";
+  return `${content.trimEnd()}\n\n${heading}\n${linkLines}`;
+}
+
 function stripProviderThinkingMarkup(content: string): string {
   return content
     .replace(/<(think|redacted_thinking)>[\s\S]*?<\/(think|redacted_thinking)>/gi, "")
@@ -805,6 +869,96 @@ function derivedMetricTimeseriesRow(instance: DerivedMetricInstance, sample: Der
     ...(typeof sample.valueNum === "number" ? { value_num: sample.valueNum, value: String(sample.valueNum) } : {}),
     ...(sample.valueText ? { value_text: sample.valueText, value: sample.valueText } : {})
   };
+}
+
+interface DerivedMetricDashboardLink {
+  id: string;
+  title: string;
+  widgetCount: number;
+  path: string;
+}
+
+interface DerivedMetricAsset {
+  instance: DerivedMetricInstance;
+  latest: DerivedMetricSample | null;
+  materialization: DerivedMetricMaterialization | null;
+  linkedDashboards: DerivedMetricDashboardLink[];
+}
+
+function dashboardUsesDerivedMetric(dashboard: DashboardRecord, instance: DerivedMetricInstance): boolean {
+  return dashboard.widgets.some((widget) => widget.pointBindings.some((binding) => {
+    if (binding.source !== "derived_metric") return false;
+    if (binding.metricInstanceId && binding.metricInstanceId === instance.instanceId) return true;
+    return binding.metricKey === instance.metricKey && binding.entityId === instance.entityId;
+  }));
+}
+
+function linkedDashboardsForDerivedMetric(store: SeedStore, projectId: string, instance: DerivedMetricInstance, userId: string): DerivedMetricDashboardLink[] {
+  return readableDashboardsForProject(store, projectId, userId)
+    .filter((dashboard) => dashboardUsesDerivedMetric(dashboard, instance))
+    .map((dashboard) => ({
+      id: dashboard.id,
+      title: dashboard.title,
+      widgetCount: dashboard.widgets.length,
+      path: dashboardPath(projectId, dashboard.id)
+    }));
+}
+
+function derivedMetricAssetsForProject(
+  store: SeedStore,
+  derivedMetrics: DerivedMetricStore,
+  projectId: string,
+  userId: string
+): DerivedMetricAsset[] {
+  return derivedMetrics.listProjectMetrics(projectId).map((instance) => ({
+    instance,
+    latest: derivedMetrics.readLatest(instance.instanceId),
+    materialization: derivedMetrics.readMaterialization(instance.instanceId),
+    linkedDashboards: linkedDashboardsForDerivedMetric(store, projectId, instance, userId)
+  }));
+}
+
+function inferredMaterializerKind(instance: DerivedMetricInstance, materialization: DerivedMetricMaterialization): DerivedMetricFormulaKind | null {
+  if (materialization.formulaKind === "ratio" || materialization.formulaKind === "difference") {
+    return materialization.formulaKind;
+  }
+  const formula = instance.formula.toLowerCase();
+  if (formula.includes("/") || formula.includes("ratio")) return "ratio";
+  if (formula.includes("-") || formula.includes("difference") || formula.includes("delta")) return "difference";
+  return null;
+}
+
+function materializerInvalidPolicy(materialization: DerivedMetricMaterialization): DerivedMetricInvalidValuePolicy {
+  return materialization.invalidValuePolicy === "zero" ? "zero" : "null";
+}
+
+function materializerSeriesFromRows(rows: BmsTimeseriesRow[]): Map<string, number> {
+  const series = new Map<string, number>();
+  for (const row of rows) {
+    const value = typeof row.value_num === "number" && Number.isFinite(row.value_num)
+      ? row.value_num
+      : Number(row.value ?? row.value_text ?? "");
+    if (Number.isFinite(value)) {
+      series.set(row.ts, value);
+    }
+  }
+  return series;
+}
+
+function materializerSeriesFromSamples(samples: DerivedMetricSample[]): Map<string, number> {
+  const series = new Map<string, number>();
+  for (const sample of samples) {
+    if (typeof sample.valueNum === "number" && Number.isFinite(sample.valueNum)) {
+      series.set(sample.ts, sample.valueNum);
+    }
+  }
+  return series;
+}
+
+function materializerFallbackValue(policy: DerivedMetricInvalidValuePolicy): { valueNum?: number; valueText?: string; status: string } {
+  return policy === "zero"
+    ? { valueNum: 0, status: "fallback_zero" }
+    : { valueText: "N/A", status: "not_calculable" };
 }
 
 const BMS_DASHBOARD_HISTORY_BATCH_CONCURRENCY = 8;
@@ -1790,6 +1944,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   const dashboardSubscriptions = new Map<string, Map<WSWebSocket, Set<string>>>();
   const dashboardPollers = new Map<string, ReturnType<typeof setInterval>>();
   const dashboardLastValues = new Map<string, Map<string, string>>();
+  const activeChatStreams = new Map<string, ActiveChatStreamSnapshot>();
 
   function broadcastToProject(projectId: string, data: Record<string, unknown>): void {
     const sockets = wsConnections.get(projectId);
@@ -1800,6 +1955,379 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         ws.send(payload);
       }
     }
+  }
+
+  function activeChatStreamKey(projectId: string, conversationId: string): string {
+    return `${projectId}:${conversationId}`;
+  }
+
+  function publicActiveChatStream(snapshot: ActiveChatStreamSnapshot): ActiveChatStreamSnapshot {
+    return {
+      ...snapshot,
+      userMessage: { ...snapshot.userMessage },
+      assistantMessage: { ...snapshot.assistantMessage },
+      activities: snapshot.activities.map((activity) => ({ ...activity }))
+    };
+  }
+
+  function broadcastActiveChatStream(snapshot: ActiveChatStreamSnapshot): void {
+    broadcastToProject(snapshot.projectId, {
+      type: "chat_stream_updated",
+      projectId: snapshot.projectId,
+      conversationId: snapshot.conversationId,
+      requestId: snapshot.requestId,
+      stream: publicActiveChatStream(snapshot)
+    });
+  }
+
+  function finishActiveChatStream(projectId: string, conversationId: string, requestId: string): void {
+    const key = activeChatStreamKey(projectId, conversationId);
+    const snapshot = activeChatStreams.get(key);
+    if (!snapshot || snapshot.requestId !== requestId) return;
+    activeChatStreams.delete(key);
+    broadcastToProject(projectId, {
+      type: "chat_stream_finished",
+      projectId,
+      conversationId,
+      requestId
+    });
+  }
+
+  function materializerDependencyForRole(
+    instance: DerivedMetricInstance,
+    role: string,
+    fallbackIndex: number
+  ): DerivedMetricInstance["dependencies"][number] | null {
+    return instance.dependencies.find((dependency) => dependency.role === role)
+      ?? instance.dependencies[fallbackIndex]
+      ?? null;
+  }
+
+  async function readMaterializerDependencySeries(
+    dependency: DerivedMetricInstance["dependencies"][number],
+    from: string,
+    to: string,
+    limit: number
+  ): Promise<Map<string, number>> {
+    if (dependency.sourceType === "metric") {
+      const dependencyInstance = derivedMetrics.getInstance(dependency.sourceId);
+      if (!dependencyInstance) return new Map();
+      return materializerSeriesFromSamples(derivedMetrics.readHistory(dependencyInstance.instanceId, {
+        from,
+        to,
+        limit,
+        order: "asc"
+      }));
+    }
+
+    const params: Record<string, string> = {
+      from,
+      to,
+      limit: String(Math.min(Math.max(1, limit), 20_000)),
+      order: "asc"
+    };
+    if (dependency.pointName) {
+      params.name = dependency.pointName;
+    } else if (dependency.objectRef) {
+      params.object_ref = dependency.objectRef;
+    } else {
+      params.name = dependency.sourceId;
+    }
+    const result = await fetchTimeseries(
+      bmsCollectorBaseUrl(env),
+      params,
+      fetchProxy as typeof fetch,
+      { preferReadings: true }
+    );
+    return materializerSeriesFromRows(result.items);
+  }
+
+  async function materializeDerivedMetricInstance(materialization: DerivedMetricMaterialization): Promise<void> {
+    const instance = derivedMetrics.getInstance(materialization.instanceId);
+    if (!instance) return;
+    const kind = inferredMaterializerKind(instance, materialization);
+    if (!kind) {
+      derivedMetrics.configureMaterialization({
+        instanceId: materialization.instanceId,
+        enabled: false,
+        status: "unsupported",
+        lastError: "No executable formula kind is available for this metric."
+      });
+      return;
+    }
+    const leftRole = materialization.leftRole ?? instance.dependencies[0]?.role ?? "left";
+    const rightRole = materialization.rightRole ?? instance.dependencies.find((dependency) => dependency.role !== leftRole)?.role ?? "right";
+    const leftDependency = materializerDependencyForRole(instance, leftRole, 0);
+    const rightDependency = materializerDependencyForRole(instance, rightRole, 1);
+    if (!leftDependency || !rightDependency) {
+      throw new Error("materializer_dependencies_not_found");
+    }
+
+    const toMs = Date.now();
+    const to = new Date(toMs).toISOString();
+    const from = new Date(toMs - materialization.lookbackSeconds * 1000).toISOString();
+    const limit = Math.min(Math.max(240, Math.ceil(materialization.lookbackSeconds / 30)), 20_000);
+    const [leftSeries, rightSeries] = await Promise.all([
+      readMaterializerDependencySeries(leftDependency, from, to, limit),
+      readMaterializerDependencySeries(rightDependency, from, to, limit)
+    ]);
+    const policy = materializerInvalidPolicy(materialization);
+    const alignmentPolicy = materialization.alignmentPolicy ?? DEFAULT_DERIVED_METRIC_ALIGNMENT_POLICY;
+    const alignmentToleranceSeconds = materialization.alignmentToleranceSeconds ?? DEFAULT_DERIVED_METRIC_ALIGNMENT_TOLERANCE_SECONDS;
+    const alignedSamples = alignNumericSeries(leftSeries, rightSeries, alignmentPolicy, alignmentToleranceSeconds);
+    const recordableSamples = alignedSamples.length > 0
+      ? alignedSamples
+      : [null];
+    const calculationRunId = `materializer:${instance.instanceId}`;
+
+    for (const aligned of recordableSamples) {
+      const ts = aligned?.ts ?? to;
+      const left = aligned?.left;
+      const right = aligned?.right;
+      const metadata: Record<string, unknown> = {
+        formulaKind: kind,
+        materialized: true,
+        inputs: {
+          ...(typeof left === "number" ? { [leftRole]: left } : {}),
+          ...(typeof right === "number" ? { [rightRole]: right } : {})
+        },
+        invalidValuePolicy: policy,
+        alignmentPolicy,
+        alignmentToleranceSeconds
+      };
+      if (aligned) {
+        metadata.inputTimestamps = {
+          [leftRole]: aligned.leftTs,
+          [rightRole]: aligned.rightTs
+        };
+        metadata.inputLagSeconds = {
+          [leftRole]: aligned.leftLagSeconds,
+          [rightRole]: aligned.rightLagSeconds
+        };
+      }
+      let sample: { valueNum?: number; valueText?: string; quality: string; status: string };
+      if (typeof left !== "number" || typeof right !== "number") {
+        const fallback = materializerFallbackValue(policy);
+        sample = { ...fallback, quality: "invalid" };
+        metadata.invalidReason = "no_aligned_samples";
+      } else if (kind === "ratio" && right === 0) {
+        const fallback = materializerFallbackValue(policy);
+        sample = { ...fallback, quality: "invalid" };
+        metadata.invalidReason = "division_by_zero";
+      } else {
+        const value = kind === "ratio" ? left / right : left - right;
+        if (Number.isFinite(value)) {
+          sample = { valueNum: value, quality: "good", status: "ok" };
+        } else {
+          const fallback = materializerFallbackValue(policy);
+          sample = { ...fallback, quality: "invalid" };
+          metadata.invalidReason = "non_finite_result";
+        }
+      }
+      derivedMetrics.recordSample({
+        instanceId: instance.instanceId,
+        ts,
+        ...(typeof sample.valueNum === "number" ? { valueNum: sample.valueNum } : {}),
+        ...(sample.valueText ? { valueText: sample.valueText } : {}),
+        quality: sample.quality,
+        status: sample.status,
+        calculationRunId,
+        sourceWindowStart: from,
+        sourceWindowEnd: to,
+        metadata
+      });
+    }
+
+    const watermarkTs = recordableSamples[recordableSamples.length - 1]?.ts ?? to;
+    derivedMetrics.configureMaterialization({
+      instanceId: instance.instanceId,
+      enabled: true,
+      formulaKind: kind,
+      leftRole,
+      rightRole,
+      invalidValuePolicy: policy,
+      alignmentPolicy,
+      alignmentToleranceSeconds,
+      lastRunAt: to,
+      nextRunAt: new Date(toMs + materialization.intervalSeconds * 1000).toISOString(),
+      watermarkTs,
+      status: "active",
+      lastError: null
+    });
+  }
+
+  let derivedMetricMaterializerRunning = false;
+  async function runDerivedMetricMaterializer(): Promise<void> {
+    if (derivedMetricMaterializerRunning) return;
+    derivedMetricMaterializerRunning = true;
+    const now = Date.now();
+    const touchedProjects = new Set<string>();
+    try {
+      const due = derivedMetrics.listMaterializations()
+        .filter((materialization) =>
+          materialization.enabled
+          && (!materialization.nextRunAt || Date.parse(materialization.nextRunAt) <= now)
+        )
+        .slice(0, 50);
+      for (const materialization of due) {
+        try {
+          await materializeDerivedMetricInstance(materialization);
+          touchedProjects.add(materialization.projectId);
+        } catch (error) {
+          derivedMetrics.configureMaterialization({
+            instanceId: materialization.instanceId,
+            enabled: true,
+            status: "error",
+            nextRunAt: new Date(now + materialization.intervalSeconds * 1000).toISOString(),
+            lastError: error instanceof Error ? error.message : "materializer_failed"
+          });
+          touchedProjects.add(materialization.projectId);
+        }
+      }
+    } finally {
+      derivedMetricMaterializerRunning = false;
+      for (const projectId of touchedProjects) {
+        broadcastToProject(projectId, { type: "derived_metrics_updated", projectId });
+      }
+    }
+  }
+
+  const materializerDisabled = env.DERIVED_METRIC_MATERIALIZER_DISABLED === "1";
+  const derivedMetricMaterializerInterval = materializerDisabled
+    ? null
+    : setInterval(() => {
+        void runDerivedMetricMaterializer();
+      }, 60_000);
+  const derivedMetricMaterializerKickoff = materializerDisabled
+    ? null
+    : setTimeout(() => {
+        void runDerivedMetricMaterializer();
+      }, 5_000);
+  derivedMetricMaterializerInterval?.unref?.();
+  derivedMetricMaterializerKickoff?.unref?.();
+  app.addHook("onClose", async () => {
+    if (derivedMetricMaterializerInterval) clearInterval(derivedMetricMaterializerInterval);
+    if (derivedMetricMaterializerKickoff) clearTimeout(derivedMetricMaterializerKickoff);
+  });
+
+  function storeActiveChatStreamActivity(
+    activities: ChatMessageActivity[],
+    activity: ChatMessageActivity
+  ): ChatMessageActivity[] {
+    if (activity.id) {
+      const existingIndex = activities.findIndex((entry) => entry.id === activity.id);
+      if (existingIndex >= 0) {
+        const next = activities.slice();
+        next[existingIndex] = { ...activity };
+        return next;
+      }
+    }
+    const duplicateIndex = activities.findIndex((entry) =>
+      !entry.id && !activity.id && entry.label === activity.label && entry.kind === activity.kind
+    );
+    if (duplicateIndex >= 0) {
+      const next = activities.slice();
+      next[duplicateIndex] = { ...activity };
+      return next;
+    }
+    return [...activities, { ...activity }];
+  }
+
+  function activityFromStreamPayload(payload: unknown): ChatMessageActivity | null {
+    if (typeof payload !== "object" || payload === null) return null;
+    const value = payload as Record<string, unknown>;
+    if (typeof value.label !== "string" || typeof value.kind !== "string") return null;
+    const activity: ChatMessageActivity = {
+      label: value.label,
+      kind: value.kind as ChatMessageActivity["kind"]
+    };
+    if (typeof value.id === "string") activity.id = value.id;
+    if (typeof value.tool === "string") activity.tool = value.tool;
+    if (value.status === "running" || value.status === "done") activity.status = value.status;
+    if (typeof value.raw === "string") activity.raw = value.raw;
+    if (typeof value.requestId === "string") activity.requestId = value.requestId;
+    if (typeof value.detail === "string") activity.detail = value.detail;
+    if (typeof value.output === "string") activity.output = value.output;
+    if (typeof value.durationMs === "number") activity.durationMs = value.durationMs;
+    if (typeof value.exitCode === "number") activity.exitCode = value.exitCode;
+    if (typeof value.at === "number") activity.at = value.at;
+    return activity;
+  }
+
+  function updateActiveChatStreamWorkState(snapshot: ActiveChatStreamSnapshot, now: number): void {
+    const hasRunningTool = snapshot.activities.some((activity) => activity.kind === "tool" && activity.status === "running");
+    if (hasRunningTool) {
+      if (snapshot.workSegmentStartedAt == null) {
+        snapshot.workSegmentStartedAt = now;
+      }
+      snapshot.workTimelinePaused = false;
+      return;
+    }
+    if (snapshot.workSegmentStartedAt != null) {
+      snapshot.workElapsedMs += Math.max(0, now - snapshot.workSegmentStartedAt);
+      snapshot.workSegmentStartedAt = null;
+    }
+    snapshot.workTimelinePaused = true;
+  }
+
+  function applyStreamEventToActiveChatStream(
+    projectId: string,
+    conversationId: string,
+    requestId: string,
+    event: string,
+    data: unknown
+  ): void {
+    const key = activeChatStreamKey(projectId, conversationId);
+    const snapshot = activeChatStreams.get(key);
+    if (!snapshot || snapshot.requestId !== requestId) return;
+    const now = Date.now();
+    let changed = false;
+
+    if ((event === "narration_token" || event === "answer_token" || event === "token") && typeof (data as { content?: unknown })?.content === "string") {
+      const content = (data as { content: string }).content;
+      if (event === "narration_token") {
+        if (!snapshot.answerPhase) {
+          snapshot.interimNarration += content;
+          changed = true;
+        }
+      } else {
+        snapshot.answerPhase = true;
+        snapshot.interimNarration = "";
+        snapshot.assistantMessage = {
+          ...snapshot.assistantMessage,
+          content: snapshot.assistantMessage.content + content
+        };
+        changed = true;
+      }
+      updateActiveChatStreamWorkState(snapshot, now);
+    } else if (event === "final_answer_start") {
+      snapshot.answerPhase = true;
+      snapshot.interimNarration = "";
+      updateActiveChatStreamWorkState(snapshot, now);
+      changed = true;
+    } else if (event === "narration_reset") {
+      snapshot.interimNarration = "";
+      changed = true;
+    } else if (event === "token_reset") {
+      snapshot.interimNarration = "";
+      snapshot.assistantMessage = { ...snapshot.assistantMessage, content: "" };
+      changed = true;
+    } else if (event === "activity") {
+      const activity = activityFromStreamPayload(data);
+      if (activity) {
+        snapshot.activities = storeActiveChatStreamActivity(snapshot.activities, activity);
+        if (activity.kind === "context") {
+          snapshot.interimNarration = "";
+        }
+        updateActiveChatStreamWorkState(snapshot, now);
+        changed = true;
+      }
+    }
+
+    if (!changed) return;
+    snapshot.updatedAt = now;
+    activeChatStreams.set(key, snapshot);
+    broadcastActiveChatStream(snapshot);
   }
 
   async function pollDashboardSubscriptions(projectId: string): Promise<void> {
@@ -2955,6 +3483,39 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     };
   });
 
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/chat/active-streams", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) {
+      return session;
+    }
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) {
+      return membership;
+    }
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) {
+      return selected;
+    }
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) {
+      return readable;
+    }
+
+    const streams = [...activeChatStreams.values()]
+      .filter((stream) => stream.projectId === request.params.projectId)
+      .map(publicActiveChatStream)
+      .sort((left, right) => left.startedAt - right.startedAt);
+
+    return {
+      projectId: request.params.projectId,
+      streams,
+      requestId: requestIdFor(request)
+    };
+  });
+
   app.get<{ Params: ProjectParams; Querystring: { tool?: string; limit?: string } }>("/api/projects/:projectId/tool-logs", async (request, reply) => {
     const session = authenticateRequest(request, reply, store);
     if (isReply(session)) {
@@ -3139,6 +3700,105 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       projectId: request.params.projectId,
       dashboards: bounded(dashboards, store.maxListSize),
       totalCount: dashboards.length,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams }>("/api/projects/:projectId/derived-metrics", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const metrics = derivedMetricAssetsForProject(store, derivedMetrics, request.params.projectId, session.userId);
+    return {
+      projectId: request.params.projectId,
+      metrics: bounded(metrics, store.maxListSize),
+      totalCount: metrics.length,
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.get<{ Params: ProjectParams & { instanceId: string } }>("/api/projects/:projectId/derived-metrics/:instanceId", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const readable = requirePermission(request, reply, membership, "chat:read");
+    if (isReply(readable)) return readable;
+
+    const instance = derivedMetrics.getInstance(request.params.instanceId);
+    if (!instance || instance.projectId !== request.params.projectId) {
+      return sendError(request, reply, 404, "derived_metric_not_found", "The requested derived metric does not exist in this project.");
+    }
+
+    return {
+      projectId: request.params.projectId,
+      metric: {
+        instance,
+        latest: derivedMetrics.readLatest(instance.instanceId),
+        materialization: derivedMetrics.readMaterialization(instance.instanceId),
+        linkedDashboards: linkedDashboardsForDerivedMetric(store, request.params.projectId, instance, session.userId)
+      },
+      requestId: requestIdFor(request)
+    };
+  });
+
+  app.patch<{ Params: ProjectParams & { instanceId: string }; Body: unknown }>("/api/projects/:projectId/derived-metrics/:instanceId/materialization", async (request, reply) => {
+    const session = authenticateRequest(request, reply, store);
+    if (isReply(session)) return session;
+
+    const membership = requireProjectMembership(request, reply, store, session, request.params.projectId);
+    if (isReply(membership)) return membership;
+
+    const selected = requireSelectedProject(request, reply, session, request.params.projectId);
+    if (isReply(selected)) return selected;
+
+    const writable = requirePermission(request, reply, membership, "chat:write");
+    if (isReply(writable)) return writable;
+
+    const body = isRecordValue(request.body) ? request.body : null;
+    if (!body || typeof body.enabled !== "boolean") {
+      return sendError(request, reply, 422, "derived_metric_invalid", "Body must include enabled: boolean.");
+    }
+    const instance = derivedMetrics.getInstance(request.params.instanceId);
+    if (!instance || instance.projectId !== request.params.projectId) {
+      return sendError(request, reply, 404, "derived_metric_not_found", "The requested derived metric does not exist in this project.");
+    }
+    const current = derivedMetrics.readMaterialization(instance.instanceId);
+    const materialization = derivedMetrics.configureMaterialization({
+      instanceId: instance.instanceId,
+      enabled: body.enabled,
+      ...(current?.formulaKind ? { formulaKind: current.formulaKind } : {}),
+      ...(current?.leftRole ? { leftRole: current.leftRole } : {}),
+      ...(current?.rightRole ? { rightRole: current.rightRole } : {}),
+      ...(current?.invalidValuePolicy ? { invalidValuePolicy: current.invalidValuePolicy } : {}),
+      intervalSeconds: current?.intervalSeconds ?? 300,
+      lookbackSeconds: current?.lookbackSeconds ?? 3_600,
+      status: body.enabled ? "active" : "paused",
+      ...(body.enabled ? { nextRunAt: new Date().toISOString() } : {})
+    });
+    broadcastToProject(request.params.projectId, { type: "derived_metrics_updated", projectId: request.params.projectId });
+    return {
+      projectId: request.params.projectId,
+      metric: {
+        instance,
+        latest: derivedMetrics.readLatest(instance.instanceId),
+        materialization,
+        linkedDashboards: linkedDashboardsForDerivedMetric(store, request.params.projectId, instance, session.userId)
+      },
       requestId: requestIdFor(request)
     };
   });
@@ -3439,6 +4099,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       });
     }
 
+    const dashboardIdsBeforeTurn = new Set((store.dashboardsByProject[projectId] ?? []).map((dashboard) => dashboard.id));
     let agentTurn;
     const agentInputs = await buildAgentTurnInputs({
       projectId,
@@ -3488,7 +4149,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       });
     }
 
-    const assistantText = stripProviderThinkingMarkup(agentTurn.completion.text);
+    const assistantText = appendCreatedDashboardLinks(
+      stripProviderThinkingMarkup(agentTurn.completion.text),
+      projectId,
+      dashboardsCreatedAfter(store, projectId, dashboardIdsBeforeTurn)
+    );
     const finalizedAssistant = finalizeAssistantContent(
       assistantText,
       agentTurn.generatedImages,
@@ -3631,6 +4296,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       "X-Accel-Buffering": "no"
     });
 
+    let activeStreamConversationId: string | null = null;
+
     const sseWrite = (event: string, data: unknown): void => {
       if (
         event === "narration_token"
@@ -3646,6 +4313,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       const raw = reply.raw as NodeJS.WritableStream & { flush?: () => void };
       raw.flush?.();
+      if (activeStreamConversationId) {
+        applyStreamEventToActiveChatStream(projectId, activeStreamConversationId, reqId, event, data);
+      }
     };
 
     tryInstantConversationTitle({
@@ -3755,6 +4425,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       return;
     }
 
+    const dashboardIdsBeforeTurn = new Set((store.dashboardsByProject[projectId] ?? []).map((dashboard) => dashboard.id));
     let finalText = "";
     let finalProviderDiagnostics: ReturnType<typeof providerDiagnostics> | null = null;
     let streamError: string | null = null;
@@ -3763,6 +4434,30 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const turnStartedAt = Date.now();
     let workElapsedMs = 0;
     let workSegmentStartedAt: number | null = turnStartedAt;
+    activeStreamConversationId = conversationId;
+    activeChatStreams.set(activeChatStreamKey(projectId, conversationId), {
+      projectId,
+      conversationId,
+      requestId: reqId,
+      startedAt: turnStartedAt,
+      updatedAt: turnStartedAt,
+      userMessage,
+      assistantMessage: {
+        id: `streaming_${reqId}`,
+        projectId,
+        userId: session.userId,
+        role: "assistant",
+        content: ""
+      },
+      activities: [],
+      interimNarration: "",
+      answerPhase: false,
+      workElapsedMs: 0,
+      workSegmentStartedAt,
+      workTimelinePaused: false,
+      streamTimelineFinalized: false
+    });
+    broadcastActiveChatStream(activeChatStreams.get(activeChatStreamKey(projectId, conversationId))!);
     const pauseWorkTimeline = (): void => {
       const now = Date.now();
       if (workSegmentStartedAt != null) {
@@ -4131,12 +4826,17 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (streamError && !finalText) {
       messages.pop();
       conversation.messageIds.pop();
+      finishActiveChatStream(projectId, conversationId, reqId);
       reply.raw.end();
       return;
     }
 
     // Store assistant message
-    const assistantContent = stripProviderThinkingMarkup(finalText || "I wasn't able to complete the analysis.");
+    const assistantContent = appendCreatedDashboardLinks(
+      stripProviderThinkingMarkup(finalText || "I wasn't able to complete the analysis."),
+      projectId,
+      dashboardsCreatedAfter(store, projectId, dashboardIdsBeforeTurn)
+    );
     const finalizedAssistant = finalizeAssistantContent(
       assistantContent,
       streamGeneratedImages,
@@ -4179,6 +4879,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     });
 
     reply.raw.end();
+    finishActiveChatStream(projectId, conversationId, reqId);
 
     if (isFirstConversationExchange(conversation, messages)) {
       void refineConversationTitleWithLlm({
