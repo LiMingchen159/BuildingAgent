@@ -71,6 +71,16 @@ For these exceptions:
 - Run focused tests, API typecheck, and independent review before commit or PR.
 - Do not merge or deploy without separate explicit authorization.
 
+The following owner-approved FDD exception is active only on its exact issue branch:
+
+- Issue #281, branch `m007-s12-align-element-deployability`: align the Element CH-01 through CH-51 library with the reviewed `actual deployment` matrix, classify `Yes (further calculation required)` as unused/non-deployable, collapse Element uncertainty to `cannot_deploy`, preserve backend deployment authorization and frontend status consistency, and add directly corresponding tests. Authorized paths: `AGENTS.md`, `apps/api/src/fdd/**`, `apps/api/src/server.ts`, `apps/api/src/bms.test.ts`, `apps/api/src/fddHomogeneousFleet.test.ts`, `apps/web/src/App.tsx`, `apps/web/src/App.test.tsx`.
+
+For Issue #281:
+- Do not change FDD detection formulas, persisted metric values, production data, secrets, deployment configuration, reverse proxy, or unrelated project behavior.
+- The reviewed matrix is a fail-closed Element deployment policy: it may block reviewed-unused rules and convert uncertainty to `cannot_deploy`, but it must not override missing runtime evidence to force a rule deployable.
+- Run focused API and Web tests, API and Web typechecks, and independent review before commit or PR.
+- Do not merge or deploy without separate explicit authorization.
+
 The labels script should only create core labels:
 M001, M002, M003
 slice-1 to slice-10

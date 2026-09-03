@@ -22,6 +22,8 @@ function elementPointNames(): string[] {
     `WCC_${number}_KVA`,
     `WCC_${number}_CHWST`,
     `WCC_${number}_CHWSTSP`,
+    `WCC-L1-${String(number).padStart(2, "0")}-CHWVLVS`,
+    `WCC-L1-${String(number).padStart(2, "0")}-CHWFWR`,
     ...(number === 7 ? ["WCC_7_LCW_Setpoint"] : []),
     ...(number === 8 ? ["WCC-L1-08-PWR"] : [])
   ]);
@@ -64,6 +66,8 @@ function writeElementFleetFixture(dataDir: string, options: { omitWcc8Alarm?: bo
         `test:${entity}__power a brick:Electric_Power_Sensor ; rdfs:label "WCC_${number}_TLKW" ; brick:isPointOf test:${entity} .`,
         `test:${entity}__energy_competitor a brick:Electric_Power_Sensor ; rdfs:label "WCC_${number}_TLKWH" ; brick:isPointOf test:${entity} .`,
         `test:${entity}__apparent_power_competitor a brick:Electric_Power_Sensor ; rdfs:label "WCC_${number}_KVA" ; brick:isPointOf test:${entity} .`,
+        `test:${entity}__chw_valve_status a brick:Valve_Status ; rdfs:label "WCC-L1-${padded}-CHWVLVS" ; brick:isPointOf test:${entity} .`,
+        `test:${entity}__chw_flow a brick:Chilled_Water_Flow_Sensor ; rdfs:label "WCC-L1-${padded}-CHWFWR" ; brick:isPointOf test:${entity} .`,
         ...(options.includeNoisyTemperature
           ? [
               ...(number === 7
@@ -93,7 +97,11 @@ function elementCollectorFetch(names: Set<string>) {
       if (!names.has(query)) {
         return new Response(JSON.stringify({ total: 0, items: [] }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      const description = query.includes("Motor_Percent_Kilowatts")
+      const description = query.includes("CHWVLVS")
+        ? "Chilled water valve status"
+        : query.includes("CHWFWR")
+          ? "Chilled water flow rate"
+          : query.includes("Motor_Percent_Kilowatts")
         ? "Motor Percent Kilowatts"
         : query.endsWith("_TLKW")
           ? "Motor Kilowatts"
@@ -112,7 +120,9 @@ function elementCollectorFetch(names: Set<string>) {
                 : query === "WCC-L1-08-PWR"
                   ? "WCC-08 Auto/Local Status"
                   : "Run Status";
-      const unit = query.includes("CHWST") || query.includes("LCW_Setpoint")
+      const unit = query.includes("CHWFWR")
+        ? "gpm"
+        : query.includes("CHWST") || query.includes("LCW_Setpoint")
         ? "C"
         : query.endsWith("_TLKW")
           ? "kW"
@@ -581,7 +591,7 @@ describe("Element homogeneous chiller FDD deployment", () => {
     const check = tested.json().check;
     expect(check).toMatchObject({
       status: "can_deploy",
-      checkPolicyVersion: "v5-evidence-backed-missing-unit",
+      checkPolicyVersion: "v6-element-reviewed-deployability",
       mappingStrategy: "homogeneous_template",
       expectedEntityCount: 8,
       requiredRuntimeSlots: ["chiller_command", "chiller_status", "chiller_alarm", "chiller_running_power"],
@@ -651,6 +661,112 @@ describe("Element homogeneous chiller FDD deployment", () => {
     ]));
     expect(wcc8?.dependencies.map((dependency) => dependency.pointName)).not.toContain("WCC-L1-08-PWR");
     await app.close();
+  });
+
+  it("maps CH-20 to the reviewed chilled-water valve status family", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-ch20-fdd-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const app = buildServer({
+      store,
+      fetch: elementCollectorFetch(names) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    try {
+      await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+      const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_20_chw_flow_while_off");
+      expect(algorithm).toBeTruthy();
+      if (!algorithm) return;
+
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+        headers
+      });
+      expect(tested.statusCode, tested.body).toBe(200);
+      const check = tested.json().check;
+      expect(check).toMatchObject({
+        status: "can_deploy",
+        checkPolicyVersion: "v6-element-reviewed-deployability",
+        mappingStrategy: "homogeneous_template",
+        expectedEntityCount: 8
+      });
+      expect(check.deployableEntities).toHaveLength(8);
+      for (const entity of check.deployableEntities as Array<{
+        entityKey: string;
+        status: string;
+        selectedMappings: Array<{ slot: string; pointName: string }>;
+      }>) {
+        const number = Number(entity.entityKey.match(/(\d+)$/u)?.[1]);
+        const padded = String(number).padStart(2, "0");
+        const mappings = Object.fromEntries(entity.selectedMappings.map((mapping) => [mapping.slot, mapping.pointName]));
+        expect(entity.status).toBe("can_deploy");
+        expect(mappings).toMatchObject({
+          chiller_status: `WCC_${number}_Run_Status`,
+          chw_valve_command: `WCC-L1-${padded}-CHWVLVS`,
+          chw_flow_rate: `WCC-L1-${padded}-CHWFWR`
+        });
+      }
+
+      const deployed = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+        headers
+      });
+      expect(deployed.statusCode, deployed.body).toBe(200);
+      expect(deployed.json().deployment).toMatchObject({ expectedEntityCount: 8, deployedEntityCount: 8 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("blocks CH-05 as reviewed unused even when its raw point evidence is otherwise deployable", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "ba-element-ch05-fdd-"));
+    const names = writeElementFleetFixture(dataDir);
+    const store = elementStoreWithRunningPowerGrounding();
+    const app = buildServer({
+      store,
+      fetch: elementCollectorFetch(names) as typeof fetch,
+      env: {
+        BUILDING_AGENT_DATA_DIR: dataDir,
+        BMS_DATABASE_API_URL: "http://collector.test",
+        DERIVED_METRIC_MATERIALIZER_DISABLED: "1"
+      }
+    });
+    try {
+      await app.inject({ method: "POST", url: "/api/projects/project_element/select", headers });
+      const algorithm = store.fddAlgorithms?.find((entry) => entry.algorithmKey === "chiller_ch_05_prolonged_low_load");
+      expect(algorithm).toBeTruthy();
+      if (!algorithm) return;
+
+      const tested = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/test`,
+        headers
+      });
+      expect(tested.statusCode, tested.body).toBe(200);
+      expect(tested.json().check).toMatchObject({
+        status: "cannot_deploy",
+        checkPolicyVersion: "v6-element-reviewed-deployability",
+        deployableEntities: Array.from({ length: 8 }, () => ({ status: "cannot_deploy" }))
+      });
+      expect(tested.json().check.agentWorkflow.steps).toContain(
+        "Applied the owner-reviewed Element actual-deployment matrix and blocked this unused algorithm."
+      );
+
+      const deployed = await app.inject({
+        method: "POST",
+        url: `/api/projects/project_element/fdd-library/${algorithm.id}/deploy`,
+        headers
+      });
+      expect(deployed.statusCode, deployed.body).toBe(422);
+    } finally {
+      await app.close();
+    }
   });
 
   it("blocks Deploy All when one chiller lacks the template counterpart", async () => {

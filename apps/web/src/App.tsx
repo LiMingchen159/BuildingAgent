@@ -2914,6 +2914,18 @@ function latestFddCheckForAlgorithm(checks: FddDeployabilityCheck[], algorithm: 
 }
 
 const FDD_EQUIPMENT_FIRST_POLICY_VERSION = "v5-evidence-backed-missing-unit";
+const ELEMENT_REVIEWED_FDD_POLICY_VERSION = "v6-element-reviewed-deployability";
+const ELEMENT_FDD_PROJECT_ID = "project_element";
+const ELEMENT_REVIEWED_CHILLER_KEY = /^chiller_ch_(?:0[1-9]|[1-4][0-9]|5[01])_/u;
+
+function expectedFddCheckPolicyVersion(
+  projectId: string,
+  algorithm: Pick<FddAlgorithm, "algorithmKey">
+): string {
+  return projectId === ELEMENT_FDD_PROJECT_ID && ELEMENT_REVIEWED_CHILLER_KEY.test(algorithm.algorithmKey)
+    ? ELEMENT_REVIEWED_FDD_POLICY_VERSION
+    : FDD_EQUIPMENT_FIRST_POLICY_VERSION;
+}
 
 function fddTargetEquipmentType(
   algorithm: Pick<FddAlgorithm, "equipmentType" | "requiredPoints">
@@ -2949,7 +2961,7 @@ function fddEquipmentAvailabilityMatches(
 
 export function isCurrentEquipmentFirstFddCheck(
   check: FddDeployabilityCheck | undefined,
-  algorithm: Pick<FddAlgorithm, "id" | "version" | "equipmentType" | "requiredPoints">,
+  algorithm: Pick<FddAlgorithm, "id" | "version" | "algorithmKey" | "equipmentType" | "requiredPoints">,
   projectId: string | undefined,
   equipmentInventorySignature: string | undefined,
   targetAvailability: FddEquipmentAvailability | undefined,
@@ -2972,7 +2984,7 @@ export function isCurrentEquipmentFirstFddCheck(
     && check.algorithmId === algorithm.id
     && check.algorithmVersion === algorithm.version
     && check.projectId === projectId
-    && check.checkPolicyVersion === FDD_EQUIPMENT_FIRST_POLICY_VERSION
+    && check.checkPolicyVersion === expectedFddCheckPolicyVersion(projectId, algorithm)
     && check.applicability === "applicable"
     && check.equipmentInventorySignature === equipmentInventorySignature
     && fddEquipmentAvailabilityMatches(check.equipmentAvailability, targetAvailability);
