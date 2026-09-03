@@ -21,13 +21,44 @@ export interface BmsLiveReadResult {
   source: "enteliweb_live";
 }
 
+interface ResolvedPoint {
+  name: string;
+  object_ref: string;
+  api_path: string;
+}
+
+interface CatalogResolution {
+  point: ResolvedPoint | null;
+  /** How many catalog rows the `q` search returned, for a precise error message. */
+  candidateCount: number;
+}
+
+/** Catalog lookups are local and indexed; anything slower than this is not worth waiting for. */
+const CATALOG_TIMEOUT_MS = 5_000;
+
+/**
+ * The readings scan is unindexed and has been measured at ~11 s on production data,
+ * so it gets a hard ceiling well below the catalog timeout.
+ */
+const READINGS_FALLBACK_TIMEOUT_MS = 2_000;
+
+/**
+ * Point names are single tokens such as `WCC-L1-01-CHWRT` or `WCC_1_Chilled_Water_Temp`.
+ * A phrase with spaces is a description, and scanning readings for it can only ever fail.
+ */
+function looksLikePointIdentifier(value: string): boolean {
+  return /^[\w.:/-]+$/u.test(value);
+}
+
 async function resolvePointByExactName(
   baseUrl: string,
   pointName: string
-): Promise<{ name: string; object_ref: string; api_path: string } | null> {
+): Promise<ResolvedPoint | null> {
   let reading: { point_id: number; name: string; object_ref: string } | undefined;
   try {
-    const { items } = await fetchTimeseries(baseUrl, { name: pointName, limit: "1" });
+    const { items } = await fetchTimeseries(baseUrl, { name: pointName, limit: "1" }, fetch, {
+      signal: AbortSignal.timeout(READINGS_FALLBACK_TIMEOUT_MS)
+    });
     const row = items[0];
     if (row?.point_id && row.name && row.object_ref) {
       reading = { point_id: row.point_id, name: row.name, object_ref: row.object_ref };
@@ -38,36 +69,47 @@ async function resolvePointByExactName(
   if (!reading?.point_id) {
     return null;
   }
-  const pointRes = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/v1/points/${reading.point_id}`);
-  if (!pointRes.ok) {
+  try {
+    const pointRes = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/v1/points/${reading.point_id}`, {
+      signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS)
+    });
+    if (!pointRes.ok) {
+      return null;
+    }
+    const point = (await pointRes.json()) as { name: string; object_ref: string; api_path?: string | null };
+    if (!point.api_path) {
+      return null;
+    }
+    return { name: point.name, object_ref: point.object_ref, api_path: point.api_path };
+  } catch {
     return null;
   }
-  const point = (await pointRes.json()) as { name: string; object_ref: string; api_path?: string | null };
-  if (!point.api_path) {
-    return null;
-  }
-  return { name: point.name, object_ref: point.object_ref, api_path: point.api_path };
 }
 
 async function resolvePointFromCatalog(
   baseUrl: string,
   input: Pick<BmsLiveReadInput, "pointName" | "objectRef">
-): Promise<{ name: string; object_ref: string; api_path: string } | null> {
+): Promise<CatalogResolution> {
   const params = new URLSearchParams({ limit: "5" });
   if (input.pointName?.trim()) {
     params.set("q", input.pointName.trim());
   }
   const listUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/points?${params.toString()}`;
-  const listRes = await fetch(listUrl);
-  if (!listRes.ok) {
-    return null;
+  let items: Array<{ name: string; object_ref: string; api_path?: string | null }> = [];
+  try {
+    const listRes = await fetch(listUrl, { signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS) });
+    if (!listRes.ok) {
+      return { point: null, candidateCount: 0 };
+    }
+    const payload = (await listRes.json()) as { items?: Array<{ name: string; object_ref: string; api_path?: string | null }> };
+    items = payload.items ?? [];
+  } catch {
+    return { point: null, candidateCount: 0 };
   }
-  const payload = (await listRes.json()) as { items?: Array<{ name: string; object_ref: string; api_path?: string | null }> };
-  const items = payload.items ?? [];
   if (input.objectRef?.trim() && items.length) {
     const match = items.find((item) => item.object_ref === input.objectRef?.trim());
     if (match?.api_path) {
-      return { name: match.name, object_ref: match.object_ref, api_path: match.api_path };
+      return { point: { name: match.name, object_ref: match.object_ref, api_path: match.api_path }, candidateCount: items.length };
     }
   }
   const pointNameQuery = input.pointName?.trim();
@@ -75,19 +117,21 @@ async function resolvePointFromCatalog(
     const exact = items.find((item) => item.name === pointNameQuery);
     const row = exact ?? items[0];
     if (row?.api_path) {
-      return { name: row.name, object_ref: row.object_ref, api_path: row.api_path };
+      return { point: { name: row.name, object_ref: row.object_ref, api_path: row.api_path }, candidateCount: items.length };
     }
-  } else {
+  } else if (!pointNameQuery) {
     const first = items.find((item) => item.api_path);
     if (first?.api_path) {
-      return { name: first.name, object_ref: first.object_ref, api_path: first.api_path };
+      return { point: { name: first.name, object_ref: first.object_ref, api_path: first.api_path }, candidateCount: items.length };
     }
   }
+  // Readings can carry names the catalog no longer indexes, but only for real point
+  // identifiers — scanning them for a free-text phrase just burns seconds before failing.
   const exactName = input.pointName?.trim();
-  if (exactName) {
-    return resolvePointByExactName(baseUrl, exactName);
+  if (exactName && looksLikePointIdentifier(exactName)) {
+    return { point: await resolvePointByExactName(baseUrl, exactName), candidateCount: items.length };
   }
-  return null;
+  return { point: null, candidateCount: items.length };
 }
 
 function parsePresentValue(xml: string): { presentValue?: string; valueKind?: string; timeOfLastWrite?: string } {
@@ -148,18 +192,21 @@ export async function fetchEnteliLiveValue(input: BmsLiveReadInput): Promise<Bms
     const catalogQuery: Pick<BmsLiveReadInput, "pointName" | "objectRef"> = {};
     if (pointName) catalogQuery.pointName = pointName;
     if (objectRef) catalogQuery.objectRef = objectRef;
-    const resolved = await resolvePointFromCatalog(catalogBase, catalogQuery);
-    if (!resolved) {
+    const resolution = await resolvePointFromCatalog(catalogBase, catalogQuery);
+    if (!resolution.point) {
+      const searched = pointName ?? objectRef ?? "";
       return liveResult({
         ok: false,
         apiPath: "",
-        error: `Point not found in catalog (${catalogBase}).`,
+        error: resolution.candidateCount === 0
+          ? `No catalog point matches "${searched}" (${catalogBase}). Use bms_points_query to find the exact point name first.`
+          : `Found ${resolution.candidateCount} catalog candidate(s) for "${searched}" but none exposed an api_path (${catalogBase}).`,
         source: "enteliweb_live"
       });
     }
-    apiPath = resolved.api_path;
-    pointName = resolved.name;
-    objectRef = resolved.object_ref;
+    apiPath = resolution.point.api_path;
+    pointName = resolution.point.name;
+    objectRef = resolution.point.object_ref;
   }
 
   if (!apiPath.startsWith("http")) {
@@ -167,15 +214,28 @@ export async function fetchEnteliLiveValue(input: BmsLiveReadInput): Promise<Bms
   }
 
   const auth = Buffer.from(`${enteli.username}:${enteli.password}`).toString("base64");
-  const response = await fetch(apiPath, {
-    headers: {
-      Accept: "application/xml",
-      Authorization: `Basic ${auth}`
-    },
-    signal: AbortSignal.timeout(30_000)
-  });
+  let response: Response;
+  let body: string;
+  try {
+    response = await fetch(apiPath, {
+      headers: {
+        Accept: "application/xml",
+        Authorization: `Basic ${auth}`
+      },
+      signal: AbortSignal.timeout(30_000)
+    });
+    body = await response.text();
+  } catch (error) {
+    return liveResult({
+      ok: false,
+      pointName,
+      objectRef,
+      apiPath,
+      error: `enteliWEB request failed: ${error instanceof Error ? error.message : String(error)}`,
+      source: "enteliweb_live"
+    });
+  }
 
-  const body = await response.text();
   if (!response.ok) {
     return liveResult({
       ok: false,
