@@ -1,4 +1,4 @@
-site_name: BuildingAgent Developer Documentation
+site_name: BuildingAgent Docs
 site_description: Bilingual architecture, feature, FDD, and development documentation for BuildingAgent.
 site_author: BuildingAgent contributors
 site_url: https://limingchen.world/BuildingAgent/
@@ -39,10 +39,11 @@ theme:
         name: Switch to light mode / 切换至浅色模式
   features:
     - navigation.instant
+    - navigation.instant.progress
+    - navigation.path
     - navigation.tracking
     - navigation.tabs
     - navigation.tabs.sticky
-    - navigation.sections
     - navigation.indexes
     - navigation.top
     - navigation.footer
@@ -51,7 +52,9 @@ theme:
     - search.highlight
     - search.share
     - content.action.edit
+    - content.code.annotate
     - content.code.copy
+    - content.tabs.link
     - content.tooltips
 
 plugins:
@@ -90,6 +93,9 @@ markdown_extensions:
 extra_css:
   - stylesheets/extra.css
 
+extra_javascript:
+  - javascripts/docs-ui.js
+
 validation:
   nav:
     omitted_files: warn
@@ -117,70 +123,80 @@ nav:
       - 语言选择 / Language selector: developer/README.md
   - 中文:
       - 开发者文档: developer/zh-CN/README.md
+      - 快速开始:
+          - 配置与本地运行: developer/zh-CN/development/configuration.md
+          - 测试与验证: developer/zh-CN/development/testing.md
+          - 排障和契约差距: developer/zh-CN/development/troubleshooting.md
       - 架构:
           - 目标架构: developer/zh-CN/architecture/target-architecture.md
           - 当前实现架构: developer/zh-CN/architecture/current-architecture.md
           - 运行时与存储拓扑: developer/zh-CN/architecture/runtime-storage.md
           - REST、SSE 与 WebSocket 契约: developer/zh-CN/architecture/api-events.md
       - 功能:
-          - 鉴权、项目与会话: developer/zh-CN/features/auth-projects-conversations.md
-          - Web 工作区: developer/zh-CN/features/web-workspace.md
-          - Chat 与 Agent Runtime: developer/zh-CN/features/chat-agent-runtime.md
-          - Tools、Skills、Memory 与 Grounding: developer/zh-CN/features/tools-skills-memory-grounding.md
-          - Knowledge Base 与 Repository: developer/zh-CN/features/knowledge-base-repository.md
-          - BMS 集成: developer/zh-CN/features/bms-integration.md
-          - Derived Metrics 与 KPI: developer/zh-CN/features/derived-metrics-kpi.md
-          - Dashboards 与 Reports: developer/zh-CN/features/dashboards-reports.md
-          - Scheduler、Realtime 与 STT: developer/zh-CN/features/scheduler-realtime-stt.md
-          - CLI: developer/zh-CN/features/cli.md
+          - 产品与工作区:
+              - 鉴权、项目与会话: developer/zh-CN/features/auth-projects-conversations.md
+              - Web 工作区: developer/zh-CN/features/web-workspace.md
+              - CLI: developer/zh-CN/features/cli.md
+          - Agent 与知识:
+              - Chat 与 Agent Runtime: developer/zh-CN/features/chat-agent-runtime.md
+              - Tools、Skills、Memory 与 Grounding: developer/zh-CN/features/tools-skills-memory-grounding.md
+              - Knowledge Base 与 Repository: developer/zh-CN/features/knowledge-base-repository.md
+          - 楼宇智能与运行:
+              - BMS 集成: developer/zh-CN/features/bms-integration.md
+              - Derived Metrics 与 KPI: developer/zh-CN/features/derived-metrics-kpi.md
+              - Dashboards 与 Reports: developer/zh-CN/features/dashboards-reports.md
+              - Scheduler、Realtime 与 STT: developer/zh-CN/features/scheduler-realtime-stt.md
       - FDD:
           - FDD 总览: developer/zh-CN/fdd/overview.md
           - 规则模型与来源: developer/zh-CN/fdd/rule-model-sources.md
           - Brick 映射及可部署性: developer/zh-CN/fdd/brick-deployability.md
           - Runtime 与物化: developer/zh-CN/fdd/runtime-materialization.md
           - 验证和样本溯源: developer/zh-CN/fdd/verification-provenance.md
-      - 开发:
-          - 配置与本地运行: developer/zh-CN/development/configuration.md
-          - 测试与验证: developer/zh-CN/development/testing.md
-          - 排障和已知契约差距: developer/zh-CN/development/troubleshooting.md
-      - 术语表: developer/zh-CN/glossary.md
-      - 页面模板: developer/zh-CN/page-template.md
+      - 术语与文档规范:
+          - 术语表: developer/zh-CN/glossary.md
+          - 页面模板: developer/zh-CN/page-template.md
   - English:
       - Developer documentation: developer/en/README.md
+      - Get started:
+          - Configuration and local run: developer/en/development/configuration.md
+          - Testing and verification: developer/en/development/testing.md
+          - Troubleshooting and contract gaps: developer/en/development/troubleshooting.md
       - Architecture:
           - Target architecture: developer/en/architecture/target-architecture.md
           - Current implementation architecture: developer/en/architecture/current-architecture.md
           - Runtime and storage topology: developer/en/architecture/runtime-storage.md
           - REST, SSE, and WebSocket contracts: developer/en/architecture/api-events.md
       - Features:
-          - Authentication, projects, and conversations: developer/en/features/auth-projects-conversations.md
-          - Web workspace: developer/en/features/web-workspace.md
-          - Chat and Agent Runtime: developer/en/features/chat-agent-runtime.md
-          - Tools, Skills, Memory, and Grounding: developer/en/features/tools-skills-memory-grounding.md
-          - Knowledge Base and Repository: developer/en/features/knowledge-base-repository.md
-          - BMS integration: developer/en/features/bms-integration.md
-          - Derived Metrics and KPI: developer/en/features/derived-metrics-kpi.md
-          - Dashboards and Reports: developer/en/features/dashboards-reports.md
-          - Scheduler, Realtime, and STT: developer/en/features/scheduler-realtime-stt.md
-          - CLI: developer/en/features/cli.md
+          - Product and workspace:
+              - Authentication, projects, and conversations: developer/en/features/auth-projects-conversations.md
+              - Web workspace: developer/en/features/web-workspace.md
+              - CLI: developer/en/features/cli.md
+          - Agent and knowledge:
+              - Chat and Agent Runtime: developer/en/features/chat-agent-runtime.md
+              - Tools, Skills, Memory, and Grounding: developer/en/features/tools-skills-memory-grounding.md
+              - Knowledge Base and Repository: developer/en/features/knowledge-base-repository.md
+          - Building intelligence and operations:
+              - BMS integration: developer/en/features/bms-integration.md
+              - Derived Metrics and KPI: developer/en/features/derived-metrics-kpi.md
+              - Dashboards and Reports: developer/en/features/dashboards-reports.md
+              - Scheduler, Realtime, and STT: developer/en/features/scheduler-realtime-stt.md
       - FDD:
           - FDD overview: developer/en/fdd/overview.md
           - Rule model and sources: developer/en/fdd/rule-model-sources.md
           - Brick mapping and deployability: developer/en/fdd/brick-deployability.md
           - Runtime and materialization: developer/en/fdd/runtime-materialization.md
           - Verification and sample provenance: developer/en/fdd/verification-provenance.md
-      - Development:
-          - Configuration and local run: developer/en/development/configuration.md
-          - Testing and verification: developer/en/development/testing.md
-          - Troubleshooting and known contract gaps: developer/en/development/troubleshooting.md
-      - Glossary: developer/en/glossary.md
-      - Page template: developer/en/page-template.md
+      - Glossary and documentation:
+          - Glossary: developer/en/glossary.md
+          - Page template: developer/en/page-template.md
   - 参考资料 / Reference:
-      - BMS 数据配置界面: bms/BMS_DATA_CONFIG_UI.md
-      - Derived Metrics: bms/DERIVED_METRICS.md
-      - Repository workflow: workflow.md
-      - M003 Hermes migration plan: M003_HERMES_MIGRATION_PLAN.md
-      - Hermes migration:
+      - 楼宇数据 / Building data:
+          - BMS 数据配置界面: bms/BMS_DATA_CONFIG_UI.md
+          - Derived Metrics: bms/DERIVED_METRICS.md
+          - 前端接口更新说明: 前端接口更新说明.md
+      - 工程流程 / Engineering workflow:
+          - Repository workflow: workflow.md
+      - 历史与迁移 / Migration archive:
+          - M003 Hermes migration plan: M003_HERMES_MIGRATION_PLAN.md
           - Migration plan: hermes-migration/MIGRATION_PLAN.md
           - Capability matrix: hermes-migration/HERMES_CAPABILITY_MATRIX.md
-      - 前端接口更新说明: 前端接口更新说明.md
