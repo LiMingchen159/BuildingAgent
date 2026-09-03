@@ -18,12 +18,12 @@ The target architecture is fixed as four layers: frontend, data, backend, and bu
 | Data | Conversations | Implemented | Conversations, messages, and selection live in the JSON store with a SQLite session index. |
 | Data | Time series | Partial / External | The API exposes BMS history/latest boundaries; the collector/BMS owns real acquisition and authoritative series. |
 | Data | Static | Implemented | Project Knowledge Base, Repository, and uploaded material use project file directories. |
-| Data | Semantics | Partial | Brick/TTL material, semantic retrieval, and report asset discovery exist; closed-loop automatic modeling does not. |
+| Data | Semantics | Partial | Brick/TTL material, semantic retrieval, and report asset discovery exist, but closed-loop semantic model generation is not implemented. |
 | Data | Users | Implemented | Bearer sessions, memberships, role permissions, and project selection exist; default accounts are public local fixtures. |
 | Backend | FDD feedback | Implemented | FDD result materialization, Dashboard/LLM attribution, and update notifications are available. |
 | Backend | KPI feedback | Planned | Derived Metrics/KPI foundations exist; no loop equivalent to the target box was found. |
 | Backend | Simulated data | Partial | Deterministic mock provider, mock BMS, and test fixtures exist; this is not a general building simulator. |
-| Business | Automatic modeling | Partial | Semantic material, retrieval, and report asset discovery exist without an end-to-end autonomous modeling product flow. |
+| Business | Semantic model generation | Partial | Semantic material, retrieval, and report asset discovery exist, but there is no end-to-end semantic model generation flow. |
 | Business | Retrieval | Implemented | KB, Repository, Memory, conversation, and grounding retrieval are available to Agent tools. |
 | Business | FDD | Implemented | The rule catalog, evaluation, deployability checks, Tasks, result materialization, and Web management surfaces are available. |
 | Business | World model | Planned | Current code has no verifiable world-model Runtime or standalone contract. |

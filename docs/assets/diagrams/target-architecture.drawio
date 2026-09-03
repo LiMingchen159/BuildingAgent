@@ -52,7 +52,7 @@
         <mxCell id="target-business-bg" value="&lt;b&gt;业务 / Business&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=38;horizontal=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=17;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="100" y="700" width="1400" height="180" as="geometry"/>
         </mxCell>
-        <mxCell id="target-auto-model" value="&lt;b&gt;自动建模&lt;br&gt;Automatic modeling&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="1">
+        <mxCell id="target-auto-model" value="&lt;b&gt;生成语义模型&lt;br&gt;Semantic model generation&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#8a5a00&quot;&gt;部分实现 / Partial&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="1">
           <mxGeometry x="155" y="770" width="285" height="78" as="geometry"/>
         </mxCell>
         <mxCell id="target-retrieval" value="&lt;b&gt;检索 / Retrieval&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#2d6a2d&quot;&gt;已实现 / Implemented&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="1">
