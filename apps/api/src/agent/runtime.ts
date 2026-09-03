@@ -26,7 +26,13 @@ import {
   knowledgeBasePrompt,
   repositoryPrompt
 } from "./knowledgeBase.js";
-import type { ChatCompletionResult, ChatToolCall, ChatToolDefinition, ProviderChatMessage } from "../providers.js";
+import {
+  ProviderError,
+  type ChatCompletionResult,
+  type ChatToolCall,
+  type ChatToolDefinition,
+  type ProviderChatMessage
+} from "../providers.js";
 import { ContextCompressor } from "./compressor.js";
 import { estimateMessagesTokensRough } from "./contextTokens.js";
 import type { ChatMessage, ChatMessageDownload, ChatMessageImage } from "../seed.js";
@@ -36,7 +42,9 @@ type ProviderIterationResult = ChatCompletionResult & {
 };
 import { normalizeRepositoryAssetPath } from "../repositoryDownloadLinks.js";
 import { toolActivityOutput, toolExitCode } from "./toolActivityPreview.js";
+import { isLocalHistoryProducerCall, RequestHistoryExecutionGuard } from "./requestHistoryExecutionGuard.js";
 import type { DashboardMutationInput, DashboardRecord } from "../dashboards.js";
+import { RequestToolExecutionPolicy } from "./requestToolExecutionPolicy.js";
 
 export interface AgentRuntimeOptions {
   memory: AgentMemoryStore;
@@ -66,6 +74,13 @@ interface WorkingToolCall {
   result: Record<string, unknown>;
 }
 
+function plainToolArguments(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null
+    ? value as Record<string, unknown>
+    : {};
+}
 function parseGeneratedImages(result: Record<string, unknown>): ChatMessageImage[] {
   const images: ChatMessageImage[] = [];
   const seen = new Set<string>();
@@ -135,11 +150,87 @@ function parseGeneratedDownloads(result: Record<string, unknown>): ChatMessageDo
   return downloads;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+const DEFAULT_TOOL_CONCURRENCY = Number(process.env.BUILDING_AGENT_TOOL_CONCURRENCY ?? 8);
+const AGENT_TURN_TIMEOUT_MS = 180_000;
+const PROVIDER_PAYLOAD_SOFT_BYTES = 1024 * 1024;
+
+function serializedBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-const DEFAULT_TOOL_CONCURRENCY = Number(process.env.BUILDING_AGENT_TOOL_CONCURRENCY ?? 8);
+/**
+ * Compact only completed, older tool rows. The newest assistant/tool protocol
+ * pair is kept byte-for-byte so a provider never receives an orphaned or
+ * altered current tool continuation.
+ */
+export function compactOldToolRowsForProvider(
+  messages: ProviderChatMessage[],
+  tools: ChatToolDefinition[]
+): ProviderChatMessage[] {
+  if (serializedBytes({ messages, tools }) <= PROVIDER_PAYLOAD_SOFT_BYTES) {
+    return messages.slice();
+  }
+
+  let currentAssistantIndex = messages.length;
+  if (messages.at(-1)?.role === "tool") {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "assistant" && message.tool_calls && message.tool_calls.length > 0) {
+        currentAssistantIndex = index;
+        break;
+      }
+    }
+  }
+
+  return messages.map((message, index) => {
+    if (message.role !== "tool" || index > currentAssistantIndex) {
+      return { ...message };
+    }
+    const originalBytes = new TextEncoder().encode(message.content ?? "").byteLength;
+    return {
+      ...message,
+      content: JSON.stringify({
+        compacted: true,
+        summary: "Earlier tool result omitted before provider request.",
+        originalBytes
+      })
+    };
+  });
+}
+
+function agentTurnTimeoutError(): ProviderError {
+  return new ProviderError("Agent turn deadline exceeded.", {
+    code: "agent_turn_timeout",
+    status: 504,
+    responseDetail: `turn exceeded ${AGENT_TURN_TIMEOUT_MS / 1000}s deadline`
+  });
+}
+
+function agentTurnCancelledError(): ProviderError {
+  return new ProviderError("Agent turn was cancelled.", {
+    code: "agent_turn_cancelled"
+  });
+}
+
+function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? agentTurnTimeoutError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? agentTurnTimeoutError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
 
 async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
@@ -198,8 +289,10 @@ export class AgentRuntime {
   private async *callProvider(
     request: AgentTurnRequest,
     messages: ProviderChatMessage[],
-    toolDefs: ChatToolDefinition[]
+    toolDefs: ChatToolDefinition[],
+    turnSignal: AbortSignal
   ): AsyncGenerator<AgentLifecycleEvent, ProviderIterationResult, undefined> {
+    const providerMessages = compactOldToolRowsForProvider(messages, toolDefs);
     if (request.provider.completeStream) {
       let streamText = "";
       // OpenAI streams tool_call deltas keyed by `index`, not `id` — only the first
@@ -210,15 +303,22 @@ export class AgentRuntime {
       const pendingContent: string[] = [];
       let contentEventsEmitted = false;
 
-      try {
-        for await (const delta of request.provider.completeStream({
+      const providerStream = request.provider.completeStream({
           projectId: request.projectId,
           userId: request.userId,
           requestId: request.requestId,
-          messages: messages.slice(),
+          messages: providerMessages,
           tools: toolDefs,
-          toolChoice: "auto"
-        })) {
+          toolChoice: "auto",
+          signal: turnSignal
+        })[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const step = await raceWithSignal(providerStream.next(), turnSignal);
+          if (step.done) {
+            break;
+          }
+          const delta = step.value;
           if (delta.progress) {
             yield this.makeEvent("progress", delta.progress.label, {
               progressKind: delta.progress.kind,
@@ -248,12 +348,9 @@ export class AgentRuntime {
           }
         }
       } catch (streamError) {
-        // Stream failed, fall back to non-streaming. Add cooldown for rate limits.
-        if (typeof streamError === "object" && streamError !== null && "status" in streamError && (streamError as { status?: number }).status === 429) {
-          await sleep(5000);
-        }
-        const retryResult = await this.callProviderWithRetry(request, messages, toolDefs, 4);
-        return { ...retryResult, contentEventsEmitted: false };
+        // The provider adapter exclusively owns retries. Replaying this request
+        // here can duplicate tool calls or content already emitted to the user.
+        throw streamError;
       }
 
       const streamToolCalls = [...streamToolCallsByIndex.entries()]
@@ -263,8 +360,10 @@ export class AgentRuntime {
 
       const trimmedStreamText = streamText.trim();
       if (!trimmedStreamText && streamToolCalls.length === 0) {
-        const retryResult = await this.callProviderWithRetry(request, messages, toolDefs, 4);
-        return { ...retryResult, contentEventsEmitted: false };
+        throw new ProviderError("Chat provider stream completed without content.", {
+          code: "provider_empty_response",
+          provider: request.provider.metadata
+        });
       }
 
       const hasTools = streamToolCalls.length > 0;
@@ -294,50 +393,50 @@ export class AgentRuntime {
       return result;
     }
 
-    const retryResult = await this.callProviderWithRetry(request, messages, toolDefs, 4);
-    return { ...retryResult, contentEventsEmitted: false };
+    const completion = await raceWithSignal(request.provider.complete({
+      projectId: request.projectId,
+      userId: request.userId,
+      requestId: request.requestId,
+      messages: providerMessages,
+      tools: toolDefs,
+      toolChoice: "auto",
+      signal: turnSignal
+    }), turnSignal);
+    return { ...completion, contentEventsEmitted: false };
   }
 
-  private async callProviderWithRetry(
+  async *runTurnStream(
     request: AgentTurnRequest,
-    messages: ProviderChatMessage[],
-    toolDefs: ChatToolDefinition[],
-    maxRetries: number = 4
-  ): Promise<ChatCompletionResult> {
-    let lastError: unknown = null;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const completion = await request.provider.complete({
-          projectId: request.projectId,
-          userId: request.userId,
-          requestId: request.requestId,
-          messages: messages.slice(),
-          tools: toolDefs,
-          toolChoice: "auto"
-        });
-        return completion;
-      } catch (error) {
-        lastError = error;
-        if (attempt < maxRetries) {
-          // 429 rate-limit: wait 10-20s before retry; other errors use standard backoff
-          const isRateLimit =
-            typeof error === "object" && error !== null && "status" in error && (error as { status?: number }).status === 429;
-          const delay = isRateLimit
-            ? 10000 + Math.floor(Math.random() * 10000)
-            : Math.min(1000 * Math.pow(2, attempt), 8000);
-          await sleep(delay);
-        }
-      }
+    externalSignal?: AbortSignal
+  ): AsyncGenerator<AgentLifecycleEvent, AgentLoopResult, undefined> {
+    const controller = new AbortController();
+    const onExternalAbort = () => controller.abort(
+      externalSignal?.reason instanceof ProviderError ? externalSignal.reason : agentTurnCancelledError()
+    );
+    if (externalSignal?.aborted) {
+      onExternalAbort();
+    } else {
+      externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
     }
-    throw lastError;
+    const timeout = setTimeout(() => controller.abort(agentTurnTimeoutError()), AGENT_TURN_TIMEOUT_MS);
+    try {
+      return yield* this.runTurnStreamWithinDeadline(request, controller.signal);
+    } finally {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener("abort", onExternalAbort);
+    }
   }
 
-  async *runTurnStream(request: AgentTurnRequest): AsyncGenerator<AgentLifecycleEvent, AgentLoopResult, undefined> {
+  private async *runTurnStreamWithinDeadline(
+    request: AgentTurnRequest,
+    turnSignal: AbortSignal
+  ): AsyncGenerator<AgentLifecycleEvent, AgentLoopResult, undefined> {
     const maxIterations = this.options.maxIterations ?? 20;
     const events: AgentLifecycleEvent[] = [];
     const toolCallHistory: Array<{ name: string; args: Record<string, unknown>; result: Record<string, unknown> }> = [];
     const generatedImages = new Map<string, ChatMessageImage>();
     const generatedDownloads = new Map<string, ChatMessageDownload>();
+    const requestToolPolicy = new RequestToolExecutionPolicy();
 
     const yieldEvent = (event: AgentLifecycleEvent) => {
       events.push(event);
@@ -369,12 +468,12 @@ export class AgentRuntime {
         toolCallId: groundingRetrieveId
       }));
       const retrieveStartedAt = Date.now();
-      const retrieval = await retrieveGroundingRules(
+      const retrieval = await raceWithSignal(retrieveGroundingRules(
         this.options.groundingRuleIndex,
         request.projectId,
         lastUserMessage,
         allGroundingRules
-      );
+      ), turnSignal);
       groundingRules = selectGroundingForTurn(allGroundingRules, retrieval);
       retrievedGroundingRules = retrieval.retrieved;
       const retrievedRuleNames = retrievedGroundingRules.map((rule) => resolveRuleDisplayName(rule));
@@ -424,9 +523,11 @@ export class AgentRuntime {
       canConfigure: request.canConfigure,
       messages: request.messages
     };
+    const dispatchTurnTool = (name: string, args: Record<string, unknown>) =>
+      raceWithSignal(this.options.tools.dispatch(name, args, toolContext), turnSignal);
     if (this.isSaveMemoryCommand(lastUserMessage)) {
       yield yieldEvent(this.makeEvent("tool_started", "Committing approved memory proposal.", { tool: "memory_commit_proposal" }));
-      await this.options.tools.dispatch("memory_commit_proposal", {}, toolContext);
+      await dispatchTurnTool("memory_commit_proposal", {});
       yield yieldEvent(this.makeEvent("tool_completed", "Approved memory proposal committed.", { tool: "memory_commit_proposal" }));
     } else {
     const proposedSiteRule =
@@ -435,7 +536,7 @@ export class AgentRuntime {
         : null;
     if (proposedSiteRule && request.canConfigure) {
       yield yieldEvent(this.makeEvent("tool_started", "Saving approved site rule.", { tool: "feedback_save_site_rule" }));
-      await this.options.tools.dispatch(
+      await dispatchTurnTool(
         "feedback_save_site_rule",
         {
           action: proposedSiteRule.proposedFix,
@@ -443,8 +544,7 @@ export class AgentRuntime {
           trigger: `When user asks questions related to: ${proposedSiteRule.triggerTopics.join(", ")}`,
           trigger_topics: proposedSiteRule.triggerTopics,
           proposal_id: proposedSiteRule.id
-        },
-        toolContext
+        }
       );
       yield yieldEvent(this.makeEvent("tool_completed", "Site rule saved.", { tool: "feedback_save_site_rule" }));
     } else {
@@ -459,10 +559,9 @@ export class AgentRuntime {
         );
       } else {
         yield yieldEvent(this.makeEvent("tool_started", "Saving project memory note.", { tool: "memory" }));
-        await this.options.tools.dispatch(
+        await dispatchTurnTool(
           "memory",
-          { action: "add", target: "project", content: projectNoteContent },
-          toolContext
+          { action: "add", target: "project", content: projectNoteContent }
         );
         yield yieldEvent(this.makeEvent("tool_completed", "Project memory note saved.", { tool: "memory" }));
       }
@@ -478,7 +577,7 @@ export class AgentRuntime {
           );
         } else {
           yield yieldEvent(this.makeEvent("tool_started", "Saving project grounding rule.", { tool: "project_grounding_add" }));
-          await this.options.tools.dispatch("project_grounding_add", { content: groundingContent }, toolContext);
+          await dispatchTurnTool("project_grounding_add", { content: groundingContent });
           yield yieldEvent(this.makeEvent("tool_completed", "Project grounding rule saved.", { tool: "project_grounding_add" }));
         }
       } else if (this.isCommitPlaybookCommand(lastUserMessage) && this.options.projectFeedback) {
@@ -490,14 +589,13 @@ export class AgentRuntime {
         const title = proposal.triggerTopics[0] ?? proposal.proposedFix.slice(0, 80);
         const groundingSummary = `${proposal.userCorrection} Fix: ${proposal.proposedFix}`;
         yield yieldEvent(this.makeEvent("tool_started", "Committing feedback playbook.", { tool: "feedback_commit_playbook" }));
-        await this.options.tools.dispatch(
+        await dispatchTurnTool(
           "feedback_commit_playbook",
           {
             proposal_id: proposal.id,
             title,
             grounding_summary: groundingSummary
-          },
-          toolContext
+          }
         );
         yield yieldEvent(this.makeEvent("tool_completed", "Feedback playbook committed.", { tool: "feedback_commit_playbook" }));
       }
@@ -505,10 +603,9 @@ export class AgentRuntime {
         const memoryContent = this.extractMemoryCommand(lastUserMessage);
         if (memoryContent) {
           yield yieldEvent(this.makeEvent("tool_started", "Saving explicit user memory.", { tool: "memory" }));
-          await this.options.tools.dispatch(
+          await dispatchTurnTool(
             "memory",
-            { action: "add", target: "user", content: memoryContent },
-            toolContext
+            { action: "add", target: "user", content: memoryContent }
           );
           yield yieldEvent(this.makeEvent("tool_completed", "Explicit user memory saved.", { tool: "memory" }));
         }
@@ -578,6 +675,7 @@ export class AgentRuntime {
     const compressor = this.options.compressor ?? new ContextCompressor({
       contextLength: 128_000
     });
+    const historyExecutionGuard = new RequestHistoryExecutionGuard();
 
     while (iterations < maxIterations) {
       iterations += 1;
@@ -594,7 +692,7 @@ export class AgentRuntime {
       // Full compaction: prune → protect head/tail → summarize middle → sanitize tool pairs.
       const roughTokens = estimateMessagesTokensRough(conversationMessages);
       if (compressor.shouldCompress(conversationMessages, roughTokens)) {
-        const compressed = await compressor.compress(conversationMessages);
+        const compressed = await raceWithSignal(compressor.compress(conversationMessages), turnSignal);
         if (compressed.changed) {
           yield yieldEvent(this.makeEvent(
             "tool_started",
@@ -612,8 +710,8 @@ export class AgentRuntime {
         toolCount: toolDefs.length
       }));
 
-      // Try streaming first for real-time token output; fall back to non-streaming.
-      const providerEvents = this.callProvider(request, conversationMessages, toolDefs);
+      // Use exactly one provider method; the adapter exclusively owns retry policy.
+      const providerEvents = this.callProvider(request, conversationMessages, toolDefs, turnSignal);
       let providerStep = await providerEvents.next();
       while (!providerStep.done) {
         yield yieldEvent(providerStep.value);
@@ -655,12 +753,16 @@ export class AgentRuntime {
       const parsedToolCalls: WorkingToolCall[] = completion.toolCalls.map((tc) => {
         let args: Record<string, unknown>;
         try {
-          args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+          args = plainToolArguments(JSON.parse(tc.function.arguments) as unknown);
         } catch {
           args = {};
         }
         return { call: tc, args, result: {} };
       });
+      historyExecutionGuard.observeBatch(parsedToolCalls.map((entry) => ({
+        name: entry.call.function.name,
+        args: entry.args
+      })));
 
       for (const entry of parsedToolCalls) {
         yield yieldEvent(this.makeEvent("tool_started", `Running tool: ${entry.call.function.name}`, {
@@ -673,10 +775,12 @@ export class AgentRuntime {
 
       const toolConcurrency = DEFAULT_TOOL_CONCURRENCY;
       const dispatchStartedAt = Date.now();
-      const dispatchResults = await runWithConcurrency(
-        parsedToolCalls.map((entry) => async () => {
-          const startedAt = Date.now();
-          const dispatchResult = await this.options.tools.dispatch(
+      const dispatchEntry = (entry: WorkingToolCall) => async () => {
+        const startedAt = Date.now();
+        const deduplicated = await requestToolPolicy.run(
+          entry.call.function.name,
+          entry.args,
+          () => this.options.tools.dispatch(
             entry.call.function.name,
             entry.args,
             {
@@ -687,6 +791,7 @@ export class AgentRuntime {
               canConfigure: request.canConfigure,
               messages: request.messages,
               toolCallId: entry.call.id,
+              ...historyExecutionGuard.contextFields(),
               ...(this.options.dashboardOps
                 ? {
                     dashboardOps: {
@@ -700,18 +805,52 @@ export class AgentRuntime {
                   }
                 : {})
             }
-          );
-          return {
-            entry,
-            dispatchResult,
-            durationMs: Date.now() - startedAt,
-            startedAt
-          };
-        }),
-        toolConcurrency
+          )
+        );
+        const dispatchResult = deduplicated.value;
+        return {
+          entry,
+          dispatchResult,
+          deduplicated: deduplicated.reused,
+          durationMs: Date.now() - startedAt,
+          startedAt
+        };
+      };
+      const historyProducers = parsedToolCalls.filter((entry) => isLocalHistoryProducerCall({
+        name: entry.call.function.name,
+        args: entry.args
+      }));
+      const remainingToolCalls = historyProducers.length > 0
+        ? parsedToolCalls.filter((entry) => !isLocalHistoryProducerCall({
+            name: entry.call.function.name,
+            args: entry.args
+          }))
+        : parsedToolCalls;
+      const producerResults = historyProducers.length > 0
+        ? await raceWithSignal(
+            runWithConcurrency(historyProducers.map(dispatchEntry), toolConcurrency),
+            turnSignal
+          )
+        : [];
+      historyExecutionGuard.completeProducerBatch(producerResults.map(({ entry, dispatchResult }) => ({
+        name: entry.call.function.name,
+        args: entry.args,
+        result: dispatchResult.result
+      })));
+      if (historyExecutionGuard.contextFields().localHistoryDatasetReady === true) {
+        requestToolPolicy.markHistoryDatasetReady();
+      }
+      const remainingResults = await raceWithSignal(
+        runWithConcurrency(remainingToolCalls.map(dispatchEntry), toolConcurrency),
+        turnSignal
       );
+      const resultOrder = new Map(parsedToolCalls.map((entry, index) => [entry.call.id, index]));
+      const dispatchResults = [...producerResults, ...remainingResults]
+        .sort((left, right) =>
+          (resultOrder.get(left.entry.call.id) ?? 0) - (resultOrder.get(right.entry.call.id) ?? 0)
+        );
 
-      for (const { entry, dispatchResult, durationMs, startedAt } of dispatchResults) {
+      for (const { entry, dispatchResult, deduplicated, durationMs, startedAt } of dispatchResults) {
         entry.result = dispatchResult.result;
 
         const exitCode = toolExitCode(dispatchResult.result);
@@ -721,6 +860,7 @@ export class AgentRuntime {
           durationMs,
           startedAt,
           iteration: iterations,
+          ...(deduplicated ? { deduplicated: true } : {}),
           ...(exitCode !== undefined ? { exitCode } : {}),
           resultPreview: toolActivityOutput(dispatchResult.result, 500) ?? JSON.stringify(dispatchResult.result).slice(0, 300)
         }));
@@ -767,7 +907,7 @@ export class AgentRuntime {
         grace: true
       }));
       try {
-        const graceEvents = this.callProvider(request, conversationMessages, []);
+        const graceEvents = this.callProvider(request, conversationMessages, [], turnSignal);
         let graceStep = await graceEvents.next();
         while (!graceStep.done) {
           yield yieldEvent(graceStep.value);
@@ -817,14 +957,14 @@ export class AgentRuntime {
     };
   }
 
-  async runTurn(request: AgentTurnRequest): Promise<AgentTurnResult> {
+  async runTurn(request: AgentTurnRequest, externalSignal?: AbortSignal): Promise<AgentTurnResult> {
     const events: AgentLifecycleEvent[] = [];
     let finalText = "";
     let finalFallbackUsed = false;
     let generatedImages: ChatMessageImage[] = [];
     let generatedDownloads: ChatMessageDownload[] = [];
 
-    const stream = this.runTurnStream(request);
+    const stream = this.runTurnStream(request, externalSignal);
     let next = await stream.next();
     while (!next.done) {
       const event = next.value;

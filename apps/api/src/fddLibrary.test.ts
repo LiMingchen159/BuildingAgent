@@ -5,14 +5,79 @@ import {
   ensureStoreFddLibrary,
   evaluateFddDeployability,
   FDD_DEPLOYABILITY_POLICY_VERSION,
+  fddAmbiguousAlternativesForPoint,
+  fddPointMappingsAreDistinct,
   normalizeFddCreateInput,
   seedFddAlgorithms,
+  sortFddPointCandidatesForRequiredPoint,
   type FddPointCandidate,
   type ProjectFddTask
 } from "./fddLibrary.js";
 import { executableFddAlgorithmKeys } from "./fdd/runtimeRegistry.js";
 
+function exactStructuralCandidate(candidate: FddPointCandidate): FddPointCandidate {
+  return {
+    ...candidate,
+    objectRef: candidate.objectRef ?? `fixture://${candidate.pointName}`,
+    evidenceSource: "exact_brick_point",
+    unitEvidence: candidate.unitCompatibility === "unknown" ? "quantity_unverified" : "verified_compatible"
+  };
+}
+
 describe("FDD library", () => {
+  it("uses verified unit evidence to resolve only semantically equivalent candidates", () => {
+    const algorithm = seedFddAlgorithms().find((entry) => entry.algorithmKey === "chiller_ch_01_commanded_fails_to_start");
+    const point = algorithm?.requiredPoints.find((entry) => entry.slot === "chiller_power");
+    expect(point).toBeTruthy();
+    if (!point) return;
+
+    const unknownEquivalent: FddPointCandidate = {
+      slot: point.slot,
+      pointName: "WCC_1_TLKW_RAW",
+      entityKey: "WCC_01",
+      unitCompatibility: "unknown",
+      dimensionReason: "Instantaneous power semantics are known, but the engineering unit is unknown.",
+      confidence: 0.96,
+      historyDays: 30,
+      reason: "Verified exact Brick power point."
+    };
+    const verifiedEquivalent: FddPointCandidate = {
+      ...unknownEquivalent,
+      pointName: "WCC_1_TLKW",
+      unit: "kW",
+      unitCompatibility: "match",
+      dimensionReason: "Instantaneous power and kW engineering unit are verified."
+    };
+    const rankedEquivalent = sortFddPointCandidatesForRequiredPoint(point, [unknownEquivalent, verifiedEquivalent]);
+    expect(rankedEquivalent[0]).toBe(verifiedEquivalent);
+    expect(fddAmbiguousAlternativesForPoint(point, rankedEquivalent[0]!, rankedEquivalent.slice(1))).toEqual([]);
+
+    const strongerUnknown: FddPointCandidate = {
+      ...unknownEquivalent,
+      pointName: "WCC_1_TLKW"
+    };
+    const weakVerified: FddPointCandidate = {
+      ...verifiedEquivalent,
+      pointName: "WCC_1_Generic_Sensor"
+    };
+    expect(sortFddPointCandidatesForRequiredPoint(point, [weakVerified, strongerUnknown])[0]).toBe(strongerUnknown);
+  });
+
+  it("rejects reused point names and reused object references independently", () => {
+    expect(fddPointMappingsAreDistinct([
+      { slot: "command", pointName: "WCC_1_SHARED", objectRef: "//Elements/1.AV1" },
+      { slot: "status", pointName: "WCC_1_SHARED", objectRef: "//Elements/1.AV2" }
+    ])).toBe(false);
+    expect(fddPointMappingsAreDistinct([
+      { slot: "command", pointName: "WCC_1_COMMAND", objectRef: "//Elements/1.AV1" },
+      { slot: "status", pointName: "WCC_1_STATUS", objectRef: "//Elements/1.AV1" }
+    ])).toBe(false);
+    expect(fddPointMappingsAreDistinct([
+      { slot: "command", pointName: "WCC_1_COMMAND", objectRef: "//Elements/1.AV1" },
+      { slot: "status", pointName: "WCC_1_STATUS", objectRef: "//Elements/1.AV2" }
+    ])).toBe(true);
+  });
+
   it("seeds AHU DBN cards and the chiller low COP example into the global library", () => {
     const store = createSeedStore();
     ensureStoreFddLibrary(store);
@@ -171,12 +236,112 @@ describe("FDD library", () => {
     expect(runtimeKeys).toEqual(executableFddAlgorithmKeys());
   });
 
+  it("allows only evidence-backed missing engineering units and keeps weaker evidence blocked", () => {
+    const algorithm = seedFddAlgorithms().find((entry) => entry.algorithmKey === "chiller_ch_12_insufficient_chw_flow");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+    const point = algorithm.requiredPoints.find((entry) => entry.required);
+    expect(point).toBeTruthy();
+    if (!point) return;
+    const candidate: FddPointCandidate = {
+      slot: point.slot,
+      pointName: "WKGO_CHILLER_01_CHILLED_WATER_FLOW",
+      entityKey: "WKGO_CHILLER_01",
+      objectRef: "wkgo://building/38/tl/1580",
+      evidenceSource: "exact_brick_point",
+      unitCompatibility: "unknown",
+      unitEvidence: "missing_engineering_unit",
+      dimensionReason: "Brick verifies flow_rate; the engineering unit field is empty.",
+      confidence: 0.96,
+      historyDays: 30,
+      reason: "Verified exact BMS point from Brick class Chilled_Water_Flow_Sensor."
+    };
+    const evaluate = (pointCandidate: FddPointCandidate, alternatives: FddPointCandidate[] = []) => evaluateFddDeployability({
+      algorithm,
+      projectId: "project_wkgo",
+      source: "auto",
+      projectDataSignature: "sig-wkgo",
+      pointCandidates: [pointCandidate, ...alternatives],
+      exampleEntityKey: "WKGO_CHILLER_01"
+    });
+
+    const ready = evaluate(candidate);
+    expect(ready.status).toBe("can_deploy");
+    expect(ready.selectedMappings).toEqual([expect.objectContaining({
+      slot: point.slot,
+      pointName: candidate.pointName,
+      objectRef: candidate.objectRef
+    })]);
+    expect(ready.selectedMappings?.[0]).not.toHaveProperty("unit");
+    expect(ready.warnings).toEqual([expect.objectContaining({
+      code: "engineering_unit_missing",
+      entityKey: "WKGO_CHILLER_01",
+      slot: point.slot,
+      pointName: candidate.pointName
+    })]);
+
+    expect(evaluate({ ...candidate, evidenceSource: "catalog_metadata" }).status).toBe("uncertain");
+    expect(evaluate({ ...candidate, unitEvidence: "quantity_unverified" }).status).toBe("uncertain");
+    const { unitEvidence: _unitEvidence, ...legacyUnknown } = candidate;
+    expect(evaluate(legacyUnknown).status).toBe("uncertain");
+    expect(evaluate({
+      ...candidate,
+      unit: "kVA",
+      unitCompatibility: "mismatch",
+      unitEvidence: "known_mismatch"
+    }).status).toBe("uncertain");
+    expect(evaluate({ ...candidate, confidence: 0.6 }).status).toBe("uncertain");
+    expect(evaluate(candidate, [{
+      ...candidate,
+      pointName: `${candidate.pointName}_BACKUP`,
+      objectRef: `${candidate.objectRef}-backup`,
+      confidence: 0.95
+    }]).status).toBe("uncertain");
+
+    const noHistory = evaluate((({ historyDays: _historyDays, ...rest }) => rest)(candidate));
+    expect(noHistory.status).toBe("cannot_deploy");
+    expect(noHistory.warnings).toBeUndefined();
+    const shortHistory = evaluate({ ...candidate, historyDays: 1 });
+    expect(shortHistory.status).toBe("cannot_deploy");
+    expect(shortHistory.warnings).toBeUndefined();
+  });
+
+  it("blocks an otherwise exact mapping when two required roles reuse one object reference", () => {
+    const algorithm = seedFddAlgorithms().find((entry) => entry.algorithmKey === "chiller_ch_43_chw_supply_temp_sensor_fault");
+    expect(algorithm).toBeTruthy();
+    if (!algorithm) return;
+    const candidates = algorithm.requiredPoints.filter((point) => point.required).map((point): FddPointCandidate => ({
+      slot: point.slot,
+      pointName: `WKGO_CHILLER_01_${point.slot}`,
+      entityKey: "WKGO_CHILLER_01",
+      objectRef: "wkgo://duplicate-object-ref",
+      unit: "C",
+      evidenceSource: "exact_brick_point",
+      unitCompatibility: "match",
+      unitEvidence: "verified_compatible",
+      dimensionReason: "Exact Brick temperature point with a compatible unit.",
+      confidence: 0.96,
+      historyDays: 30,
+      reason: "Verified exact BMS point."
+    }));
+    const check = evaluateFddDeployability({
+      algorithm,
+      projectId: "project_wkgo",
+      source: "auto",
+      projectDataSignature: "sig-wkgo",
+      pointCandidates: candidates,
+      exampleEntityKey: "WKGO_CHILLER_01"
+    });
+    expect(check.status).toBe("cannot_deploy");
+    expect(check.missingPoints).toHaveLength(1);
+  });
+
   it("keeps deployability checks to can_deploy, uncertain, and cannot_deploy", () => {
     const algorithm = seedFddAlgorithms().find((entry) => entry.algorithmKey === "chiller_low_cop_detection");
     expect(algorithm).toBeTruthy();
     const requiredCandidates = algorithm!.requiredPoints
       .filter((point) => point.required)
-      .map((point): FddPointCandidate => ({
+      .map((point): FddPointCandidate => exactStructuralCandidate({
         slot: point.slot,
         pointName: `${point.slot}_point`,
         entityKey: "CHILLER-01",
@@ -205,7 +370,7 @@ describe("FDD library", () => {
       projectDataSignature: "sig-1",
       pointCandidates: [
         ...requiredCandidates,
-        { ...requiredCandidates[0]!, pointName: "semantic_neighbor", confidence: 0.93, reason: "semantic neighbor" }
+        { ...requiredCandidates[0]!, pointName: `${requiredCandidates[0]!.pointName}_backup`, confidence: 0.93, reason: "semantic neighbor" }
       ],
       exampleEntityKey: "CHILLER-01"
     });
@@ -280,7 +445,7 @@ describe("FDD library", () => {
         historyDays: 30,
         reason: "Matched \"CHW Flowrate\" against BMS catalog metadata."
       }
-    ];
+    ].map((candidate) => exactStructuralCandidate(candidate as FddPointCandidate));
 
     const check = evaluateFddDeployability({
       algorithm,
@@ -362,7 +527,7 @@ describe("FDD library", () => {
         historyDays: 30,
         reason: "Matched \"CHW Return Temperature\" against BMS catalog metadata."
       }
-    ];
+    ].map((candidate) => exactStructuralCandidate(candidate as FddPointCandidate));
 
     const check = evaluateFddDeployability({
       algorithm,

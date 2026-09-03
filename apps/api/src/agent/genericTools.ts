@@ -1,5 +1,7 @@
-import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, unlink, writeFile, copyFile } from "node:fs/promises";
+import { constants as fsConstants, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile, copyFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec } from "node:child_process";
@@ -10,7 +12,7 @@ import {
   type ProjectMemoryProposalBindings
 } from "../projectMemoryProposals.js";
 import { kbRootForProject, repoRootForProject } from "./knowledgeBase.js";
-import { toolCacheManifestRelativePath } from "./toolCacheManifest.js";
+import { toolCacheDataRelativePath, toolCacheManifestRelativePath } from "./toolCacheManifest.js";
 import type { ProjectSkillBindings } from "../projectSkills.js";
 import type { ProjectGroundingBindings } from "../projectGrounding.js";
 import { boundsViolationResult } from "../platformBounds.js";
@@ -20,11 +22,18 @@ import type { ChatMessage } from "../seed.js";
 import type { AgentSkillRegistry } from "./skills.js";
 import { AgentToolRegistry } from "./tools.js";
 import type { AgentTool } from "./types.js";
-import type { DerivedMetricDependencyInput, DerivedMetricInstance, DerivedMetricStore } from "../derivedMetrics.js";
+import { DerivedMetricHistoryTooLargeError } from "../derivedMetrics.js";
+import type {
+  DerivedMetricDependencyInput,
+  DerivedMetricHistoryBatchResult,
+  DerivedMetricInstance,
+  DerivedMetricStore
+} from "../derivedMetrics.js";
 import type { SchedulerService, ScheduledJob, JobRecurrence } from "../scheduler.js";
 import { parseCancelCommand, parseListCommand, parseTimeExpression, nextCronTime } from "../scheduler.js";
 import type { ProcessRegistry } from "./processRegistry.js";
 import { chartSanityViolation, executeCodeInjectedHeader } from "./chartStyle.js";
+import { safeToolCacheRoot } from "./toolCacheSafety.js";
 import { augmentToolResultForEnvironment } from "./environmentSetup.js";
 import { fetchEnteliLiveValue } from "./bmsLiveRead.js";
 import { fetchTimeseries, type BmsTimeseriesRow } from "../bmsTimeseries.js";
@@ -47,12 +56,24 @@ const MAX_READ_BYTES = 200_000;
 const MAX_WRITE_BYTES = 500_000;
 const TERMINAL_TIMEOUT_MS = 30_000;
 const TERMINAL_MAX_OUTPUT = 100_000;
+const EXECUTE_CODE_RUN_TTL_MS = 24 * 60 * 60 * 1000;
 const FDD_ANALYSIS_TITLE = "Fault Cause Analysis";
 const FDD_ANALYSIS_RANGE = "7d";
 const FDD_TRENDS_TITLE = "Chiller Trends";
 
 const TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".ttl", ".rdf", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".hpp", ".sh", ".bash", ".zsh", ".sql", ".graphql", ".proto", ".toml", ".ini", ".cfg", ".conf", ".env", ".log"]);
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
+const LOCAL_DERIVED_HISTORY_MANIFEST_TOOLS = new Set([
+  "derived_metric_history_prepare",
+  "derived_metric_read"
+]);
+
+type OutputFileMetadata = {
+  path: string;
+  name: string;
+  sizeBytes: number;
+  modifiedAtMs: number;
+};
 
 function lastUserMessageContent(messages: ChatMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -67,6 +88,13 @@ function lastUserMessageContent(messages: ChatMessage[]): string {
 function textArg(args: Record<string, unknown>, key: string): string {
   const value = args[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function frozenIsoTimestampArg(args: Record<string, unknown>, key: string): string {
+  const value = textArg(args, key);
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
 }
 
 function numArg(args: Record<string, unknown>, key: string, fallback: number): number {
@@ -90,6 +118,104 @@ function boolArg(args: Record<string, unknown>, key: string, fallback = false): 
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function freezeValidatedLocalHistoryManifest(
+  manifestPath: string,
+  frozenManifestPath: string,
+  repoRoot: string,
+  requestId: string
+): Promise<string | null> {
+  try {
+    const cacheRoot = path.resolve(repoRoot, "outputs", ".tool_cache");
+    const cacheInfo = await lstat(cacheRoot);
+    if (!cacheInfo.isDirectory() || cacheInfo.isSymbolicLink()) {
+      return null;
+    }
+    const realCacheRoot = await realpath(cacheRoot);
+    if (realCacheRoot !== cacheRoot) {
+      return null;
+    }
+    const manifestInfo = await lstat(manifestPath);
+    if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink() || !pathIsWithin(cacheRoot, manifestPath)) {
+      return null;
+    }
+    if (!pathIsWithin(realCacheRoot, await realpath(manifestPath))) {
+      return null;
+    }
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      requestId?: unknown;
+      entries?: Array<{
+        tool?: unknown;
+        toolCallId?: unknown;
+        data_file?: unknown;
+        label?: unknown;
+        data_key?: unknown;
+      }>;
+    };
+    if (manifest.requestId !== requestId || !Array.isArray(manifest.entries) || manifest.entries.length === 0) {
+      return null;
+    }
+    const localDataFiles = new Map<string, string>();
+    const frozenEntries: Array<Record<string, unknown>> = [];
+    for (const entry of manifest.entries) {
+      if (typeof entry.tool !== "string"
+        || !LOCAL_DERIVED_HISTORY_MANIFEST_TOOLS.has(entry.tool)
+        || typeof entry.toolCallId !== "string"
+        || typeof entry.data_file !== "string") {
+        return null;
+      }
+      const expectedDataFile = toolCacheDataRelativePath(requestId, entry.toolCallId);
+      if (entry.data_file !== expectedDataFile) {
+        return null;
+      }
+      const dataPath = path.resolve(repoRoot, expectedDataFile);
+      if (!pathIsWithin(cacheRoot, dataPath)) {
+        return null;
+      }
+      const dataInfo = await lstat(dataPath);
+      if (!dataInfo.isFile() || dataInfo.isSymbolicLink() || !pathIsWithin(realCacheRoot, await realpath(dataPath))) {
+        return null;
+      }
+      let localDataPath = localDataFiles.get(dataPath);
+      if (!localDataPath) {
+        localDataPath = path.join(
+          path.dirname(frozenManifestPath),
+          `input_${String(localDataFiles.size + 1).padStart(3, "0")}.json`
+        );
+        await copyFile(dataPath, localDataPath, fsConstants.COPYFILE_EXCL);
+        await chmod(localDataPath, 0o400);
+        localDataFiles.set(dataPath, localDataPath);
+      }
+      frozenEntries.push({ ...entry, data_file: localDataPath });
+    }
+    await writeFile(frozenManifestPath, JSON.stringify({ requestId, entries: frozenEntries }), "utf8");
+    await chmod(frozenManifestPath, 0o400);
+    return frozenManifestPath;
+  } catch {
+    return null;
+  }
+}
+
+function protectLocalHistoryOutput(
+  output: string,
+  enabled: boolean,
+  channel: "stdout" | "stderr"
+): { output: string; suppressed: boolean; originalBytes: number; originalLines: number } {
+  const originalBytes = Buffer.byteLength(output, "utf8");
+  const originalLines = output ? output.split(/\r?\n/u).length : 0;
+  if (!enabled) {
+    return { output, suppressed: false, originalBytes, originalLines };
+  }
+  if (!output) {
+    return { output, suppressed: false, originalBytes, originalLines };
+  }
+  return {
+    output: `execute_code_${channel}_suppressed: ${channel} is hidden whenever request-local derived history is attached (bytes=${originalBytes}, lines=${originalLines}). Use saved charts for outputs.`,
+    suppressed: true,
+    originalBytes,
+    originalLines
+  };
 }
 
 function stringValue(value: unknown): string {
@@ -729,8 +855,11 @@ function expandDerivedComparisonWidgets(widgets: Array<Record<string, unknown>>)
       return [widget];
     }
     const requestedFamilyKeys = new Set(bindings.map((binding) => dashboardComparisonFamily(binding).key));
-    const selectedFamilies = sortedFamilies.filter((family) => requestedFamilyKeys.has(family.key));
-    const familiesToRender = selectedFamilies.length > 0 ? selectedFamilies : sortedFamilies;
+    const familiesToRender = sortedFamilies.filter((family) => requestedFamilyKeys.has(family.key));
+    // Families are only harvested from per-equipment live/stat widgets, so a comparison of a
+    // metric that has no such widget matches nothing. Rendering the other families instead would
+    // silently rebind the widget to a metric the caller never asked to compare.
+    if (familiesToRender.length === 0) return [widget];
     const hasMixedFamilies = familiesToRender.length > 1;
     const baseTitle = titleBaseFor(widget);
 
@@ -1019,6 +1148,57 @@ function resolveSafePath(baseRoot: string, requested: string): string | null {
   return normalized;
 }
 
+function pathIsWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === ""
+    || (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..");
+}
+
+function protectedRepositoryRoots(projectId: string): string[] {
+  const outputRoot = path.join(repoRootForProject(projectId), "outputs");
+  return [
+    path.join(outputRoot, ".tool_cache"),
+    path.join(outputRoot, ".history_artifacts")
+  ];
+}
+
+async function pathTargetsProtectedRepositoryData(projectId: string, candidate: string): Promise<boolean> {
+  const protectedRoots = protectedRepositoryRoots(projectId);
+  if (protectedRoots.some((root) => pathIsWithin(root, candidate))) {
+    return true;
+  }
+  let realCandidate: string;
+  try {
+    realCandidate = await realpath(candidate);
+  } catch {
+    return false;
+  }
+  for (const root of protectedRoots) {
+    try {
+      if (pathIsWithin(await realpath(root), realCandidate)) {
+        return true;
+      }
+    } catch {
+      // A protected root that does not exist cannot be the current realpath target.
+    }
+  }
+  return false;
+}
+
+async function readTargetsProtectedRepositoryData(
+  projectId: string,
+  requested: string,
+  resolved: ResolvedProjectPath | null
+): Promise<boolean> {
+  const trimmed = requested.trim();
+  if (path.isAbsolute(trimmed) && await pathTargetsProtectedRepositoryData(projectId, trimmed)) {
+    return true;
+  }
+  return resolved !== null
+    && resolved.root === "repo"
+    && await pathTargetsProtectedRepositoryData(projectId, resolved.absolutePath);
+}
+
 function pythonExecutable(): string {
   const configured = process.env.PYTHON?.trim();
   if (configured) {
@@ -1161,6 +1341,100 @@ async function syncAndListOutputFiles(outputDir: string, kbRoot: string): Promis
   } catch { /* output dir may not exist */ }
 
   return { files, synced };
+}
+
+async function cleanupStaleExecuteCodeRuns(
+  executionRoot: string,
+  now = Date.now(),
+  prefix = "run-"
+): Promise<void> {
+  let children;
+  try {
+    children = await readdir(executionRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const child of children) {
+    if (!child.isDirectory() || !child.name.startsWith(prefix)) continue;
+    const runPath = path.join(executionRoot, child.name);
+    try {
+      const info = await stat(runPath);
+      if (now - info.mtimeMs > EXECUTE_CODE_RUN_TTL_MS) {
+        await rm(runPath, { recursive: true, force: true });
+      }
+    } catch {
+      // Best-effort retention cleanup; the current execution must still proceed.
+    }
+  }
+}
+
+async function publishExecuteCodeOutputFiles(
+  privateOutputDir: string,
+  publicOutputDir: string,
+  options: { localHistoryProtected: boolean; opaqueSeed: string }
+): Promise<OutputFileMetadata[]> {
+  const privateFiles: Array<{ name: string }> = [];
+  try {
+    const children = await readdir(privateOutputDir, { withFileTypes: true });
+    privateFiles.push(
+      ...children
+        .filter((child) => child.isFile())
+        .map((child) => ({ name: child.name }))
+        .sort((left, right) => left.name.localeCompare(right.name))
+    );
+  } catch {
+    return [];
+  }
+
+  const token = createHash("sha256").update(options.opaqueSeed).digest("hex").slice(0, 12);
+  const protectedFiles: OutputFileMetadata[] = [];
+  let chartIndex = 0;
+
+  for (const file of privateFiles) {
+    const originalExtension = path.extname(file.name).toLowerCase();
+    const isImage = IMAGE_EXTENSIONS.has(originalExtension);
+    if (options.localHistoryProtected && !isImage) {
+      continue;
+    }
+    const publishedName = options.localHistoryProtected
+      ? (() => {
+          const extension = originalExtension;
+          const index = ++chartIndex;
+          return `chart_${token}_${String(index).padStart(3, "0")}${extension}`;
+        })()
+      : file.name;
+    const relativeDirectory = "outputs";
+    const destinationDir = publicOutputDir;
+    await mkdir(destinationDir, { recursive: true });
+    const sourcePath = path.join(privateOutputDir, file.name);
+    const parsedName = path.parse(publishedName);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const candidateName = attempt === 0
+        ? publishedName
+        : `${parsedName.name}_${token}_${String(attempt).padStart(3, "0")}${parsedName.ext}`;
+      const destinationPath = path.join(destinationDir, candidateName);
+      try {
+        await copyFile(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
+        await rm(sourcePath, { force: true });
+        const info = await stat(destinationPath);
+        protectedFiles.push({
+          path: `${relativeDirectory}/${candidateName}`,
+          name: candidateName,
+          sizeBytes: info.size,
+          modifiedAtMs: info.mtimeMs
+        });
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          continue;
+        }
+        // Never fall back to returning an attacker-controlled history-mode basename.
+        break;
+      }
+    }
+  }
+
+  return protectedFiles;
 }
 
 function collectFreshGeneratedImages(
@@ -2555,24 +2829,124 @@ export function createGenericToolRegistry(
         if (!instance) {
           return { error: "derived_metric_not_found" };
         }
+        if (instance.projectId !== context.projectId) {
+          return { error: "derived_metric_not_found" };
+        }
         const mode = textArg(args, "mode") || "latest";
         const includeHistory = mode === "history" || mode === "both";
         const includeLatest = mode !== "history";
-        return {
+        const historyFrom = includeHistory ? frozenIsoTimestampArg(args, "from") : "";
+        const historyTo = includeHistory ? frozenIsoTimestampArg(args, "to") : "";
+        const history = includeHistory
+          ? derivedMetrics.readHistory(instance.instanceId, {
+              ...(historyFrom ? { from: historyFrom } : {}),
+              ...(historyTo ? { to: historyTo } : {}),
+              limit: numArg(args, "limit", 720),
+              order: textArg(args, "order") === "desc" ? "desc" : "asc"
+            })
+          : undefined;
+        const result = {
           instance,
           dashboardBinding: derivedMetricOutputDashboardBinding(instance),
           inputDashboardBindings: derivedMetricInputDashboardBindings(instance.entityId, derivedMetricInstanceDependencyInputs(instance)),
           ...(includeLatest ? { latest: derivedMetrics.readLatest(instance.instanceId) } : {}),
-          ...(includeHistory
-            ? {
-                history: derivedMetrics.readHistory(instance.instanceId, {
-                  ...(textArg(args, "from") ? { from: textArg(args, "from") } : {}),
-                  ...(textArg(args, "to") ? { to: textArg(args, "to") } : {}),
-                  limit: numArg(args, "limit", 720),
-                  order: textArg(args, "order") === "desc" ? "desc" : "asc"
-                })
-              }
-            : {})
+          ...(history ? { history } : {})
+        };
+        return result;
+      }
+    },
+    {
+      name: "derived_metric_history_prepare",
+      category: "building",
+      description: "Prepare 1-32 persisted derived metric histories as one request-local dataset for execute_code. Returns profiles and file pointers only; raw samples stay local.",
+      schema: {
+        name: "derived_metric_history_prepare",
+        description:
+          "After one derived_metric_lookup for a multi-series trend/chart request, call this exactly once with all instanceIds and the requested ISO8601 range, then call execute_code exactly once. Raw histories are cached locally and are never returned inline.",
+        parameters: {
+          type: "object",
+          properties: {
+            instanceIds: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 1,
+              maxItems: 32,
+              description: "Unique persisted metric instance ids to prepare together."
+            },
+            from: { type: "string", description: "Inclusive history start ISO8601." },
+            to: { type: "string", description: "Inclusive history end ISO8601." }
+          },
+          required: ["instanceIds", "from", "to"]
+        }
+      },
+      async run(args, context) {
+        if (!derivedMetrics) {
+          return { error: "derived_metrics_unavailable" };
+        }
+        const instanceIds = Array.isArray(args.instanceIds)
+          ? [...new Set(args.instanceIds
+              .filter((value): value is string => typeof value === "string")
+              .map((value) => value.trim())
+              .filter(Boolean))]
+          : [];
+        if (instanceIds.length < 1 || instanceIds.length > 32) {
+          return { error: "instanceIds must contain 1-32 unique metric instance ids" };
+        }
+        const from = textArg(args, "from");
+        const to = textArg(args, "to");
+        const fromMs = Date.parse(from);
+        const toMs = Date.parse(to);
+        if (!from || !to || !Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs > toMs) {
+          return { error: "from and to must be a valid ascending ISO8601 range" };
+        }
+
+        const instances = instanceIds.map((instanceId) => derivedMetrics.getInstance(instanceId));
+        const invalidInstanceIds = instanceIds.filter((_, index) => {
+          const instance = instances[index];
+          return !instance || instance.projectId !== context.projectId;
+        });
+        if (invalidInstanceIds.length > 0) {
+          return { error: "derived_metric_not_found", invalidInstanceIds };
+        }
+
+        const frozenFrom = new Date(fromMs).toISOString();
+        const frozenTo = new Date(toMs).toISOString();
+        let batch: DerivedMetricHistoryBatchResult;
+        try {
+          batch = derivedMetrics.readHistoryBatch(instanceIds, { from: frozenFrom, to: frozenTo });
+        } catch (error) {
+          if (error instanceof DerivedMetricHistoryTooLargeError) {
+            return {
+              error: error.code,
+              totalRows: error.totalRows,
+              estimatedBytes: error.estimatedBytes,
+              maxRows: error.maxRows,
+              maxBytes: error.maxBytes,
+              suggestion: "Use a shorter time range or fewer metric instances."
+            };
+          }
+          throw error;
+        }
+
+        return {
+          dataset_format: "derived_metric_history_v1",
+          from: frozenFrom,
+          to: frozenTo,
+          total_rows: batch.totalRows,
+          estimated_bytes: batch.estimatedBytes,
+          cached_complete: batch.complete,
+          series: instances.map((instance) => {
+            const metric = instance!;
+            return {
+              instanceId: metric.instanceId,
+              metricKey: metric.metricKey,
+              entityId: metric.entityId,
+              displayName: metric.displayName,
+              unit: metric.unit ?? null,
+              history: batch.histories.get(metric.instanceId) ?? []
+            };
+          }),
+          next_step: "Call execute_code once. Use load_all_series() or build_combined_frame(); do not read these histories again."
         };
       }
     },
@@ -2686,6 +3060,12 @@ export function createGenericToolRegistry(
           return { error: "path is required" };
         }
         const resolved = resolveReadPath(context.projectId, requestedPath);
+        if (await readTargetsProtectedRepositoryData(context.projectId, requestedPath, resolved)) {
+          return {
+            error: "read_file_protected_repository_data",
+            message: "Request-local tool caches and history artifacts cannot be read with read_file."
+          };
+        }
         if (!resolved || !existsSync(resolved.absolutePath)) {
           return { error: "Path not found in project Knowledge Base or Repository." };
         }
@@ -2776,6 +3156,9 @@ export function createGenericToolRegistry(
                 });
               }
             } else {
+              if (child.isSymbolicLink() && await pathTargetsProtectedRepositoryData(context.projectId, absolute)) {
+                continue;
+              }
               // Content search
               const ext = path.extname(child.name).toLowerCase();
               if (!TEXT_EXTENSIONS.has(ext)) continue;
@@ -3134,14 +3517,14 @@ export function createGenericToolRegistry(
     {
       name: "execute_code",
       category: "utility",
-      description: "Run Python for analysis and charts. Data: build_combined_frame, data_coverage, col_series, load_all_series. Charts: new_figure, set_chart_title, plot_series, chart_color, format_hkt_axis, finalize_legend, save_chart (fixed enterprise style). matplotlib/seaborn/pandas pre-installed — do not pip install mid-turn.",
+      description: "Run Python for analysis and charts. Data: build_combined_frame, data_coverage, col_series, load_all_series. Charts: new_figure, set_chart_title, plot_series, chart_color, format_hkt_axis, finalize_legend, save_chart (fixed enterprise style). When request-local history is attached, stdout/stderr are hidden; non-image artifacts are hidden; return saved charts only. matplotlib/seaborn/pandas pre-installed — do not pip install mid-turn.",
       schema: {
         name: "execute_code",
-        description: "Execute Python for analysis/charts. Data: build_combined_frame() + data_coverage(); charts: new_figure() + set_chart_title() + plot_series() + format_hkt_axis + finalize_legend + save_chart. Fixed enterprise presentation style. Must end chart scripts with save_chart(fig, 'name.png'). English on-chart text only.",
+        description: "Execute Python for analysis/charts. Data: build_combined_frame() + data_coverage(); charts: new_figure() + set_chart_title() + plot_series() + format_hkt_axis + finalize_legend + save_chart. Fixed enterprise presentation style. With request-local history, stdout/stderr are hidden; non-image artifacts are hidden; return saved charts only. Must end chart scripts with save_chart(fig, 'name.png'). English on-chart text only.",
         parameters: {
           type: "object",
           properties: {
-            code: { type: "string", description: "Python source code to execute." },
+            code: { type: "string", description: "Python source code. Do not print local-history data: stdout/stderr and non-image artifacts are hidden in history mode. Save charts for returned output." },
             timeout: { type: "number", description: "Timeout in seconds (default 30, max 120)." }
           },
           required: ["code"]
@@ -3155,17 +3538,45 @@ export function createGenericToolRegistry(
         const timeout = Math.min(numArg(args, "timeout", 30), 120) * 1000;
         const { kbRoot, repoRoot } = projectFileRoots(context.projectId);
         const outputDir = path.join(repoRoot, "outputs");
-        const cacheDir = path.join(outputDir, ".tool_cache");
         const manifestPath = path.join(repoRoot, toolCacheManifestRelativePath(context.requestId));
-        const tempPath = path.join(repoRoot, "_hermes_tmp.py");
-        const startedAtMs = Date.now();
+        // Freeze this trust decision before untrusted Python can delete or replace the manifest.
+        const localHistoryProtected = context.localHistoryMode === true;
 
         let stdout = "";
         let stderr = "";
         let exitCode = 0;
+        let executionDir = "";
         try {
-          await mkdir(cacheDir, { recursive: true });
+          const cacheDir = safeToolCacheRoot(context.projectId);
           await mkdir(outputDir, { recursive: true });
+          if (localHistoryProtected) {
+            await cleanupStaleExecuteCodeRuns(tmpdir(), Date.now(), "building-agent-history-");
+            executionDir = await mkdtemp(path.join(tmpdir(), "building-agent-history-"));
+          } else {
+            const executionRoot = path.join(cacheDir, "execute_code");
+            await mkdir(executionRoot, { recursive: true });
+            await cleanupStaleExecuteCodeRuns(executionRoot);
+            executionDir = await mkdtemp(path.join(executionRoot, "run-"));
+          }
+          const tempPath = path.join(executionDir, "script.py");
+          const executionOutputDir = path.join(executionDir, "outputs");
+          await mkdir(executionOutputDir, { recursive: true });
+          let executionManifestPath = manifestPath;
+          if (localHistoryProtected) {
+            if (context.localHistoryDatasetReady !== true) {
+              return { error: "history_dataset_not_prepared", exitCode: 1 };
+            }
+            const frozenManifestPath = await freezeValidatedLocalHistoryManifest(
+              manifestPath,
+              path.join(executionDir, "manifest.json"),
+              repoRoot,
+              context.requestId
+            );
+            if (!frozenManifestPath) {
+              return { error: "history_dataset_not_prepared", exitCode: 1 };
+            }
+            executionManifestPath = frozenManifestPath;
+          }
 
           // Force the correct output directory — replace any ../kb/outputs paths
           const patchedCode = executeCodeInjectedHeader() + code
@@ -3174,37 +3585,82 @@ export function createGenericToolRegistry(
             .replace(/['"]\.\.\/kb\/outputs['"]/g, `os.environ['OUTPUT_DIR']`);
 
           await writeFile(tempPath, patchedCode, "utf8");
-          await new Promise<string>((resolve, reject) => {
+          let childEnvironment: NodeJS.ProcessEnv;
+          if (localHistoryProtected) {
+            childEnvironment = {};
+            for (const key of [
+              "PATH",
+              "SystemRoot",
+              "COMSPEC",
+              "PATHEXT",
+              "WINDIR",
+              "LANG",
+              "LC_ALL",
+              "LC_CTYPE",
+              "TZ",
+              "LD_LIBRARY_PATH",
+              "DYLD_LIBRARY_PATH",
+              "VIRTUAL_ENV"
+            ]) {
+              const inheritedValue = process.env[key];
+              if (!inheritedValue) continue;
+              if (key === "PATH") {
+                childEnvironment[key] = inheritedValue
+                  .split(path.delimiter)
+                  .filter((entry) => !entry.includes(repoRoot) && !entry.includes(kbRoot))
+                  .join(path.delimiter);
+              } else if (!inheritedValue.includes(repoRoot) && !inheritedValue.includes(kbRoot)) {
+                childEnvironment[key] = inheritedValue;
+              }
+            }
+            Object.assign(childEnvironment, {
+              HOME: executionDir,
+              TMPDIR: executionDir,
+              TEMP: executionDir,
+              TMP: executionDir,
+              PYTHONUNBUFFERED: "1",
+              MPLBACKEND: "Agg",
+              MPLCONFIGDIR: path.join(executionDir, ".matplotlib"),
+              OUTPUT_DIR: executionOutputDir,
+              REQUEST_ID: context.requestId,
+              TOOL_CACHE_MANIFEST: executionManifestPath
+            });
+          } else {
+            childEnvironment = {
+              ...process.env,
+              PYTHONUNBUFFERED: "1",
+              MPLBACKEND: "Agg",
+              REPO_DIR: repoRoot,
+              KB_DIR: kbRoot,
+              OUTPUT_DIR: executionOutputDir,
+              REQUEST_ID: context.requestId,
+              TOOL_CACHE_MANIFEST: executionManifestPath,
+              PYTHONPATH: [repoRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+            };
+          }
+          await new Promise<string>((resolve) => {
             const child = exec(
               `${pythonExecutable()} "${tempPath}"`,
               {
-                cwd: repoRoot,
+                cwd: localHistoryProtected ? executionDir : repoRoot,
                 timeout,
                 maxBuffer: TERMINAL_MAX_OUTPUT,
                 shell: process.platform === "win32" ? "cmd.exe" : "/bin/bash",
-                env: {
-                  ...process.env,
-                  PYTHONUNBUFFERED: "1",
-                  MPLBACKEND: "Agg",
-                  REPO_DIR: repoRoot,
-                  KB_DIR: kbRoot,
-                  OUTPUT_DIR: outputDir,
-                  REQUEST_ID: context.requestId,
-                  TOOL_CACHE_MANIFEST: manifestPath
-                }
+                env: childEnvironment
               },
               (error, out, err) => {
-                if (error && !out && !err) {
-                  reject(error);
-                  return;
-                }
                 stdout = (out || "").slice(0, TERMINAL_MAX_OUTPUT);
                 stderr = (err || "").slice(0, TERMINAL_MAX_OUTPUT);
-                if (error?.code != null) {
+                if (error) {
                   const code = typeof error.code === "number" ? error.code : Number(error.code);
-                  if (Number.isFinite(code)) {
-                    exitCode = code;
-                  }
+                  exitCode = Number.isFinite(code) && code !== 0 ? code : 1;
+                  const timedOut = error.killed === true
+                    || error.signal === "SIGTERM"
+                    || String(error.code ?? "") === "ETIMEDOUT";
+                  const failure = timedOut
+                    ? `Python execution timed out after ${timeout}ms.`
+                    : error.message || "Python execution failed.";
+                  stderr = [stderr, failure].filter(Boolean).join("\n").slice(0, TERMINAL_MAX_OUTPUT);
                 }
                 resolve(stdout || stderr || "(no output)");
               }
@@ -3213,39 +3669,95 @@ export function createGenericToolRegistry(
           if (/Traceback|SyntaxError|ModuleNotFoundError|FileNotFoundError/i.test(stderr)) {
             exitCode = exitCode || 1;
           }
-          const { files: outputFiles, synced } = await syncAndListOutputFiles(outputDir, kbRoot);
-          const generatedImages = collectFreshGeneratedImages(outputFiles, "execute_code", startedAtMs);
-          const generatedDownloads = collectFreshGeneratedDownloads(outputFiles, startedAtMs);
+          const listedOutputs = {
+            files: await publishExecuteCodeOutputFiles(executionOutputDir, outputDir, {
+              localHistoryProtected,
+              opaqueSeed: `${context.requestId}:${context.toolCallId ?? "execute_code"}:${path.basename(executionDir)}`
+            }),
+            synced: []
+          };
+          const { files: outputFiles, synced } = listedOutputs;
+          const generatedImages = collectGeneratedImages(outputFiles, "execute_code");
+          const generatedDownloads = outputFiles
+            .filter((file) => !IMAGE_EXTENSIONS.has(path.extname(file.name).toLowerCase()))
+            .map((file) => ({ path: file.path, filename: file.name }));
           const sanityMessage = chartSanityViolation(code, generatedImages.length);
           if (sanityMessage && exitCode === 0) {
             exitCode = 1;
             stderr = stderr ? `${stderr}\n${sanityMessage}` : sanityMessage;
           }
-          const augmentedStdout = appendGeneratedOutputHints(stdout.slice(0, TERMINAL_MAX_OUTPUT), generatedImages, generatedDownloads, synced);
+          const stdoutProtection = protectLocalHistoryOutput(stdout, localHistoryProtected, "stdout");
+          const stderrProtection = protectLocalHistoryOutput(stderr, localHistoryProtected, "stderr");
+          const augmentedStdout = appendGeneratedOutputHints(
+            stdoutProtection.output.slice(0, TERMINAL_MAX_OUTPUT),
+            generatedImages,
+            generatedDownloads,
+            synced
+          );
 
           return augmentToolResultForEnvironment({
             stdout: augmentedStdout,
-            stderr: stderr.slice(0, TERMINAL_MAX_OUTPUT),
-            repoRoot,
-            outputDir,
-            truncated: stdout.length > TERMINAL_MAX_OUTPUT || stderr.length > TERMINAL_MAX_OUTPUT,
+            stderr: stderrProtection.output.slice(0, TERMINAL_MAX_OUTPUT),
+            ...(localHistoryProtected ? {} : { repoRoot, outputDir }),
+            truncated: stdoutProtection.suppressed
+              || stderrProtection.suppressed
+              || stdout.length >= TERMINAL_MAX_OUTPUT
+              || stderr.length >= TERMINAL_MAX_OUTPUT,
+            ...(stdoutProtection.suppressed
+              ? {
+                  stdoutSuppressed: true,
+                  stdoutOriginalBytes: stdoutProtection.originalBytes,
+                  stdoutOriginalLines: stdoutProtection.originalLines
+                }
+              : {}),
+            ...(stderrProtection.suppressed
+              ? {
+                  stderrSuppressed: true,
+                  stderrOriginalBytes: stderrProtection.originalBytes,
+                  stderrOriginalLines: stderrProtection.originalLines
+                }
+              : {}),
             outputFiles,
             synced,
             generatedImages,
             generatedDownloads,
-            ...(exitCode !== 0 ? { exitCode, error: stderr.trim().split("\n").pop() ?? "Python execution failed" } : {})
-          }, `${stdout}\n${stderr}`);
+            ...(exitCode !== 0
+              ? {
+                  exitCode,
+                  error: stderrProtection.output.trim().split("\n").pop() || "Python execution failed"
+                }
+              : {})
+          }, `${stdoutProtection.output}\n${stderrProtection.output}`);
         } catch (error) {
           const failureText = stderr.slice(0, TERMINAL_MAX_OUTPUT) || (error instanceof Error ? error.message : "Execution failed");
+          const stdoutProtection = protectLocalHistoryOutput(stdout, localHistoryProtected, "stdout");
+          const stderrProtection = protectLocalHistoryOutput(failureText, localHistoryProtected, "stderr");
           return augmentToolResultForEnvironment({
-            stdout: stdout.slice(0, TERMINAL_MAX_OUTPUT),
-            stderr: failureText,
-            error: error instanceof Error ? error.message : "Execution failed",
+            stdout: stdoutProtection.output.slice(0, TERMINAL_MAX_OUTPUT),
+            stderr: stderrProtection.output,
+            error: stderrProtection.output.trim().split("\n").pop() || "Execution failed",
             exitCode: 1,
-            outputDir
-          }, failureText);
+            ...(localHistoryProtected ? {} : { outputDir }),
+            truncated: stdoutProtection.suppressed || stderrProtection.suppressed,
+            ...(stdoutProtection.suppressed
+              ? {
+                  stdoutSuppressed: true,
+                  stdoutOriginalBytes: stdoutProtection.originalBytes,
+                  stdoutOriginalLines: stdoutProtection.originalLines
+                }
+              : {}),
+            ...(stderrProtection.suppressed
+              ? {
+                  stderrSuppressed: true,
+                  stderrOriginalBytes: stderrProtection.originalBytes,
+                  stderrOriginalLines: stderrProtection.originalLines
+                }
+              : {})
+          }, `${stdoutProtection.output}\n${stderrProtection.output}`);
         } finally {
-          try { await unlink(tempPath); } catch { /* best effort cleanup */ }
+          if (executionDir) {
+            try { await rm(executionDir, { recursive: true, force: true }); } catch { /* best effort cleanup */ }
+          }
         }
       }
     },

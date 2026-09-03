@@ -568,13 +568,13 @@ describe("BMS API contract", () => {
     expect(checked.statusCode).toBe(200);
     expect(checked.json().check).toMatchObject({
       status: "cannot_deploy",
-      checkPolicyVersion: "v3-equipment-first"
+      checkPolicyVersion: "v5-evidence-backed-missing-unit"
     });
 
     const legacyCheck = store.fddChecksByProject?.project_element?.[0];
     expect(legacyCheck).toBeTruthy();
     if (!legacyCheck) return;
-    delete legacyCheck.checkPolicyVersion;
+    legacyCheck.checkPolicyVersion = "v4-homogeneous-fleet";
     legacyCheck.status = "can_deploy";
     legacyCheck.missingPoints = [];
     legacyCheck.historyIssues = [];
@@ -590,7 +590,7 @@ describe("BMS API contract", () => {
     expect(store.fddChecksByProject?.project_element?.[0]).not.toBe(legacyCheck);
     expect(store.fddChecksByProject?.project_element?.[0]).toMatchObject({
       status: "cannot_deploy",
-      checkPolicyVersion: "v3-equipment-first"
+      checkPolicyVersion: "v5-evidence-backed-missing-unit"
     });
 
     const staleCheck = store.fddChecksByProject?.project_element?.[0];
@@ -695,10 +695,10 @@ describe("BMS API contract", () => {
     await app.close();
   });
 
-  it("keeps a current equipment-first FDD authorization across source reconstruction", async () => {
+  it("keeps a current authorization across restart but rejects a cached cross-fleet object reference", async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "ba-fdd-policy-restart-"));
     writeEquipmentInventoryFixture(dataDir, "project_element", [
-      { prefix: "WCC", brickClass: "Water_Cooled_Chiller", count: 1 }
+      { prefix: "WCC", brickClass: "Water_Cooled_Chiller", count: 2 }
     ]);
     const env = {
       BUILDING_AGENT_DATA_DIR: dataDir,
@@ -721,23 +721,27 @@ describe("BMS API contract", () => {
       headers: bearer()
     });
     const check = store.fddChecksByProject?.project_element?.[0];
-    expect(check?.checkPolicyVersion).toBe("v3-equipment-first");
+    expect(check?.checkPolicyVersion).toBe("v5-evidence-backed-missing-unit");
     if (!check) return;
     check.status = "can_deploy";
     check.missingPoints = [];
     check.historyIssues = [];
-    const selectedMappings = algorithm.requiredPoints
+    const selectedMappings = (entityKey: string) => algorithm.requiredPoints
       .filter((point) => point.required)
-      .map((point) => ({ slot: point.slot, pointName: `CHILLER_01_${point.slot}` }));
-    check.deployableEntities = [{
-      entityKey: "CHILLER_01",
-      status: "can_deploy",
-      selectedMappings,
+      .map((point) => ({
+        slot: point.slot,
+        pointName: `${entityKey}_${point.slot}`,
+        objectRef: `fixture://${entityKey}/${point.slot}`
+      }));
+    check.deployableEntities = ["WCC_01", "WCC_02"].map((entityKey) => ({
+      entityKey,
+      status: "can_deploy" as const,
+      selectedMappings: selectedMappings(entityKey),
       ambiguousInputs: [],
       missingPoints: [],
       historyIssues: [],
       confidence: 1
-    }];
+    }));
     const task: ProjectFddTask = {
       id: "fddtask_policy_v2_restart",
       projectId: "project_element",
@@ -756,11 +760,11 @@ describe("BMS API contract", () => {
     const instance = metrics.registerMetric({
       projectId: "project_element",
       metricKey: algorithm.algorithmKey,
-      entityId: "CHILLER_01",
+      entityId: "WCC_01",
       metricType: "fdd",
       formula: algorithm.formula,
       metadata: { fddTaskId: task.id, fddAlgorithmId: algorithm.id },
-      dependencies: [{ role: "chiller_status", sourceId: "CHILLER_01_STATUS" }]
+      dependencies: [{ role: "chiller_status", sourceId: "WCC_01_STATUS" }]
     }).instance;
     metrics.configureMaterialization({ instanceId: instance.instanceId, enabled: true, formulaKind: "fdd_rule" });
     await firstApp.close();
@@ -769,6 +773,17 @@ describe("BMS API contract", () => {
     expect(store.fddTasksByProject.project_element?.[0]?.status).toBe("running");
     expect(new DerivedMetricStore(dataDir).readMaterialization(instance.instanceId)?.enabled).toBe(true);
     await restartedApp.close();
+
+    const cachedEntities = check.deployableEntities;
+    expect(cachedEntities).toHaveLength(2);
+    cachedEntities![1]!.selectedMappings[0]!.objectRef = cachedEntities![0]!.selectedMappings[0]!.objectRef!;
+    const corruptRestart = buildServer({ store, env, fetch: fetchMock as typeof fetch });
+    expect(store.fddTasksByProject.project_element?.[0]?.status).toBe("checking");
+    expect(new DerivedMetricStore(dataDir).readMaterialization(instance.instanceId)).toMatchObject({
+      enabled: false,
+      status: "authorization_required"
+    });
+    await corruptRestart.close();
   });
 
   it("defers source-signature invalidation while a post-start source is absent", async () => {
@@ -803,7 +818,11 @@ describe("BMS API contract", () => {
     check.historyIssues = [];
     const selectedMappings = algorithm.requiredPoints
       .filter((point) => point.required)
-      .map((point) => ({ slot: point.slot, pointName: `CHILLER_01_${point.slot}` }));
+      .map((point) => ({
+        slot: point.slot,
+        pointName: `CHILLER_01_${point.slot}`,
+        objectRef: `fixture://CHILLER_01/${point.slot}`
+      }));
     check.deployableEntities = [{
       entityKey: "CHILLER_01",
       status: "can_deploy",
@@ -871,7 +890,11 @@ describe("BMS API contract", () => {
     if (!check) return;
     const selectedMappings = algorithm.requiredPoints
       .filter((point) => point.required)
-      .map((point) => ({ slot: point.slot, pointName: `VAV_01_${point.slot}` }));
+      .map((point) => ({
+        slot: point.slot,
+        pointName: `VAV_01_${point.slot}`,
+        objectRef: `fixture://VAV_01/${point.slot}`
+      }));
     check.status = "can_deploy";
     check.missingPoints = [];
     check.historyIssues = [];

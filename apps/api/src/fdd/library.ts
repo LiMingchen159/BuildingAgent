@@ -16,6 +16,8 @@ export type FddQuantityKind = "temperature" | "flow_rate" | "power" | "energy" |
 export type FddDefinitionStatus = "implementation_ready" | "requires_configuration" | "requires_review";
 export type FddDefinitionParameterResolution = "source_default" | "source_expression" | "site_required";
 export type FddUnitCompatibility = "match" | "convertible" | "mismatch" | "unknown";
+export type FddCandidateEvidenceSource = "exact_brick_point" | "exact_family_point" | "catalog_metadata";
+export type FddUnitEvidence = "verified_compatible" | "missing_engineering_unit" | "quantity_unverified" | "known_mismatch";
 export type FddParameterType = "number" | "boolean" | "select";
 export type FddParameterValue = string | number | boolean;
 export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended" | "user_override";
@@ -23,7 +25,7 @@ export type FddParameterSource = "algorithm_default" | "buildinggpt_recommended"
 // Cached deployability checks are persisted in the project store. Bump this
 // contract whenever the evidence required for `can_deploy` changes so a check
 // produced by older, weaker validation cannot authorize a deployment.
-export const FDD_DEPLOYABILITY_POLICY_VERSION = "v3-equipment-first";
+export const FDD_DEPLOYABILITY_POLICY_VERSION = "v5-evidence-backed-missing-unit";
 
 export interface FddEquipmentAvailability {
   equipmentType: FddEquipmentType;
@@ -130,6 +132,8 @@ export interface FddPointCandidate {
   objectRef?: string;
   unit?: string;
   unitCompatibility: FddUnitCompatibility;
+  evidenceSource?: FddCandidateEvidenceSource;
+  unitEvidence?: FddUnitEvidence;
   dimensionReason: string;
   rejectionReason?: string;
   confidence: number;
@@ -137,11 +141,28 @@ export interface FddPointCandidate {
   historyDays?: number;
 }
 
+export interface FddDeployabilityWarning {
+  code: string;
+  message: string;
+  entityKey?: string;
+  slot?: string;
+  pointName?: string;
+}
+
 export interface FddPointMapping {
   slot: string;
   pointName: string;
   objectRef?: string;
   unit?: string;
+}
+
+export function fddPointMappingsAreDistinct(mappings: FddPointMapping[]): boolean {
+  const pointNames = mappings.map((mapping) => mapping.pointName.trim().toLowerCase());
+  if (pointNames.some((pointName) => !pointName) || new Set(pointNames).size !== pointNames.length) return false;
+  const objectRefs = mappings
+    .map((mapping) => mapping.objectRef?.trim().toLowerCase())
+    .filter((objectRef): objectRef is string => Boolean(objectRef));
+  return new Set(objectRefs).size === objectRefs.length;
 }
 
 export interface FddCheckAgentWorkflow {
@@ -177,6 +198,7 @@ export interface FddEntityDeployability {
   ambiguousInputs: FddAmbiguousInput[];
   missingPoints: string[];
   historyIssues: string[];
+  warnings?: FddDeployabilityWarning[];
   confidence: number;
 }
 
@@ -194,10 +216,15 @@ export interface FddDeployabilityCheck {
   exampleEntityKey?: string;
   selectedMappings?: FddPointMapping[];
   deployableEntities?: FddEntityDeployability[];
+  mappingStrategy?: "entity_independent" | "homogeneous_template";
+  templateEntityKey?: string;
+  expectedEntityCount?: number;
+  requiredRuntimeSlots?: string[];
   ambiguousInputs: FddAmbiguousInput[];
   rejectedCandidates: FddPointCandidate[];
   missingPoints: string[];
   historyIssues: string[];
+  warnings?: FddDeployabilityWarning[];
   checkedAt: string;
   source: FddCheckSource;
   projectDataSignature: string;
@@ -1114,10 +1141,38 @@ function fddCandidateRoleScore(point: FddRequiredPoint, candidate: FddPointCandi
   ].filter(Boolean).join(" "));
   let score = 0;
 
+  // Prefer the vocabulary supplied by the algorithm definition over a broad
+  // quantity-kind match. This is intentionally evaluated against the point
+  // name (not a generic Brick class in `reason`) so, for example, COMPSALM
+  // wins over another Alarm and Run_Status wins over a mislabeled PWR point.
+  const keywordRoleScore = (point.keywords ?? []).reduce((best, keyword, index) => {
+    const normalizedKeyword = normalizedFddCandidateText(keyword);
+    const keywordTokens = normalizedKeyword.split(" ").filter((token) => token.length >= 3);
+    if (keywordTokens.length === 0) return best;
+    const pointNameTokens = pointNameText.split(" ").filter(Boolean);
+    const phraseMatch = ` ${pointNameText} `.includes(` ${normalizedKeyword} `);
+    const tokenMatch = keywordTokens.every((token) => pointNameTokens.includes(token));
+    const compactKeyword = normalizedKeyword.replace(/\s+/gu, "");
+    const compactName = pointNameText.replace(/\s+/gu, "");
+    // Compact aliases such as WCC1CHWST are useful, but a prefix match would
+    // incorrectly treat accumulated TLKWH as instantaneous TLKW power.
+    const compactMatch = compactKeyword.length >= 4 && compactName.endsWith(compactKeyword);
+    if (!phraseMatch && !tokenMatch && !compactMatch) return best;
+    return Math.max(best, Math.max(2, 18 - index * 2));
+  }, 0);
+  score += keywordRoleScore;
+
   if (point.quantityKind === "status") {
+    const expectsCommand = /\bcommand\b|\bstart stop\b|\benable command\b/u.test(pointText);
+    const expectsAlarm = /\balarm\b|\btrip\b|\bfault status\b/u.test(pointText);
     const expectsRunning = /\b(chiller on|run|running|operating|proof)\b/u.test(pointText);
+    if (expectsCommand && /\bstart stop command\b|\bcommand\b/u.test(candidateText)) score += 8;
+    if (expectsCommand && /\brun status\b|\balarm\b|\btrip\b|\bmode status\b/u.test(candidateText)) score -= 10;
+    if (expectsAlarm && /\balarm\b|\btrip\b|\bfault\b/u.test(candidateText)) score += 8;
+    if (expectsAlarm && /\bcommand\b|\brun status\b|\bmode status\b/u.test(candidateText)) score -= 10;
     if (/\brun status\b|\brunning status\b|\boperating status\b/u.test(candidateText)) score += 5;
     if (expectsRunning && /\brun\b|\brunning\b|\boperating\b/u.test(candidateText)) score += 2;
+    if (expectsRunning && /\bcommand\b|\balarm\b|\btrip\b|\bmode status\b/u.test(candidateText)) score -= 10;
     if (/\bon off status\b|\bonoff status\b/u.test(candidateText)) score += 1;
     if (/\bflow status\b|\bflow proof\b|\bflow switch\b/u.test(candidateText)) {
       score += /\bflow\b/u.test(pointText) ? 5 : -2;
@@ -1144,10 +1199,60 @@ function fddCandidateRoleScore(point: FddRequiredPoint, candidate: FddPointCandi
     if (expectsSupply && /\bsupply\b|\bchwst\b/u.test(candidateText)) score += 2;
     if (expectsReturn && /\breturn\b|\bchwrt\b/u.test(candidateText)) score += 2;
   }
-  if (point.quantityKind === "power" && /\btlkw\b|\bmotor kilowatts\b|\belectric power\b|\bpower\b/u.test(candidateText)) score += 4;
+  if (point.quantityKind === "power") {
+    if (/\btlkw\b|\bmotor kilowatts\b|\belectric power\b|\bpower\b/u.test(candidateText)) score += 4;
+    // These are related electrical quantities, not interchangeable evidence
+    // for real instantaneous power. Keep this semantic penalty ahead of unit
+    // tie-breaking so a weak role cannot win merely because it has a unit.
+    if (/\bpercent\b|\bpercentage\b|\bdemand limit\b/u.test(pointNameText)) score -= 10;
+    if (/\btlkwh\b|\bkwh\b|\bkilowatt hours?\b|\benergy\b/u.test(pointNameText)) score -= 12;
+    if (/\bkva\b|\bapparent power\b/u.test(pointNameText)) score -= 6;
+  }
   if (point.quantityKind === "energy" && /\bkwh\b|\benergy\b/u.test(candidateText)) score += 4;
 
   return score;
+}
+
+function fddCandidateUnitEvidenceRank(candidate: FddPointCandidate): number {
+  if (candidate.unitCompatibility === "match") return 3;
+  if (candidate.unitCompatibility === "convertible") return 2;
+  if (candidate.unitCompatibility === "unknown") return 1;
+  return 0;
+}
+
+export function fddCandidateHasStructuralAuthorizationEvidence(candidate: FddPointCandidate): boolean {
+  return (candidate.evidenceSource === "exact_brick_point" || candidate.evidenceSource === "exact_family_point")
+    && Boolean(candidate.entityKey?.trim())
+    && Boolean(candidate.objectRef?.trim());
+}
+
+export function fddCandidateHasEvidenceBackedMissingUnit(candidate: FddPointCandidate): boolean {
+  return candidate.unitCompatibility === "unknown"
+    && candidate.unitEvidence === "missing_engineering_unit"
+    && fddCandidateHasStructuralAuthorizationEvidence(candidate);
+}
+
+export function fddEngineeringUnitMissingWarning(
+  candidate: FddPointCandidate,
+  entityKey?: string
+): FddDeployabilityWarning {
+  const resolvedEntityKey = entityKey ?? candidate.entityKey;
+  return {
+    code: "engineering_unit_missing",
+    message: `Engineering unit is missing for ${candidate.pointName}; the exact structural quantity and historical evidence were verified, but no unit was guessed or persisted.`,
+    ...(resolvedEntityKey ? { entityKey: resolvedEntityKey } : {}),
+    slot: candidate.slot,
+    pointName: candidate.pointName
+  };
+}
+
+export function sortFddDeployabilityWarnings(warnings: FddDeployabilityWarning[]): FddDeployabilityWarning[] {
+  return warnings.slice().sort((left, right) =>
+    (left.entityKey ?? "").localeCompare(right.entityKey ?? "")
+    || (left.slot ?? "").localeCompare(right.slot ?? "")
+    || (left.pointName ?? "").localeCompare(right.pointName ?? "")
+    || left.code.localeCompare(right.code)
+  );
 }
 
 export function sortFddPointCandidatesForRequiredPoint(
@@ -1161,6 +1266,11 @@ export function sortFddPointCandidatesForRequiredPoint(
     if (Math.abs(scoreRank) > 0.0001) return scoreRank;
     const confidenceRank = right.confidence - left.confidence;
     if (confidenceRank !== 0) return confidenceRank;
+    // Engineering-unit evidence is deliberately the final evidence tie-break
+    // before a lexical name. A verified unit cannot promote a weaker semantic
+    // role or lower-confidence candidate.
+    const unitRank = fddCandidateUnitEvidenceRank(right) - fddCandidateUnitEvidenceRank(left);
+    if (unitRank !== 0) return unitRank;
     return left.pointName.localeCompare(right.pointName);
   });
 }
@@ -1173,7 +1283,15 @@ export function fddAmbiguousAlternativesForPoint(
   const bestRoleScore = fddCandidateRoleScore(point, best);
   return alternatives.filter((candidate) => {
     if (best.confidence - candidate.confidence > 0.04) return false;
-    return bestRoleScore - fddCandidateRoleScore(point, candidate) < 2;
+    const candidateRoleScore = fddCandidateRoleScore(point, candidate);
+    if (bestRoleScore - candidateRoleScore >= 2) return false;
+    // A verified compatible unit resolves an otherwise equivalent unknown-unit
+    // alternative; keeping it as ambiguous would negate the evidence ordering.
+    if (bestRoleScore >= candidateRoleScore
+      && fddCandidateUnitEvidenceRank(best) > fddCandidateUnitEvidenceRank(candidate)) {
+      return false;
+    }
+    return true;
   });
 }
 
@@ -1198,7 +1316,9 @@ export function evaluateFddDeployability(input: {
   const historyIssues: string[] = input.historyIssues ? [...input.historyIssues] : [];
   const selectedMappings: FddPointMapping[] = [];
   const ambiguousInputs: FddAmbiguousInput[] = [];
+  const warnings: FddDeployabilityWarning[] = [];
   let uncertain = false;
+  const usedPointKeys = new Set<string>();
 
   if (input.applicability === "no_equipment" || input.applicability === "unknown") {
     return {
@@ -1226,7 +1346,11 @@ export function evaluateFddDeployability(input: {
   for (const point of required) {
     const candidates = sortFddPointCandidatesForRequiredPoint(
       point,
-      input.pointCandidates.filter((candidate) => candidate.slot === point.slot)
+      input.pointCandidates.filter((candidate) => {
+        if (candidate.slot !== point.slot) return false;
+        const pointKey = (candidate.objectRef ?? candidate.pointName).trim().toLowerCase();
+        return !usedPointKeys.has(pointKey);
+      })
     );
     const best = candidates[0];
     if (!best) {
@@ -1234,7 +1358,15 @@ export function evaluateFddDeployability(input: {
       continue;
     }
     const closeAlternatives = fddAmbiguousAlternativesForPoint(point, best, candidates.slice(1));
-    if (closeAlternatives.length > 0 || best.confidence < 0.68 || best.unitCompatibility === "unknown") {
+    const hasStructuralEvidence = fddCandidateHasStructuralAuthorizationEvidence(best);
+    const missingUnitIsOnlyWarning = closeAlternatives.length === 0
+      && best.confidence >= 0.68
+      && fddCandidateHasEvidenceBackedMissingUnit(best);
+    if (closeAlternatives.length > 0
+      || best.confidence < 0.68
+      || !hasStructuralEvidence
+      || best.unitCompatibility === "mismatch"
+      || (best.unitCompatibility === "unknown" && !missingUnitIsOnlyWarning)) {
       uncertain = true;
       ambiguousInputs.push({
         slot: point.slot,
@@ -1243,10 +1375,16 @@ export function evaluateFddDeployability(input: {
       });
     }
     const minDays = point.historyRequirement?.minDays ?? 0;
+    let historyVerified = true;
     if (minDays > 0 && typeof best.historyDays !== "number") {
       historyIssues.push(`${point.label} history coverage is unverified; requires ${minDays}d.`);
+      historyVerified = false;
     } else if (typeof best.historyDays === "number" && best.historyDays < minDays) {
       historyIssues.push(`${point.label} has ${best.historyDays}d history; requires ${minDays}d.`);
+      historyVerified = false;
+    }
+    if (missingUnitIsOnlyWarning && historyVerified) {
+      warnings.push(fddEngineeringUnitMissingWarning(best, input.exampleEntityKey));
     }
     selectedMappings.push({
       slot: point.slot,
@@ -1254,6 +1392,7 @@ export function evaluateFddDeployability(input: {
       ...(best.objectRef ? { objectRef: best.objectRef } : {}),
       ...(best.unit ? { unit: best.unit } : {})
     });
+    usedPointKeys.add((best.objectRef ?? best.pointName).trim().toLowerCase());
   }
 
   const status: FddDeployabilityStatus = missingPoints.length > 0 || historyIssues.length > 0
@@ -1280,6 +1419,7 @@ export function evaluateFddDeployability(input: {
     rejectedCandidates: input.rejectedCandidates ?? [],
     missingPoints,
     historyIssues,
+    ...(status === "can_deploy" && warnings.length > 0 ? { warnings: sortFddDeployabilityWarnings(warnings) } : {}),
     checkedAt: input.checkedAt ?? new Date().toISOString(),
     source: input.source,
     projectDataSignature: input.projectDataSignature

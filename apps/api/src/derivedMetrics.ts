@@ -108,6 +108,38 @@ export interface DerivedMetricSample {
   createdAt: string;
 }
 
+export interface DerivedMetricHistoryRow {
+  ts: string;
+  valueNum?: number;
+  valueText?: string;
+  quality: string;
+  status: string;
+}
+
+export interface DerivedMetricHistoryBatchResult {
+  histories: Map<string, DerivedMetricHistoryRow[]>;
+  totalRows: number;
+  estimatedBytes: number;
+  complete: true;
+}
+
+export const DERIVED_METRIC_HISTORY_BATCH_MAX_ROWS = 250_000;
+export const DERIVED_METRIC_HISTORY_BATCH_MAX_BYTES = 128 * 1024 * 1024;
+
+export class DerivedMetricHistoryTooLargeError extends Error {
+  readonly code = "derived_metric_history_too_large";
+
+  constructor(
+    readonly totalRows: number,
+    readonly estimatedBytes: number,
+    readonly maxRows: number,
+    readonly maxBytes: number
+  ) {
+    super("derived_metric_history_too_large");
+    this.name = "DerivedMetricHistoryTooLargeError";
+  }
+}
+
 export interface DerivedMetricRegisterResult {
   created: boolean;
   instance: DerivedMetricInstance;
@@ -147,6 +179,8 @@ export interface DerivedMetricConfigureMaterializationInput {
   lastRunAt?: string;
   nextRunAt?: string;
   watermarkTs?: string;
+  /** Clear a durable watermark after the executable plan changes. */
+  resetWatermark?: boolean;
   status?: string;
   lastError?: string | null;
 }
@@ -242,6 +276,11 @@ interface SampleRow {
   created_at: string;
 }
 
+type DerivedMetricHistoryBatchRow = Pick<
+  SampleRow,
+  "instance_id" | "ts" | "value_num" | "value_text" | "quality" | "status"
+>;
+
 interface MaterializationRow {
   instance_id: string;
   project_id: string;
@@ -270,6 +309,10 @@ export class DerivedMetricStore {
     this.db = new Database(path.join(dataDir, "derived_metrics.db"));
     this.db.pragma("journal_mode = WAL");
     this.initSchema();
+  }
+
+  runInTransaction<T>(operation: () => T): T {
+    return this.db.transaction(operation)();
   }
 
   private initSchema(): void {
@@ -773,6 +816,15 @@ export class DerivedMetricStore {
     return instance;
   }
 
+  clearHistory(instanceId: string): void {
+    const normalizedInstanceId = trimRequired(instanceId, "instanceId");
+    if (!this.getInstance(normalizedInstanceId)) {
+      throw new Error("derived_metric_instance_not_found");
+    }
+    this.db.prepare("DELETE FROM metric_latest WHERE instance_id = ?").run(normalizedInstanceId);
+    this.db.prepare("DELETE FROM metric_samples WHERE instance_id = ?").run(normalizedInstanceId);
+  }
+
   recordSample(input: DerivedMetricRecordSampleInput): DerivedMetricSample {
     const instanceId = trimRequired(input.instanceId, "instanceId");
     const ts = trimRequired(input.ts, "ts");
@@ -891,6 +943,100 @@ export class DerivedMetricStore {
     return rows.map((row) => this.sampleFromRow(row));
   }
 
+  readHistoryBatch(
+    instanceIds: string[],
+    options: {
+      from?: string;
+      to?: string;
+      maxRows?: number;
+      maxBytes?: number;
+    } = {}
+  ): DerivedMetricHistoryBatchResult {
+    const normalizedIds = [...new Set(instanceIds.map((value) => value.trim()).filter(Boolean))];
+    if (normalizedIds.length < 1 || normalizedIds.length > 32) {
+      throw new Error("instanceIds must contain 1-32 unique metric instance ids");
+    }
+    const placeholders = normalizedIds.map((_, index) => `@instance_${index}`);
+    const clauses = [`instance_id IN (${placeholders.join(", ")})`];
+    const params: Record<string, string> = {};
+    normalizedIds.forEach((instanceId, index) => {
+      params[`instance_${index}`] = instanceId;
+    });
+    if (options.from?.trim()) {
+      clauses.push("ts >= @from");
+      params.from = options.from.trim();
+    }
+    if (options.to?.trim()) {
+      clauses.push("ts <= @to");
+      params.to = options.to.trim();
+    }
+
+    const maxRows = Math.max(1, Math.trunc(options.maxRows ?? DERIVED_METRIC_HISTORY_BATCH_MAX_ROWS));
+    const maxBytes = Math.max(1, Math.trunc(options.maxBytes ?? DERIVED_METRIC_HISTORY_BATCH_MAX_BYTES));
+    return this.db.transaction(() => {
+      const count = this.db.prepare(`
+        SELECT
+          COUNT(*) AS total_rows,
+          COALESCE(SUM(
+            128
+            + LENGTH(CAST(ts AS BLOB))
+            + COALESCE(LENGTH(CAST(CAST(value_num AS TEXT) AS BLOB)), 4)
+            + COALESCE(LENGTH(CAST(value_text AS BLOB)), 0)
+            + LENGTH(CAST(quality AS BLOB))
+            + LENGTH(CAST(status AS BLOB))
+          ), 0) AS estimated_bytes
+        FROM metric_samples
+        WHERE ${clauses.join(" AND ")}
+      `).get(params) as { total_rows: number; estimated_bytes: number };
+      const totalRows = Number(count.total_rows);
+      const estimatedBytes = Number(count.estimated_bytes);
+      if (totalRows > maxRows || estimatedBytes > maxBytes) {
+        throw new DerivedMetricHistoryTooLargeError(totalRows, estimatedBytes, maxRows, maxBytes);
+      }
+
+      const histories = new Map<string, DerivedMetricHistoryRow[]>(
+        normalizedIds.map((instanceId) => [instanceId, []])
+      );
+      const rows = this.db.prepare(`
+        SELECT instance_id, ts, value_num, value_text, quality, status
+        FROM metric_samples
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY instance_id ASC, ts ASC
+      `).all(params) as DerivedMetricHistoryBatchRow[];
+      for (const row of rows) {
+        const sample: DerivedMetricHistoryRow = {
+          ts: row.ts,
+          quality: row.quality,
+          status: row.status
+        };
+        if (typeof row.value_num === "number") sample.valueNum = row.value_num;
+        if (row.value_text !== null) sample.valueText = row.value_text;
+        histories.get(row.instance_id)?.push(sample);
+      }
+      let actualJsonBytes = 2; // outer []
+      for (const [instanceIndex, instanceId] of normalizedIds.entries()) {
+        if (instanceIndex > 0) actualJsonBytes += 1; // comma between series
+        actualJsonBytes += Buffer.byteLength(
+          `{"instanceId":${JSON.stringify(instanceId)},"history":[`,
+          "utf8"
+        );
+        const history = histories.get(instanceId) ?? [];
+        for (const [rowIndex, row] of history.entries()) {
+          if (rowIndex > 0) actualJsonBytes += 1; // comma between rows
+          actualJsonBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
+          if (actualJsonBytes > maxBytes) {
+            throw new DerivedMetricHistoryTooLargeError(totalRows, actualJsonBytes, maxRows, maxBytes);
+          }
+        }
+        actualJsonBytes += 2; // ]}
+        if (actualJsonBytes > maxBytes) {
+          throw new DerivedMetricHistoryTooLargeError(totalRows, actualJsonBytes, maxRows, maxBytes);
+        }
+      }
+      return { histories, totalRows, estimatedBytes: actualJsonBytes, complete: true as const };
+    })();
+  }
+
   configureMaterialization(input: DerivedMetricConfigureMaterializationInput): DerivedMetricMaterialization {
     const instanceId = trimRequired(input.instanceId, "instanceId");
     const instance = this.getInstance(instanceId);
@@ -932,7 +1078,10 @@ export class DerivedMetricStore {
         alignment_tolerance_seconds = COALESCE(excluded.alignment_tolerance_seconds, metric_materialization.alignment_tolerance_seconds),
         last_run_at = COALESCE(excluded.last_run_at, metric_materialization.last_run_at),
         next_run_at = excluded.next_run_at,
-        watermark_ts = COALESCE(excluded.watermark_ts, metric_materialization.watermark_ts),
+        watermark_ts = CASE
+          WHEN @reset_watermark = 1 THEN NULL
+          ELSE COALESCE(excluded.watermark_ts, metric_materialization.watermark_ts)
+        END,
         status = excluded.status,
         last_error = excluded.last_error,
         updated_at = excluded.updated_at
@@ -951,6 +1100,7 @@ export class DerivedMetricStore {
       last_run_at: optional(input.lastRunAt) ?? existing?.lastRunAt ?? null,
       next_run_at: nextRunAt ?? null,
       watermark_ts: optional(input.watermarkTs) ?? existing?.watermarkTs ?? null,
+      reset_watermark: input.resetWatermark ? 1 : 0,
       status,
       last_error: input.lastError === undefined ? existing?.lastError ?? null : optional(input.lastError ?? undefined),
       updated_at: now
