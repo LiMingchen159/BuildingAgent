@@ -2710,6 +2710,7 @@ describe("BuildingGPT Web flow", () => {
     await waitFor(() => expect(screen.queryByText("Updating")).not.toBeInTheDocument());
     expect(attributionAnalysisRequests).toBe(1);
     const analysisSection = screen.getByText("Fault Cause Analysis").closest(".dashboard-section");
+    expect(within(analysisSection as HTMLElement).queryByLabelText("Fault cause analysis summary")).not.toBeInTheDocument();
     expect(analysisSection?.textContent).toContain("Overall summary");
     expect(analysisSection?.textContent).toContain("1 of 1 analyzed chillers");
     expect(analysisSection?.textContent).toContain("WCC-4");

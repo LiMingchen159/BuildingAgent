@@ -2486,24 +2486,6 @@ export function FddAttributionAnalysisWidget({
           Refresh
         </button>
       </div>
-      <div className="dashboard-fdd-analysis-meta" aria-label="Fault cause analysis summary">
-        <span>
-          <small>Fault rate</small>
-          <strong>{weightedFaultRate === null ? "--" : `${(weightedFaultRate * 100).toFixed(1)}%`}</strong>
-        </span>
-        <span>
-          <small>Inputs</small>
-          <strong>{inputCount}</strong>
-        </span>
-        <span>
-          <small>Valid samples</small>
-          <strong>{activeTotal}</strong>
-        </span>
-        <span>
-          <small>Window</small>
-          <strong>{windowMinutes} min</strong>
-        </span>
-      </div>
       <div className="dashboard-fdd-analysis-copy">
         <FddAnalysisHighlightedCopy
           rows={rows}

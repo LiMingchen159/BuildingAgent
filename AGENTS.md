@@ -91,6 +91,16 @@ For Issue #283:
 - Run the focused Web test, Web typecheck, Web build, and independent review before commit or PR.
 - Do not merge or deploy without separate explicit authorization.
 
+The following owner-approved FDD dashboard UI exception is active only on its exact issue branch:
+
+- Issue #285, branch `m007-s14-hide-fdd-analysis-stats`: hide the misleading Fault Cause Analysis statistics row while preserving the analysis text, refresh behavior, data loading, entity status cards, backend calculations, and directly corresponding frontend tests. Authorized paths: `AGENTS.md`, `apps/web/src/ui/DashboardView.tsx`, `apps/web/src/App.test.tsx`.
+
+For Issue #285:
+- Do not change FDD formulas, evaluator behavior, derived metrics, persisted data, task state, status-card colors, analysis generation, production configuration, or unrelated dashboard UI.
+- Remove only the four-item `Fault rate` / `Inputs` / `Valid samples` / `Window` presentation row; retain the underlying evidence used by the analysis text.
+- Run the focused Web test, Web typecheck, Web build, and independent review before commit or PR.
+- Do not merge or deploy without separate explicit authorization.
+
 The labels script should only create core labels:
 M001, M002, M003
 slice-1 to slice-10
