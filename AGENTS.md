@@ -81,6 +81,16 @@ For Issue #281:
 - Run focused API and Web tests, API and Web typechecks, and independent review before commit or PR.
 - Do not merge or deploy without separate explicit authorization.
 
+The following owner-approved FDD UI exception is active only on its exact issue branch:
+
+- Issue #283, branch `m007-s13-remove-fdd-definition-column`: remove the ambiguous `Definition` column from the FDD Algorithm Library table while preserving evaluator metadata, project deployability checks, runtime status, deployment status, and directly corresponding frontend tests. Authorized paths: `AGENTS.md`, `apps/web/src/App.tsx`, `apps/web/src/App.test.tsx`.
+
+For Issue #283:
+- Do not change backend behavior, FDD formulas, evaluator registration, deployability policy, persisted data, production configuration, or the algorithm details dialog.
+- Remove the table header and matching row cell together so the remaining accessible column structure stays aligned.
+- Run the focused Web test, Web typecheck, Web build, and independent review before commit or PR.
+- Do not merge or deploy without separate explicit authorization.
+
 The labels script should only create core labels:
 M001, M002, M003
 slice-1 to slice-10

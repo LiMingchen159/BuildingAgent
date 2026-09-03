@@ -4549,7 +4549,6 @@ function FddLibraryPanel({
                           <th>Fault type</th>
                           <th>Method</th>
                           <th>Inputs</th>
-                          <th>Definition</th>
                           <th>Data check</th>
                           <th>Runtime</th>
                           <th>Project</th>
@@ -4600,7 +4599,6 @@ function FddLibraryPanel({
                               <td>{algorithm.faultType}</td>
                               <td>{fddMethodLabel(algorithm.method)}</td>
                               <td>{requiredSlots.length}</td>
-                              <td><Badge tone={fddDefinitionTone(algorithm)}>{fddDefinitionLabel(algorithm)}</Badge></td>
                               <td>
                                 <div className="fdd-data-check-cell">
                                   <Badge tone={activeEquipmentUnavailable ? "neutral" : activeEquipmentUnknown ? "warning" : fullFleetDeployable ? "success" : check ? "warning" : "neutral"}>
