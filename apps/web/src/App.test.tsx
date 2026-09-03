@@ -347,10 +347,11 @@ describe("equipment-first FDD check guard", () => {
   });
   const algorithm = {
     id: "fddalg_chiller_ch_01",
+    algorithmKey: "chiller_ch_01_commanded_fails_to_start",
     version: "3.0.0",
     equipmentType: "chiller",
     requiredPoints: [requiredPoint("chiller_power", "Chiller power", "Chiller electrical power")]
-  } satisfies Pick<FddAlgorithm, "id" | "version" | "equipmentType" | "requiredPoints">;
+  } satisfies Pick<FddAlgorithm, "id" | "version" | "algorithmKey" | "equipmentType" | "requiredPoints">;
   const available: FddEquipmentAvailability = {
     equipmentType: "chiller",
     status: "available",
@@ -389,14 +390,57 @@ describe("equipment-first FDD check guard", () => {
     nowMs
   );
 
-  it("accepts only a fresh v5 evidence-backed check for the current authoritative inventory", () => {
+  it("keeps the v5 evidence policy current outside the reviewed Element matrix", () => {
     expect(accepted(currentCheck())).toBe(true);
+    expect(accepted(currentCheck({ checkPolicyVersion: "v6-element-reviewed-deployability" }))).toBe(false);
     expect(accepted(currentCheck({ checkPolicyVersion: "v4-homogeneous-fleet" }))).toBe(false);
     expect(accepted(currentCheck({ checkPolicyVersion: "v3-equipment-first" }))).toBe(false);
     expect(accepted(currentCheck({ checkPolicyVersion: "v2-observed-history" }))).toBe(false);
     expect(accepted(currentCheck({ checkedAt: "2026-08-17T07:59:59.999Z" }))).toBe(false);
     expect(accepted(currentCheck(), "inventory-replaced")).toBe(false);
     expect(isCurrentEquipmentFirstFddCheck(currentCheck(), algorithm, "project_alpha", undefined, available, nowMs)).toBe(false);
+  });
+
+  it("requires v6 only for Element CH-01 through CH-51 checks", () => {
+    const elementCheck = currentCheck({
+      projectId: "project_element",
+      checkPolicyVersion: "v6-element-reviewed-deployability"
+    });
+    expect(isCurrentEquipmentFirstFddCheck(
+      elementCheck,
+      algorithm,
+      "project_element",
+      "inventory-current",
+      available,
+      nowMs
+    )).toBe(true);
+    expect(isCurrentEquipmentFirstFddCheck(
+      { ...elementCheck, checkPolicyVersion: "v5-evidence-backed-missing-unit" },
+      algorithm,
+      "project_element",
+      "inventory-current",
+      available,
+      nowMs
+    )).toBe(false);
+
+    const legacyElementAlgorithm = {
+      ...algorithm,
+      id: "fddalg_chiller_low_cop_detection",
+      algorithmKey: "chiller_low_cop_detection"
+    };
+    const legacyElementCheck = currentCheck({
+      algorithmId: legacyElementAlgorithm.id,
+      projectId: "project_element",
+      checkPolicyVersion: "v5-evidence-backed-missing-unit"
+    });
+    expect(isCurrentEquipmentFirstFddCheck(
+      legacyElementCheck,
+      legacyElementAlgorithm,
+      "project_element",
+      "inventory-current",
+      available,
+      nowMs
+    )).toBe(true);
   });
 
   it("fails closed when the saved or current equipment state is absent or unknown", () => {
@@ -471,7 +515,7 @@ describe("FDD fleet deployment coverage", () => {
   ): FddDeployabilityCheck => ({
     algorithmId: "fddalg_chiller_ch_03",
     algorithmVersion: "3.0.0",
-    checkPolicyVersion: "v5-evidence-backed-missing-unit",
+    checkPolicyVersion: "v6-element-reviewed-deployability",
     mappingStrategy: "homogeneous_template",
     templateEntityKey: "WCC_1",
     expectedEntityCount: 8,

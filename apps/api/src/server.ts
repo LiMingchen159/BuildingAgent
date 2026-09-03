@@ -151,6 +151,10 @@ import {
   type ProjectFddTask
 } from "./fddLibrary.js";
 import {
+  applyElementReviewedDeployabilityPolicy,
+  expectedFddDeployabilityPolicyVersion
+} from "./fdd/elementDeployability.js";
+import {
   evaluateFddRuleSample,
   materializerNearestNumericPoint,
   materializerSortedSeries,
@@ -3494,7 +3498,12 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return entityType === targetType;
   }
 
-  function fddCandidateConfidence(point: FddAlgorithm["requiredPoints"][number], item: Record<string, unknown>, query: string): number {
+  function fddCandidateConfidence(
+    point: FddAlgorithm["requiredPoints"][number],
+    item: Record<string, unknown>,
+    query: string,
+    quantityKindOverride?: FddQuantityKind
+  ): number {
     const text = fddCandidateText(item);
     const pointName = fddPointName(item)?.toLowerCase();
     const exactKeywordMatch = Boolean(pointName && point.keywords?.some((keyword) => keyword.trim().toLowerCase() === pointName));
@@ -3513,7 +3522,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const normalizedName = pointName ?? "";
     const slotText = `${point.slot} ${point.label} ${point.semantic}`.toLowerCase();
     const normalizedText = `${normalizedName} ${text}`.replace(/[-_]/gu, " ");
-    const actualKind = inferFddCandidateQuantityKind(item, fddPointName(item) ?? "");
+    const actualKind = quantityKindOverride ?? inferFddCandidateQuantityKind(item, fddPointName(item) ?? "");
     if (actualKind === point.quantityKind) score += 0.12;
     if (actualKind !== "unknown" && point.quantityKind !== "unknown" && actualKind !== point.quantityKind) score -= 0.28;
     if (slotText.includes("status")) {
@@ -3604,14 +3613,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   function fddUnitCompatibility(
     point: FddAlgorithm["requiredPoints"][number],
     item: Record<string, unknown>,
-    pointName: string
+    pointName: string,
+    quantityKindOverride?: FddQuantityKind
   ): {
     unitCompatibility: FddUnitCompatibility;
     unitEvidence: NonNullable<FddPointCandidate["unitEvidence"]>;
     dimensionReason: string;
     rejectionReason?: string;
   } {
-    const actualKind = inferFddCandidateQuantityKind(item, pointName);
+    const actualKind = quantityKindOverride ?? inferFddCandidateQuantityKind(item, pointName);
     const expectedKind = point.quantityKind ?? "unknown";
     const unit = fddPointUnit(item);
     if (expectedKind === "unknown" || actualKind === "unknown") {
@@ -3678,12 +3688,21 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return promise;
   }
 
-  function fddBrickPointMatchesRequiredPoint(point: FddAlgorithm["requiredPoints"][number], fact: FddBrickPointFact): boolean {
+  function fddBrickPointMatchesRequiredPoint(
+    point: FddAlgorithm["requiredPoints"][number],
+    fact: FddBrickPointFact,
+    useElementCh20ReviewedRoles = false
+  ): boolean {
     const factText = `${fact.pointName} ${fact.brickClass}`.replace(/[-_]/gu, " ").toLowerCase();
     const factClassText = fact.brickClass.replace(/[-_]/gu, " ").toLowerCase();
     const factNameText = fact.pointName.replace(/[-_]/gu, " ").toLowerCase();
     const pointText = `${point.slot} ${point.label} ${point.semantic}`.replace(/[-_]/gu, " ").toLowerCase();
-    const actualKind = inferFddCandidateQuantityKind({ semantic_class: fact.brickClass, ...(fact.unit ? { unit: fact.unit } : {}) }, fact.pointName);
+    const reviewedValveStatus = useElementCh20ReviewedRoles
+      && point.slot === "chw_valve_command"
+      && /\bvalve status\b/u.test(factClassText);
+    const actualKind = reviewedValveStatus
+      ? "status"
+      : inferFddCandidateQuantityKind({ semantic_class: fact.brickClass, ...(fact.unit ? { unit: fact.unit } : {}) }, fact.pointName);
     if (point.quantityKind !== "unknown" && actualKind !== point.quantityKind) return false;
     // Quantity alone is not a formula role. A temperature Sensor cannot stand
     // in for a Setpoint (or vice versa), and a water-temperature point cannot
@@ -3705,9 +3724,15 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     // so a single Run_Status can never satisfy all CH-03 dependencies.
     if (point.slot === "chiller_command" && !/\bcommand\b/u.test(factText)) return false;
     if (point.slot === "chiller_alarm" && !/\balarm\b|\btrip\b|\bfault\b/u.test(factText)) return false;
+    if (useElementCh20ReviewedRoles && point.slot === "chw_valve_command") {
+      const isChilledWaterValve = /\bchilled water\b|\bchw\b|chwvlv/u.test(factText);
+      if (!isChilledWaterValve || !/\bvalve\b/u.test(factText) || !/\bstatus\b|\bcommand\b/u.test(factText)) return false;
+    }
     if (point.slot === "chiller_status") {
-      if (/\bcommand\b|\balarm\b|\btrip\b|\bfault\b|\bmode status\b/u.test(factText)) return false;
-      if (!/\brun status\b|\brunning status\b|\boperating status\b|\bon off status\b|\bstatus\b/u.test(factText)) return false;
+      if (/\bcommand\b|\balarm\b|\btrip\b|\bfault\b|\bmode status\b/u.test(factText)
+        || (useElementCh20ReviewedRoles && /\bvalve\b/u.test(factText))) return false;
+      const hasOperatingStatus = /\brun status\b|\brunning status\b|\boperating status\b|\bon off status\b/u.test(factText);
+      if (!hasOperatingStatus && (useElementCh20ReviewedRoles || !/\bstatus\b/u.test(factText))) return false;
     }
     if (/\bflow status\b|\bflow proof\b/u.test(pointText) && !/\bflow\b/u.test(factText)) return false;
     if (/\bpower status\b|\bpower proof\b/u.test(pointText) && !/\bpower\b|\bpwr\b/u.test(factText)) return false;
@@ -3725,6 +3750,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   }
 
   async function addFddBrickPointCandidates(input: {
+    projectId: string;
     algorithm: FddAlgorithm;
     point: FddAlgorithm["requiredPoints"][number];
     context: FddEntityContext;
@@ -3732,9 +3758,11 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     candidates: FddPointCandidate[];
     seen: Set<string>;
   }): Promise<boolean> {
+    const useElementCh20ReviewedRoles = input.projectId === "project_element"
+      && input.algorithm.algorithmKey === "chiller_ch_20_chw_flow_while_off";
     const matchingFacts = input.context.brickPoints.filter((fact) =>
       fddEntityAllowedForAlgorithm(fact.entityKey, input.context, input.algorithm)
-      && fddBrickPointMatchesRequiredPoint(input.point, fact)
+      && fddBrickPointMatchesRequiredPoint(input.point, fact, useElementCh20ReviewedRoles)
     );
     if (matchingFacts.length === 0) return false;
     let verified = false;
@@ -3743,6 +3771,9 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       const exactItem = fddUniqueExactCatalogItem(items, fact.pointName);
       if (!exactItem || !fddCatalogItemHasExpectedOwnership(exactItem, fact.entityKey, input.context)) return;
       verified = true;
+      const reviewedValveStatus = useElementCh20ReviewedRoles
+        && input.point.slot === "chw_valve_command"
+        && /\bvalve status\b/u.test(fact.brickClass.replace(/[-_]/gu, " ").toLowerCase());
       const semanticItem = {
         ...exactItem,
         name: fact.pointName,
@@ -3761,6 +3792,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         reason: `Verified exact BMS point from Brick class ${fact.brickClass}.`,
         minConfidence: 0.5,
         confidenceOverride: 0.96,
+        ...(reviewedValveStatus ? { quantityKindOverride: "status" as const } : {}),
         evidenceSource: "exact_brick_point",
         entityKeyOverride: fact.entityKey
       });
@@ -3779,6 +3811,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     reason: string;
     minConfidence?: number;
     confidenceOverride?: number;
+    quantityKindOverride?: FddQuantityKind;
     evidenceSource?: FddCandidateEvidenceSource;
     entityKeyOverride?: string;
   }): void {
@@ -3795,12 +3828,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const scoringItem = (kbText || kbClass)
       ? { ...input.item, ...(kbText ? { kb_text: kbText } : {}), ...(kbClass ? { kb_class: kbClass } : {}) }
       : input.item;
-    const confidence = input.confidenceOverride ?? fddCandidateConfidence(input.point, scoringItem, input.query);
+    const confidence = input.confidenceOverride
+      ?? fddCandidateConfidence(input.point, scoringItem, input.query, input.quantityKindOverride);
     if (confidence < (input.minConfidence ?? 0.56)) return;
     input.seen.add(key);
     const objectRef = fddPointObjectRef(input.item);
     const unit = fddPointUnit(input.item);
-    const unitCheck = fddUnitCompatibility(input.point, scoringItem, pointName);
+    const unitCheck = fddUnitCompatibility(input.point, scoringItem, pointName, input.quantityKindOverride);
     input.candidates.push({
       slot: input.point.slot,
       pointName,
@@ -4050,6 +4084,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const base = access.baseUrl;
     for (const point of effectiveAlgorithm.requiredPoints) {
       const verifiedFromBrick = await addFddBrickPointCandidates({
+        projectId,
         algorithm: effectiveAlgorithm,
         point,
         context,
@@ -4493,8 +4528,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     return check.projectDataSignature === fddProjectDataSignature(projectId);
   }
 
-  function fddCheckMatchesCurrentPolicy(check: FddDeployabilityCheck): boolean {
-    return check.checkPolicyVersion === FDD_DEPLOYABILITY_POLICY_VERSION;
+  function fddCheckMatchesCurrentPolicy(projectId: string, check: FddDeployabilityCheck, algorithm: FddAlgorithm): boolean {
+    if (check.projectId !== projectId) return false;
+    return check.checkPolicyVersion === expectedFddDeployabilityPolicyVersion(
+      projectId,
+      algorithm,
+      FDD_DEPLOYABILITY_POLICY_VERSION
+    );
   }
 
   function fddCheckIsFresh(check: FddDeployabilityCheck): boolean {
@@ -4522,7 +4562,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const latest = latestFddCheck(checks, algorithm.id, algorithm.version);
     return latest
       && fddCheckMatchesCurrentProjectSignature(projectId, latest)
-      && fddCheckMatchesCurrentPolicy(latest)
+      && fddCheckMatchesCurrentPolicy(projectId, latest, algorithm)
       && fddCheckIsFresh(latest)
       && fddCheckMatchesAlgorithm(latest, algorithm)
       && fddCheckHasEquipmentEvidence(latest)
@@ -4573,7 +4613,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     if (targetAvailability.status !== "available") {
       const access = resolveProjectBmsAccess(projectId);
       const applicability = targetAvailability.status === "not_available" ? "no_equipment" : "unknown";
-      const check = evaluateFddDeployability({
+      let check = evaluateFddDeployability({
         algorithm,
         projectId,
         source,
@@ -4588,6 +4628,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
           : {}),
         ...(projectTaskId ? { projectTaskId } : {})
       });
+      check = applyElementReviewedDeployabilityPolicy({ projectId, algorithm, check }).check;
       check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
       persistFddDeployabilityCheck(projectId, check, projectTaskId);
       return check;
@@ -4625,7 +4666,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     const rejectedCandidates = alignedCandidates.exampleEntityKey
       ? rawRejectedCandidates.filter((candidate) => !candidate.entityKey || candidate.entityKey === alignedCandidates.exampleEntityKey)
       : rawRejectedCandidates;
-    const check = evaluateFddDeployability({
+    let check = evaluateFddDeployability({
       algorithm: effectiveAlgorithm,
       projectId,
       source,
@@ -4663,7 +4704,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       : [];
     if (fleetWarnings.length > 0) check.warnings = fleetWarnings;
     else delete check.warnings;
+    const reviewedPolicy = applyElementReviewedDeployabilityPolicy({ projectId, algorithm, check });
+    check = reviewedPolicy.check;
     check.agentWorkflow = fddDeployabilityAgentWorkflow(skillContext, targetAvailability);
+    if (reviewedPolicy.disposition === "reviewed_not_used") {
+      check.agentWorkflow.steps.push("Applied the owner-reviewed Element actual-deployment matrix and blocked this unused algorithm.");
+    } else if (reviewedPolicy.disposition === "uncertainty_blocked") {
+      check.agentWorkflow.steps.push("Applied the owner-reviewed Element policy that treats uncertain chiller checks as cannot deploy.");
+    }
     persistFddDeployabilityCheck(projectId, check, projectTaskId);
     return check;
   }
@@ -4889,7 +4937,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         const currentlyAuthorized = Boolean(
           check
           && check.status === "can_deploy"
-          && fddCheckMatchesCurrentPolicy(check)
+          && fddCheckMatchesCurrentPolicy(projectId, check, task.algorithmSnapshot)
           && fddCheckIsFresh(check)
           // Some sources (including WKGO) are restored by a post-start
           // bootstrap. Defer signature comparison while the source registry is
@@ -5577,7 +5625,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
         );
         const inventorySignature = fddEquipmentInventorySignature(context, inventory);
         const authorized = refreshedCheck.status === "can_deploy"
-          && fddCheckMatchesCurrentPolicy(refreshedCheck)
+          && fddCheckMatchesCurrentPolicy(projectId, refreshedCheck, task.algorithmSnapshot)
           && fddCheckIsFresh(refreshedCheck)
           && fddCheckMatchesAlgorithm(refreshedCheck, task.algorithmSnapshot)
           && fddCheckMatchesCurrentProjectSignature(projectId, refreshedCheck)
@@ -5650,7 +5698,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
       && check
       && isExecutableFddAlgorithm(task.algorithmSnapshot)
       && check.status === "can_deploy"
-      && fddCheckMatchesCurrentPolicy(check)
+      && fddCheckMatchesCurrentPolicy(instance.projectId, check, task.algorithmSnapshot)
       && fddCheckIsFresh(check)
       && (!hasCurrentBmsSource || fddCheckMatchesCurrentProjectSignature(instance.projectId, check))
       && fddCheckMatchesAlgorithm(check, task.algorithmSnapshot)
