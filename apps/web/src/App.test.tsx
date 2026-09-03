@@ -2240,6 +2240,20 @@ describe("BuildingGPT Web flow", () => {
     await user.click(screen.getByRole("button", { name: /open fdd library/i }));
 
     expect((await screen.findAllByRole("button", { name: /CH-01 Commanded Chiller Fails to Start/i })).length).toBeGreaterThan(0);
+    const algorithmTable = screen.getByRole("table");
+    const columnHeaders = within(algorithmTable).getAllByRole("columnheader");
+    expect(columnHeaders.map((header) => header.textContent)).toEqual([
+      "Algorithm",
+      "Fault type",
+      "Method",
+      "Inputs",
+      "Data check",
+      "Runtime",
+      "Project",
+      "Actions"
+    ]);
+    expect(within(algorithmTable).queryByRole("columnheader", { name: "Definition" })).not.toBeInTheDocument();
+    expect(within(within(algorithmTable).getAllByRole("row")[1]!).getAllByRole("cell")).toHaveLength(columnHeaders.length);
     expect(screen.queryByRole("button", { name: /CH-51 Heat Balance Sensor Consistency Fault/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /AHU-01 AHU Start Failure/i })).not.toBeInTheDocument();
     const equipmentTabList = screen.getByRole("tablist", { name: "FDD equipment" });
