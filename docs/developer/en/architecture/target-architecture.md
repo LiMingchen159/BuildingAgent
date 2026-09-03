@@ -14,7 +14,8 @@ The target architecture is fixed as four layers: frontend, data, backend, and bu
 | --- | --- | --- | --- |
 | Frontend | Custom panels | Partial | Dashboard definitions, widgets, and a workspace exist, but remain composed in the large `App.tsx`. |
 | Frontend | Natural-language chat | Implemented | Web and CLI enter project-scoped Chat; the API supports JSON and SSE responses. |
-| Frontend | Model visualization | Partial | Provider diagnostics, tool logs, and process state exist; there is no standalone general model-visualization workspace. |
+| Frontend | Model visualization | Planned | Existing provider diagnostics, tool logs, and process state do not constitute a standalone general model-visualization capability. |
+| Data | Project | Implemented | Project selection and project scope govern conversations, knowledge, files, BMS, Dashboards, and business capabilities. |
 | Data | Conversations | Implemented | Conversations, messages, and selection live in the JSON store with a SQLite session index. |
 | Data | Time series | Partial / External | The API exposes BMS history/latest boundaries; the collector/BMS owns real acquisition and authoritative series. |
 | Data | Static | Implemented | Project Knowledge Base, Repository, and uploaded material use project file directories. |
@@ -30,7 +31,7 @@ The target architecture is fixed as four layers: frontend, data, backend, and bu
 
 ## 2. Purpose and scope
 
-The target diagram is a stable responsibility map: users express intent through the frontend, the data layer provides project facts, backend capabilities perform deterministic or integrated work, and the business layer composes modeling, retrieval, and diagnosis experiences. It does not prescribe a deployment topology, and one box does not imply one service.
+The target diagram is a stable responsibility map: users provide input to the data layer; Frontend interacts bidirectionally with Data through writes and reads; Data supplies project data to Business, which writes business results back to Data; Business sends processing requests one-way to Backend; Backend requests data from Data, which returns the requested data. It does not prescribe a deployment topology, and one box does not imply one service.
 
 The Fastify API and React application remain modular code assembled into a monolithic process and SPA. The [current implementation](current-architecture.md) and source code are authoritative.
 
@@ -45,16 +46,16 @@ The Fastify API and React application remain modular code assembled into a monol
 
 ## 4. Normal data flow
 
-1. A user signs in through Web or CLI and selects a project.
-2. A natural-language request enters project-scoped Chat; the regular endpoint returns JSON and the streaming endpoint returns SSE.
-3. Agent Runtime assembles conversation, KB/Repository, Memory, Grounding, Skills, and available Tools.
-4. Tools read static, semantic, or time-series data and invoke deterministic Derived Metrics, BMS, Dashboard, or related capabilities; the FDD candidate covers catalog, evaluation, deployment, and materialization, while integration with the `main` report consumer remains separately tracked.
-5. Results and provenance persist to the appropriate root; SSE reports current-request progress and WebSocket delivers cross-request updates.
+1. A user signs in through Web or CLI, selects a project, and provides input to the data layer.
+2. Frontend and Data interact bidirectionally: Frontend writes project-scoped interaction data and reads context and presentation data from Data.
+3. Data and Business interact bidirectionally: Data supplies project data, while Business writes modeling, retrieval, or diagnosis results back to Data.
+4. Business sends processing requests one-way to Backend.
+5. Backend requests data from Data, which returns the required data; Backend then performs deterministic or integrated processing.
 6. Future feedback loops must build on deterministic facts and evidenced feedback; the LLM must not invent numbers or faults.
 
 ## 5. Data, state, and persistence
 
-The target “data layer” is conceptual, not one database. Current implementation has at least two data roots—`apps/data/store.json` and configurable repository-root `data/**`—plus external BMS/collector and LLM providers. See [runtime and storage topology](runtime-storage.md) for authority boundaries.
+The target “data layer” is conceptual, not one database. Current implementation has at least two data roots—`apps/data/store.json` and configurable repository-root `data/**`—plus external BMS/collector and LLM providers. In the target data model, semantic, time-series, and static data belong to Project data; one Project has many Users (1:N), and one User has one Conversation (1:1). See [runtime and storage topology](runtime-storage.md) for authority boundaries.
 
 ## 6. Authorization and project isolation
 
@@ -64,7 +65,7 @@ Every project business entry point must verify membership and permissions after 
 
 - A deterministic mock is available without a real LLM; real-provider failures return canonical errors unless fallback is explicitly enabled.
 - BMS/collector failure removes external series and point capabilities; mock output must never be documented as site data.
-- Planned world-model and KPI-feedback capabilities have no callable fallback implementation.
+- Planned model-visualization, world-model, and KPI-feedback capabilities have no callable fallback implementation.
 - JSON persistence is best effort; production backup, concurrency, and recovery guarantees cannot be inferred from the target diagram.
 
 ## 8. Extension points
@@ -81,5 +82,5 @@ Classify a new capability by layer, authoritative data source, and project-isola
 ## 10. Known limitations and related documentation
 
 - Diagram status is a baseline snapshot and will change with code.
-- World model is explicitly Planned; simulated data is not physical simulation.
+- Model visualization and World model are explicitly Planned; simulated data is not physical simulation.
 - See [current implementation](current-architecture.md), [runtime and storage topology](runtime-storage.md), and [FDD overview](../fdd/overview.md).
